@@ -1,0 +1,454 @@
+---
+title: 'Billing Usage'
+description: 'Get detailed usage statistics for your account'
+---
+
+## Billing Usage
+
+Retrieve detailed usage statistics for your account, including historical data and trends.
+
+### Endpoint
+
+```
+GET /billing/usage
+```
+
+### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `period` | string | No | Time period ("day", "week", "month", "year", default: "month") |
+| `start` | string | No | Start date (ISO 8601 format) |
+| `end` | string | No | End date (ISO 8601 format) |
+| `granularity` | string | No | Data granularity ("hour", "day", "week", "month") |
+
+### Example Request
+
+```bash
+curl -X GET "https://api.astracollab.app/v1/billing/usage?period=month&granularity=day" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "period": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-31T23:59:59Z",
+      "granularity": "day"
+    },
+    "summary": {
+      "storage": {
+        "total": 53687091200,
+        "average": 1731409406,
+        "peak": 6442450944,
+        "unit": "bytes"
+      },
+      "requests": {
+        "total": 1250000,
+        "average": 40322,
+        "peak": 75000,
+        "unit": "requests"
+      },
+      "files": {
+        "total": 1500,
+        "average": 48,
+        "peak": 100,
+        "unit": "files"
+      },
+      "bandwidth": {
+        "upload": 107374182400,
+        "download": 214748364800,
+        "unit": "bytes"
+      }
+    },
+    "timeline": [
+      {
+        "date": "2024-01-01T00:00:00Z",
+        "storage": {
+          "used": 5368709120,
+          "percentage": 5.0
+        },
+        "requests": {
+          "count": 35000,
+          "percentage": 70.0
+        },
+        "files": {
+          "count": 45,
+          "percentage": 45.0
+        },
+        "bandwidth": {
+          "upload": 1073741824,
+          "download": 2147483648
+        }
+      },
+      {
+        "date": "2024-01-02T00:00:00Z",
+        "storage": {
+          "used": 6442450944,
+          "percentage": 6.0
+        },
+        "requests": {
+          "count": 40000,
+          "percentage": 80.0
+        },
+        "files": {
+          "count": 52,
+          "percentage": 52.0
+        },
+        "bandwidth": {
+          "upload": 1288490188,
+          "download": 2576980376
+        }
+      }
+    ],
+    "breakdown": {
+      "byFileType": {
+        "image": {
+          "count": 800,
+          "size": 21474836480,
+          "percentage": 40.0
+        },
+        "document": {
+          "count": 400,
+          "size": 10737418240,
+          "percentage": 20.0
+        },
+        "video": {
+          "count": 200,
+          "size": 16106127360,
+          "percentage": 30.0
+        },
+        "other": {
+          "count": 100,
+          "size": 5368709120,
+          "percentage": 10.0
+        }
+      },
+      "byEndpoint": {
+        "GET /files": {
+          "count": 800000,
+          "percentage": 64.0
+        },
+        "POST /files/upload": {
+          "count": 300000,
+          "percentage": 24.0
+        },
+        "DELETE /files": {
+          "count": 100000,
+          "percentage": 8.0
+        },
+        "other": {
+          "count": 50000,
+          "percentage": 4.0
+        }
+      },
+      "byHour": {
+        "0": 52083,
+        "1": 41667,
+        "2": 31250,
+        "3": 20833,
+        "4": 10417,
+        "5": 10417,
+        "6": 20833,
+        "7": 41667,
+        "8": 72917,
+        "9": 104167,
+        "10": 125000,
+        "11": 135417,
+        "12": 145833,
+        "13": 135417,
+        "14": 125000,
+        "15": 114583,
+        "16": 104167,
+        "17": 93750,
+        "18": 83333,
+        "19": 72917,
+        "20": 62500,
+        "21": 52083,
+        "22": 41667,
+        "23": 31250
+      }
+    },
+    "projections": {
+      "storage": {
+        "currentTrend": "increasing",
+        "projectedEndOfPeriod": 64424509440,
+        "projectedNextPeriod": 75161927680
+      },
+      "requests": {
+        "currentTrend": "stable",
+        "projectedEndOfPeriod": 1500000,
+        "projectedNextPeriod": 1550000
+      }
+    }
+  }
+}
+```
+
+### Response Object Properties
+
+#### Period Information
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `start` | string | Period start date |
+| `end` | string | Period end date |
+| `granularity` | string | Data granularity |
+
+#### Summary Information
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `total` | number | Total usage for period |
+| `average` | number | Average daily usage |
+| `peak` | number | Peak usage during period |
+| `unit` | string | Unit of measurement |
+
+#### Timeline Data
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `date` | string | Date for this data point |
+| `storage` | object | Storage usage for this date |
+| `requests` | object | Request count for this date |
+| `files` | object | File count for this date |
+| `bandwidth` | object | Bandwidth usage for this date |
+
+### Time Periods
+
+#### Day
+```bash
+curl -X GET "https://api.astracollab.app/v1/billing/usage?period=day&granularity=hour"
+```
+
+#### Week
+```bash
+curl -X GET "https://api.astracollab.app/v1/billing/usage?period=week&granularity=day"
+```
+
+#### Month
+```bash
+curl -X GET "https://api.astracollab.app/v1/billing/usage?period=month&granularity=day"
+```
+
+#### Year
+```bash
+curl -X GET "https://api.astracollab.app/v1/billing/usage?period=year&granularity=month"
+```
+
+#### Custom Range
+```bash
+curl -X GET "https://api.astracollab.app/v1/billing/usage?start=2024-01-01T00:00:00Z&end=2024-01-31T23:59:59Z&granularity=day"
+```
+
+### Error Responses
+
+#### Invalid Date Range
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_DATE_RANGE",
+    "message": "Invalid date range specified",
+    "details": {
+      "start": "2024-01-31T00:00:00Z",
+      "end": "2024-01-01T00:00:00Z",
+      "reason": "End date must be after start date"
+    }
+  }
+}
+```
+
+#### Date Range Too Large
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "DATE_RANGE_TOO_LARGE",
+    "message": "Date range exceeds maximum allowed period",
+    "details": {
+      "maxDays": 365,
+      "requestedDays": 400
+    }
+  }
+}
+```
+
+### SDK Examples
+
+<CodeGroup>
+
+```bash Curl
+curl -X GET "https://api.astracollab.app/v1/billing/usage?period=month" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+```javascript JavaScript SDK
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+// Get monthly usage
+const monthlyUsage = await client.billing.getUsage({
+  period: 'month',
+  granularity: 'day'
+});
+
+// Get custom date range
+const customUsage = await client.billing.getUsage({
+  start: '2024-01-01T00:00:00Z',
+  end: '2024-01-31T23:59:59Z',
+  granularity: 'day'
+});
+
+console.log('Total storage used:', monthlyUsage.summary.storage.total);
+console.log('Peak requests:', monthlyUsage.summary.requests.peak);
+```
+
+```typescript Next.js SDK
+import { useBillingUsage } from '@astracollab/nextjs';
+
+function UsageDashboard() {
+  const { usage, isLoading, error } = useBillingUsage({
+    period: 'month',
+    granularity: 'day'
+  });
+
+  if (isLoading) return <div>Loading usage data...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  const formatBytes = (bytes) => {
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    if (bytes === 0) return '0 Bytes';
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
+  };
+
+  return (
+    <div>
+      <h2>Usage Statistics</h2>
+      
+      <div>
+        <h3>Summary</h3>
+        <p>Storage: {formatBytes(usage.summary.storage.total)}</p>
+        <p>Requests: {usage.summary.requests.total.toLocaleString()}</p>
+        <p>Files: {usage.summary.files.total.toLocaleString()}</p>
+        <p>Bandwidth: {formatBytes(usage.summary.bandwidth.upload)} uploaded, {formatBytes(usage.summary.bandwidth.download)} downloaded</p>
+      </div>
+      
+      <div>
+        <h3>File Types</h3>
+        {Object.entries(usage.breakdown.byFileType).map(([type, data]) => (
+          <div key={type}>
+            <strong>{type}:</strong> {data.count} files ({formatBytes(data.size)}) - {data.percentage}%
+          </div>
+        ))}
+      </div>
+      
+      <div>
+        <h3>API Endpoints</h3>
+        {Object.entries(usage.breakdown.byEndpoint).map(([endpoint, data]) => (
+          <div key={endpoint}>
+            <strong>{endpoint}:</strong> {data.count.toLocaleString()} requests - {data.percentage}%
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+</CodeGroup>
+
+### Usage Analytics
+
+Analyze usage patterns and trends:
+
+```javascript
+const analyzeUsageTrends = (usage) => {
+  const trends = {
+    storage: {
+      trend: usage.projections.storage.currentTrend,
+      growth: ((usage.summary.storage.total - usage.summary.storage.average * 30) / (usage.summary.storage.average * 30)) * 100
+    },
+    requests: {
+      trend: usage.projections.requests.currentTrend,
+      growth: ((usage.summary.requests.total - usage.summary.requests.average * 30) / (usage.summary.requests.average * 30)) * 100
+    }
+  };
+  
+  return trends;
+};
+```
+
+### Usage Alerts
+
+Set up usage monitoring and alerts:
+
+```javascript
+const checkUsageThresholds = (usage) => {
+  const alerts = [];
+  
+  // Storage threshold alerts
+  const storagePercentage = (usage.summary.storage.total / (100 * 1024 * 1024 * 1024)) * 100; // Assuming 100GB limit
+  if (storagePercentage > 90) {
+    alerts.push({
+      type: 'critical',
+      message: `Storage usage is at ${storagePercentage.toFixed(1)}%`
+    });
+  } else if (storagePercentage > 80) {
+    alerts.push({
+      type: 'warning',
+      message: `Storage usage is at ${storagePercentage.toFixed(1)}%`
+    });
+  }
+  
+  // Request threshold alerts
+  const requestPercentage = (usage.summary.requests.total / (50000 * 24 * 30)) * 100; // Assuming 50k/hour limit
+  if (requestPercentage > 90) {
+    alerts.push({
+      type: 'critical',
+      message: `Request usage is at ${requestPercentage.toFixed(1)}%`
+    });
+  }
+  
+  return alerts;
+};
+```
+
+### Cost Analysis
+
+Calculate costs based on usage:
+
+```javascript
+const calculateCosts = (usage, plan) => {
+  const baseCost = plan.price;
+  let overageCost = 0;
+  
+  // Calculate storage overage
+  const storageLimit = plan.features.storage.limit;
+  if (usage.summary.storage.total > storageLimit) {
+    const overage = usage.summary.storage.total - storageLimit;
+    overageCost += (overage / (1024 * 1024 * 1024)) * 0.02; // $0.02 per GB
+  }
+  
+  // Calculate request overage
+  const requestLimit = plan.features.requests.limit * 24 * 30; // Monthly limit
+  if (usage.summary.requests.total > requestLimit) {
+    const overage = usage.summary.requests.total - requestLimit;
+    overageCost += (overage / 1000) * 0.01; // $0.01 per 1000 requests
+  }
+  
+  return {
+    baseCost,
+    overageCost,
+    totalCost: baseCost + overageCost
+  };
+};
+```

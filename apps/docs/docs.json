@@ -1,0 +1,133 @@
+{
+    "$schema": "https://mintlify.com/docs.json",
+    "theme": "mint",
+    "name": "AstraCollab",
+    "colors": {
+        "primary": "#16A34A",
+        "light": "#07C983",
+        "dark": "#15803D"
+    },
+    "favicon": "/favicon.svg",
+    "navigation": {
+        "tabs": [{
+                "tab": "Guides",
+                "groups": [{
+                        "group": "Getting started",
+                        "pages": [
+                            "index",
+                            "quickstart"
+                        ]
+                    },
+                    {
+                        "group": "SDK & Packages",
+                        "pages": [
+                            "sdk/nextjs",
+                            "sdk/javascript",
+                            "sdk/examples"
+                        ]
+                    },
+                    {
+                        "group": "Features",
+                        "pages": [
+                            "features/file-upload",
+                            "features/storage-management",
+                            "features/billing",
+                            "features/api-keys"
+                        ]
+                    },
+                    {
+                        "group": "Integration",
+                        "pages": [
+                            "integration/authentication"
+                        ]
+                    }
+                ]
+            },
+            {
+                "tab": "API reference",
+                "groups": [{
+                        "group": "Overview",
+                        "pages": [
+                            "api-reference/introduction",
+                            "api-reference/authentication"
+                        ]
+                    },
+                    {
+                        "group": "Files",
+                        "pages": [
+                            "api-reference/files/list",
+                            "api-reference/files/upload",
+                            "api-reference/files/download",
+                            "api-reference/files/multipart",
+                            "api-reference/files/delete"
+                        ]
+                    },
+                    {
+                        "group": "Folders",
+                        "pages": [
+                            "api-reference/folders/create",
+                            "api-reference/folders/list",
+                            "api-reference/folders/delete"
+                        ]
+                    },
+                    {
+                        "group": "API Keys",
+                        "pages": [
+                            "api-reference/keys/create",
+                            "api-reference/keys/list",
+                            "api-reference/keys/revoke"
+                        ]
+                    },
+                    {
+                        "group": "Billing",
+                        "pages": [
+                            "api-reference/billing/overview",
+                            "api-reference/billing/usage"
+                        ]
+                    }
+                ]
+            }
+        ],
+        "global": {
+            "anchors": [{
+                "anchor": "Support",
+                "href": "mailto:elias@thenextcreatives.com",
+                "icon": "mail"
+            }]
+        }
+    },
+    "logo": {
+        "light": "/logo/logo.svg",
+        "dark": "/logo/logo.svg"
+    },
+    "navbar": {
+        "links": [{
+            "label": "Dashboard",
+            "href": "https://www.astracollab.app/app/orgs"
+        }],
+        "primary": {
+            "type": "button",
+            "label": "Get Started",
+            "href": "https://www.astracollab.ap/"
+        }
+    },
+    "contextual": {
+        "options": [
+            "copy",
+            "view",
+            "chatgpt",
+            "claude",
+            "perplexity",
+            "mcp",
+            "cursor",
+            "vscode"
+        ]
+    },
+    "footer": {
+        "socials": {
+            "x": "https://x.com/astracollab",
+            "github": "https://github.com/astracollab/astracollab",
+            "linkedin": "https://linkedin.com/company/astracollab"
+        }
+    }
+}

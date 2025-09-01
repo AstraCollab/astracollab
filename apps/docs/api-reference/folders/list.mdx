@@ -1,0 +1,246 @@
+---
+title: 'List Folders'
+description: 'Retrieve a list of folders from your storage'
+---
+
+## List Folders
+
+Retrieve a paginated list of folders from your storage. You can filter by parent folder and other criteria.
+
+### Endpoint
+
+```
+GET /folders
+```
+
+### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `page` | number | No | Page number (default: 1) |
+| `limit` | number | No | Number of folders per page (default: 20, max: 100) |
+| `parentFolderId` | string | No | Filter folders by parent folder ID (null for root) |
+| `search` | string | No | Search folders by name |
+| `sortBy` | string | No | Sort field ("name", "createdAt", "updatedAt", "fileCount") |
+| `sortOrder` | string | No | Sort order ("asc" or "desc", default: "asc") |
+
+### Example Request
+
+```bash
+curl -X GET "https://api.astracollab.app/v1/folders?page=1&limit=20&parentFolderId=folder_123" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "folders": [
+      {
+        "id": "folder_4567890abcdef123",
+        "name": "My Documents",
+        "description": "Personal documents and files",
+        "parentFolderId": "folder_123",
+        "path": "/Work/My Documents",
+        "createdAt": "2024-01-15T10:30:00Z",
+        "updatedAt": "2024-01-15T10:30:00Z",
+        "fileCount": 15,
+        "totalSize": 52428800
+      },
+      {
+        "id": "folder_7890abcdef123456",
+        "name": "Photos",
+        "description": "Photo collection",
+        "parentFolderId": "folder_123",
+        "path": "/Work/Photos",
+        "createdAt": "2024-01-14T15:20:00Z",
+        "updatedAt": "2024-01-15T09:45:00Z",
+        "fileCount": 42,
+        "totalSize": 1073741824
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 45,
+      "totalPages": 3,
+      "hasNext": true,
+      "hasPrev": false
+    }
+  }
+}
+```
+
+### Folder Object Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | string | Unique folder identifier |
+| `name` | string | Folder name |
+| `description` | string | Optional folder description |
+| `parentFolderId` | string | Parent folder ID (null if root) |
+| `path` | string | Full path to the folder |
+| `createdAt` | string | ISO 8601 timestamp of creation |
+| `updatedAt` | string | ISO 8601 timestamp of last update |
+| `fileCount` | number | Number of files in the folder |
+| `totalSize` | number | Total size of files in bytes |
+
+### Error Responses
+
+#### Invalid Parameters
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_PARAMETERS",
+    "message": "Invalid query parameters",
+    "details": {
+      "limit": "Must be between 1 and 100"
+    }
+  }
+}
+```
+
+#### Parent Folder Not Found
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "PARENT_FOLDER_NOT_FOUND",
+    "message": "Parent folder with ID 'folder_123' not found"
+  }
+}
+```
+
+### Get Root Folders
+
+To get folders at the root level (no parent):
+
+```bash
+curl -X GET "https://api.astracollab.app/v1/folders?parentFolderId=null" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Search Folders
+
+Search for folders by name:
+
+```bash
+curl -X GET "https://api.astracollab.app/v1/folders?search=documents" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Sort Options
+
+Sort folders by different criteria:
+
+```bash
+# Sort by name (alphabetical)
+curl -X GET "https://api.astracollab.app/v1/folders?sortBy=name&sortOrder=asc"
+
+# Sort by creation date (newest first)
+curl -X GET "https://api.astracollab.app/v1/folders?sortBy=createdAt&sortOrder=desc"
+
+# Sort by file count (most files first)
+curl -X GET "https://api.astracollab.app/v1/folders?sortBy=fileCount&sortOrder=desc"
+```
+
+### SDK Examples
+
+<CodeGroup>
+
+```bash Curl
+curl -X GET "https://api.astracollab.app/v1/folders" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+```javascript JavaScript SDK
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+// List all folders
+const folders = await client.folders.list();
+
+// List folders in a specific parent
+const subfolders = await client.folders.list({
+  parentFolderId: 'folder_123',
+  page: 1,
+  limit: 20
+});
+
+// Search folders
+const searchResults = await client.folders.list({
+  search: 'documents',
+  sortBy: 'name',
+  sortOrder: 'asc'
+});
+```
+
+```typescript Next.js SDK
+import { useFolders } from '@astracollab/nextjs';
+
+function FolderList({ parentFolderId }) {
+  const { folders, isLoading, error } = useFolders({
+    parentFolderId,
+    page: 1,
+    limit: 20,
+    sortBy: 'name',
+    sortOrder: 'asc'
+  });
+
+  if (isLoading) return <div>Loading folders...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <div>
+      {folders.map(folder => (
+        <div key={folder.id}>
+          <h3>{folder.name}</h3>
+          <p>{folder.description}</p>
+          <p>Files: {folder.fileCount} | Size: {folder.totalSize} bytes</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+</CodeGroup>
+
+### Folder Tree Structure
+
+To build a complete folder tree, you can recursively fetch subfolders:
+
+```javascript
+const buildFolderTree = async (parentFolderId = null) => {
+  const folders = await client.folders.list({ parentFolderId });
+  
+  const tree = await Promise.all(
+    folders.map(async (folder) => ({
+      ...folder,
+      children: await buildFolderTree(folder.id)
+    }))
+  );
+  
+  return tree;
+};
+```
+
+### Breadcrumb Navigation
+
+You can build breadcrumb navigation using the folder path:
+
+```javascript
+const getBreadcrumbs = (folderPath) => {
+  const pathParts = folderPath.split('/').filter(Boolean);
+  return pathParts.map((part, index) => ({
+    name: part,
+    path: '/' + pathParts.slice(0, index + 1).join('/')
+  }));
+};
+```

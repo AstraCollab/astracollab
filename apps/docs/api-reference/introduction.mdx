@@ -1,0 +1,192 @@
+---
+title: 'API Reference'
+description: 'Complete API documentation for AstraCollab'
+---
+
+## Welcome to the AstraCollab API
+
+The AstraCollab API provides programmatic access to all storage and file management features. Our RESTful API is designed to be simple, powerful, and developer-friendly.
+
+## Base URL
+
+All API requests should be made to:
+
+```
+https://api.astracollab.app/v1
+```
+
+## Authentication
+
+All API endpoints require authentication using API keys. Include your API key in the `Authorization` header:
+
+```bash
+Authorization: Bearer your-api-key-here
+```
+
+<Note>
+  Keep your API key secure and never expose it in client-side code. Use environment variables in production.
+</Note>
+
+## Rate Limiting
+
+API requests are rate-limited to ensure fair usage:
+
+- **Free Plan**: 1,000 requests per hour
+- **Creator Plan**: 10,000 requests per hour
+- **Studio Plan**: 50,000 requests per hour
+- **Production Plan**: 100,000 requests per hour
+
+Rate limit headers are included in all responses:
+
+```
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 999
+X-RateLimit-Reset: 1640995200
+```
+
+## Response Format
+
+All API responses are returned in JSON format with the following structure:
+
+```json
+{
+  "success": true,
+  "data": {
+    // Response data here
+  },
+  "error": null
+}
+```
+
+## Error Handling
+
+The API uses standard HTTP status codes to indicate success or failure:
+
+- `200` - Success
+- `400` - Bad Request
+- `401` - Unauthorized
+- `403` - Forbidden
+- `404` - Not Found
+- `429` - Rate Limited
+- `500` - Internal Server Error
+
+Error responses include additional details:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "FILE_NOT_FOUND",
+    "message": "File with ID 'abc123' not found",
+    "details": {
+      "fileId": "abc123"
+    }
+  }
+}
+```
+
+## SDKs and Libraries
+
+For easier integration, we provide official SDKs:
+
+<Columns cols={2}>
+  <Card
+    title="Next.js SDK"
+    icon="nextjs"
+    href="/sdk/nextjs"
+  >
+    React hooks, components, and utilities for Next.js applications.
+  </Card>
+  <Card
+    title="JavaScript SDK"
+    icon="javascript"
+    href="/sdk/javascript"
+  >
+    Pure JavaScript SDK for Node.js and browser environments.
+  </Card>
+</Columns>
+
+## API Endpoints
+
+### Files
+
+Manage file uploads, downloads, and metadata.
+
+- `GET /files` - List files
+- `POST /files/upload` - Upload a single file
+- `GET /files/{fileId}` - Get file details
+- `DELETE /files/{fileId}` - Delete a file
+- `POST /files/multipart-upload-start` - Start multipart upload
+- `POST /files/multipart-upload-complete` - Complete multipart upload
+
+### Folders
+
+Organize files into folders and subfolders.
+
+- `GET /folders` - List folders
+- `POST /folders` - Create a folder
+- `DELETE /folders/{folderId}` - Delete a folder
+
+### API Keys
+
+Manage your API keys and access.
+
+- `GET /keys` - List API keys
+- `POST /keys` - Create a new API key
+- `DELETE /keys/{keyId}` - Revoke an API key
+
+### Billing
+
+Monitor usage and billing information.
+
+- `GET /billing` - Get billing overview
+- `GET /billing/usage` - Get detailed usage statistics
+
+## Getting Started
+
+<Card
+  title="Quickstart Guide"
+  icon="rocket"
+  href="/quickstart"
+>
+  Follow our quickstart guide to make your first API call.
+</Card>
+
+## Examples
+
+### List Files
+
+```bash
+curl -X GET "https://api.astracollab.app/v1/files" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Upload a File
+
+```bash
+curl -X POST "https://api.astracollab.app/v1/files/upload" \
+  -H "Authorization: Bearer your-api-key-here" \
+  -F "file=@example.jpg" \
+  -F "folderId=optional-folder-id"
+```
+
+### Create a Folder
+
+```bash
+curl -X POST "https://api.astracollab.app/v1/folders" \
+  -H "Authorization: Bearer your-api-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Documents",
+    "parentFolderId": "optional-parent-id"
+  }'
+```
+
+## Support
+
+Need help with the API?
+
+- **Documentation**: Browse our comprehensive guides
+- **SDK Documentation**: Use our official SDKs
+- **Support**: Email us at elias@thenextcreatives.com
+- **Community**: Join our Discord server

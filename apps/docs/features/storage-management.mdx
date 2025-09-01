@@ -1,0 +1,410 @@
+---
+title: 'Storage Management'
+description: 'Learn how to organize and manage your files with folders and metadata'
+---
+
+## Storage Management
+
+AstraCollab provides powerful storage management features to help you organize, search, and maintain your files efficiently.
+
+## Folder Organization
+
+### Creating Folder Hierarchies
+
+Organize your files into logical folder structures:
+
+```javascript
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+// Create a project folder structure
+const projectFolder = await client.folders.create({
+  name: 'My Project',
+  description: 'Main project folder'
+});
+
+const assetsFolder = await client.folders.create({
+  name: 'Assets',
+  parentFolderId: projectFolder.id,
+  description: 'Project assets and resources'
+});
+
+const imagesFolder = await client.folders.create({
+  name: 'Images',
+  parentFolderId: assetsFolder.id,
+  description: 'Project images and graphics'
+});
+```
+
+### Folder Best Practices
+
+- **Use descriptive names**: Choose clear, meaningful folder names
+- **Keep hierarchies shallow**: Avoid deeply nested folders (max 10 levels)
+- **Add descriptions**: Use folder descriptions for context
+- **Consistent naming**: Follow a consistent naming convention
+- **Archive old content**: Move inactive projects to archive folders
+
+## File Organization
+
+### Uploading to Specific Folders
+
+Upload files directly to organized folders:
+
+```javascript
+// Upload to a specific folder
+const file = await client.files.upload({
+  file: fileInput.files[0],
+  folderId: imagesFolder.id,
+  metadata: {
+    description: 'Project logo',
+    tags: ['logo', 'branding', 'project']
+  }
+});
+```
+
+### File Naming Conventions
+
+Establish consistent file naming patterns:
+
+```javascript
+// Example naming convention
+const generateFileName = (originalName, project, version) => {
+  const timestamp = new Date().toISOString().split('T')[0];
+  const extension = originalName.split('.').pop();
+  return `${project}_${timestamp}_v${version}.${extension}`;
+};
+
+const fileName = generateFileName('logo.png', 'myproject', '1.0');
+// Result: myproject_2024-01-15_v1.0.png
+```
+
+## Metadata Management
+
+### Adding File Metadata
+
+Enhance files with rich metadata for better organization:
+
+```javascript
+const uploadWithMetadata = async (file, folderId) => {
+  const metadata = {
+    description: 'Detailed file description',
+    tags: ['tag1', 'tag2', 'tag3'],
+    category: 'images',
+    project: 'myproject',
+    version: '1.0',
+    author: 'john.doe@example.com',
+    custom: {
+      priority: 'high',
+      reviewStatus: 'pending',
+      department: 'marketing'
+    }
+  };
+
+  return await client.files.upload({
+    file,
+    folderId,
+    metadata
+  });
+};
+```
+
+### Metadata Best Practices
+
+- **Use consistent tags**: Establish a tag vocabulary
+- **Include descriptions**: Add meaningful descriptions
+- **Version control**: Track file versions in metadata
+- **Custom fields**: Use custom metadata for project-specific needs
+- **Search optimization**: Include relevant keywords
+
+## Search and Discovery
+
+### Searching Files
+
+Find files using various search criteria:
+
+```javascript
+// Search by name
+const searchResults = await client.files.list({
+  search: 'logo',
+  folderId: imagesFolder.id
+});
+
+// Search by metadata
+const taggedFiles = await client.files.list({
+  search: 'branding',
+  type: 'image'
+});
+```
+
+### Advanced Search
+
+Combine multiple search parameters:
+
+```javascript
+const advancedSearch = async (criteria) => {
+  const files = await client.files.list({
+    search: criteria.searchTerm,
+    folderId: criteria.folderId,
+    type: criteria.fileType,
+    sortBy: criteria.sortBy || 'name',
+    sortOrder: criteria.sortOrder || 'asc',
+    page: criteria.page || 1,
+    limit: criteria.limit || 20
+  });
+  
+  return files;
+};
+
+// Example usage
+const results = await advancedSearch({
+  searchTerm: 'presentation',
+  folderId: 'folder_123',
+  fileType: 'document',
+  sortBy: 'uploadedAt',
+  sortOrder: 'desc'
+});
+```
+
+## Bulk Operations
+
+### Moving Files Between Folders
+
+```javascript
+const moveFiles = async (fileIds, targetFolderId) => {
+  const movePromises = fileIds.map(fileId =>
+    client.files.update(fileId, { folderId: targetFolderId })
+  );
+  
+  return await Promise.all(movePromises);
+};
+
+// Example usage
+await moveFiles(
+  ['file_1', 'file_2', 'file_3'],
+  'folder_destination'
+);
+```
+
+### Bulk File Operations
+
+```javascript
+const bulkFileOperations = {
+  // Delete multiple files
+  deleteFiles: async (fileIds) => {
+    return await client.files.bulkDelete(fileIds);
+  },
+  
+  // Update metadata for multiple files
+  updateMetadata: async (fileIds, metadata) => {
+    const updatePromises = fileIds.map(fileId =>
+      client.files.update(fileId, { metadata })
+    );
+    return await Promise.all(updatePromises);
+  },
+  
+  // Copy files to another folder
+  copyFiles: async (fileIds, targetFolderId) => {
+    const copyPromises = fileIds.map(fileId =>
+      client.files.copy(fileId, { folderId: targetFolderId })
+    );
+    return await Promise.all(copyPromises);
+  }
+};
+```
+
+## Storage Optimization
+
+### File Deduplication
+
+Identify and handle duplicate files:
+
+```javascript
+const findDuplicates = async (files) => {
+  const duplicates = [];
+  const fileHashes = new Map();
+  
+  for (const file of files) {
+    const hash = await calculateFileHash(file);
+    
+    if (fileHashes.has(hash)) {
+      duplicates.push({
+        original: fileHashes.get(hash),
+        duplicate: file,
+        hash
+      });
+    } else {
+      fileHashes.set(hash, file);
+    }
+  }
+  
+  return duplicates;
+};
+
+const calculateFileHash = async (file) => {
+  // Implementation depends on your hashing library
+  return await crypto.subtle.digest('SHA-256', file);
+};
+```
+
+### Storage Cleanup
+
+Regular cleanup to optimize storage:
+
+```javascript
+const storageCleanup = async () => {
+  // Find old files
+  const oldFiles = await client.files.list({
+    sortBy: 'uploadedAt',
+    sortOrder: 'asc'
+  });
+  
+  // Find unused files (not accessed in 90 days)
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - 90);
+  
+  const unusedFiles = oldFiles.filter(file => 
+    new Date(file.lastAccessedAt) < cutoffDate
+  );
+  
+  // Archive or delete unused files
+  if (unusedFiles.length > 0) {
+    await bulkFileOperations.deleteFiles(
+      unusedFiles.map(f => f.id)
+    );
+  }
+};
+```
+
+## Access Control
+
+### Folder Permissions
+
+Manage access to folders and files:
+
+```javascript
+const setFolderPermissions = async (folderId, permissions) => {
+  return await client.folders.update(folderId, {
+    permissions: {
+      read: permissions.read || [],
+      write: permissions.write || [],
+      admin: permissions.admin || []
+    }
+  });
+};
+
+// Example usage
+await setFolderPermissions('folder_123', {
+  read: ['user1@example.com', 'user2@example.com'],
+  write: ['user1@example.com'],
+  admin: ['admin@example.com']
+});
+```
+
+### Sharing Folders
+
+Share folders with external users:
+
+```javascript
+const shareFolder = async (folderId, email, permissions) => {
+  return await client.folders.share(folderId, {
+    email,
+    permissions: permissions || ['read'],
+    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
+  });
+};
+```
+
+## Monitoring and Analytics
+
+### Storage Analytics
+
+Track storage usage and trends:
+
+```javascript
+const getStorageAnalytics = async () => {
+  const folders = await client.folders.list();
+  const analytics = {
+    totalFolders: folders.length,
+    totalFiles: 0,
+    totalSize: 0,
+    byFolder: {}
+  };
+  
+  for (const folder of folders) {
+    const files = await client.files.list({ folderId: folder.id });
+    
+    analytics.byFolder[folder.name] = {
+      fileCount: files.length,
+      totalSize: files.reduce((sum, file) => sum + file.size, 0)
+    };
+    
+    analytics.totalFiles += files.length;
+    analytics.totalSize += analytics.byFolder[folder.name].totalSize;
+  }
+  
+  return analytics;
+};
+```
+
+### Usage Monitoring
+
+Monitor folder and file usage:
+
+```javascript
+const monitorUsage = async () => {
+  const usage = await client.billing.getUsage({ period: 'month' });
+  
+  const alerts = [];
+  
+  // Check storage limits
+  if (usage.summary.storage.percentage > 80) {
+    alerts.push({
+      type: 'warning',
+      message: `Storage usage is at ${usage.summary.storage.percentage}%`
+    });
+  }
+  
+  // Check for large files
+  const largeFiles = await client.files.list({
+    sortBy: 'size',
+    sortOrder: 'desc',
+    limit: 10
+  });
+  
+  if (largeFiles.some(file => file.size > 100 * 1024 * 1024)) { // 100MB
+    alerts.push({
+      type: 'info',
+      message: 'Large files detected - consider compression or archiving'
+    });
+  }
+  
+  return alerts;
+};
+```
+
+## Best Practices Summary
+
+### Organization
+- Use clear, consistent naming conventions
+- Create logical folder hierarchies
+- Add meaningful metadata to files
+- Regular cleanup and archiving
+
+### Performance
+- Keep folder hierarchies shallow
+- Use bulk operations for efficiency
+- Monitor storage usage regularly
+- Implement file deduplication
+
+### Security
+- Set appropriate folder permissions
+- Regular access reviews
+- Secure sharing practices
+- Backup important data
+
+### Maintenance
+- Regular storage audits
+- Archive old content
+- Monitor usage patterns
+- Optimize based on analytics

@@ -1,0 +1,204 @@
+---
+title: 'Upload File'
+description: 'Upload a single file to your storage'
+---
+
+## Upload File
+
+Upload a single file to your storage. Supports files up to 5GB for most plans.
+
+### Endpoint
+
+```
+POST /files/upload
+```
+
+### Request Body
+
+This endpoint accepts `multipart/form-data` with the following fields:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `file` | file | Yes | The file to upload |
+| `folderId` | string | No | ID of the folder to upload to |
+| `metadata` | string | No | JSON string of additional metadata |
+
+### Example Request
+
+```bash
+curl -X POST "https://api.astracollab.app/v1/files/upload" \
+  -H "Authorization: Bearer your-api-key-here" \
+  -F "file=@example.jpg" \
+  -F "folderId=folder_123" \
+  -F 'metadata={"description": "My photo", "tags": ["photo", "personal"]}'
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "file": {
+      "id": "file_1234567890abcdef",
+      "name": "example.jpg",
+      "size": 1024000,
+      "type": "image/jpeg",
+      "url": "https://storage.astracollab.app/files/file_1234567890abcdef",
+      "folderId": "folder_123",
+      "uploadedAt": "2024-01-15T10:30:00Z",
+      "updatedAt": "2024-01-15T10:30:00Z",
+      "metadata": {
+        "description": "My photo",
+        "tags": ["photo", "personal"],
+        "width": 1920,
+        "height": 1080
+      }
+    }
+  }
+}
+```
+
+### File Size Limits
+
+| Plan | Maximum File Size |
+|------|-------------------|
+| Free | 100 MB |
+| Creator | 1 GB |
+| Studio | 5 GB |
+| Production | 10 GB |
+
+### Supported File Types
+
+AstraCollab supports all file types. Common categories include:
+
+- **Images**: JPG, PNG, GIF, WebP, SVG, etc.
+- **Documents**: PDF, DOC, DOCX, TXT, etc.
+- **Videos**: MP4, MOV, AVI, WebM, etc.
+- **Audio**: MP3, WAV, FLAC, etc.
+- **Archives**: ZIP, RAR, 7Z, etc.
+
+### Error Responses
+
+#### File Too Large
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "FILE_TOO_LARGE",
+    "message": "File size exceeds plan limit",
+    "details": {
+      "fileSize": 1073741824,
+      "maxSize": 104857600
+    }
+  }
+}
+```
+
+#### Invalid File
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_FILE",
+    "message": "Invalid or corrupted file"
+  }
+}
+```
+
+#### Storage Quota Exceeded
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "STORAGE_QUOTA_EXCEEDED",
+    "message": "Storage quota exceeded",
+    "details": {
+      "used": "9.5 GB",
+      "limit": "10 GB"
+    }
+  }
+}
+```
+
+### Progress Tracking
+
+For large files, you can track upload progress:
+
+```javascript
+const formData = new FormData();
+formData.append('file', file);
+
+const response = await fetch('https://api.astracollab.app/v1/files/upload', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer your-api-key-here'
+  },
+  body: formData,
+  onUploadProgress: (progressEvent) => {
+    const percentCompleted = Math.round(
+      (progressEvent.loaded * 100) / progressEvent.total
+    );
+    console.log(`Upload progress: ${percentCompleted}%`);
+  }
+});
+```
+
+### SDK Examples
+
+<CodeGroup>
+
+```bash Curl
+curl -X POST "https://api.astracollab.app/v1/files/upload" \
+  -H "Authorization: Bearer your-api-key-here" \
+  -F "file=@example.jpg"
+```
+
+```javascript JavaScript SDK
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+const file = await client.files.upload({
+  file: fileInput.files[0],
+  folderId: 'folder_123',
+  metadata: {
+    description: 'My photo',
+    tags: ['photo', 'personal']
+  }
+});
+```
+
+```typescript Next.js SDK
+import { useUpload } from '@astracollab/nextjs';
+
+function UploadComponent() {
+  const { upload, isUploading, progress } = useUpload();
+
+  const handleUpload = async (file) => {
+    const result = await upload({
+      file,
+      folderId: 'folder_123',
+      metadata: {
+        description: 'My photo'
+      }
+    });
+  };
+
+  return (
+    <div>
+      <input type="file" onChange={(e) => handleUpload(e.target.files[0])} />
+      {isUploading && <div>Uploading... {progress}%</div>}
+    </div>
+  );
+}
+```
+
+</CodeGroup>
+
+### Large File Uploads
+
+For files larger than 100MB, consider using [multipart uploads](/api-reference/files/multipart) for better reliability and resumability.

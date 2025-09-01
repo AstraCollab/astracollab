@@ -1,0 +1,216 @@
+---
+title: 'Delete File'
+description: 'Delete a file from your storage'
+---
+
+## Delete File
+
+Permanently delete a file from your storage. This action cannot be undone.
+
+### Endpoint
+
+```
+DELETE /files/{fileId}
+```
+
+### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `fileId` | string | Yes | The ID of the file to delete |
+
+### Example Request
+
+```bash
+curl -X DELETE "https://api.astracollab.app/v1/files/file_1234567890abcdef" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "message": "File deleted successfully",
+    "fileId": "file_1234567890abcdef",
+    "deletedAt": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+### Error Responses
+
+#### File Not Found
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "FILE_NOT_FOUND",
+    "message": "File with ID 'file_1234567890abcdef' not found"
+  }
+}
+```
+
+#### Access Denied
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "ACCESS_DENIED",
+    "message": "You don't have permission to delete this file"
+  }
+}
+```
+
+#### File in Use
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "FILE_IN_USE",
+    "message": "File is currently being used and cannot be deleted",
+    "details": {
+      "reason": "Active download session"
+    }
+  }
+}
+```
+
+### Bulk Delete
+
+To delete multiple files at once, use the bulk delete endpoint:
+
+#### Endpoint
+
+```
+DELETE /files/bulk
+```
+
+#### Request Body
+
+```json
+{
+  "fileIds": [
+    "file_1234567890abcdef",
+    "file_0987654321fedcba",
+    "file_abcdef1234567890"
+  ]
+}
+```
+
+#### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "deleted": [
+      "file_1234567890abcdef",
+      "file_0987654321fedcba"
+    ],
+    "failed": [
+      {
+        "fileId": "file_abcdef1234567890",
+        "reason": "File not found"
+      }
+    ],
+    "deletedAt": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+### SDK Examples
+
+<CodeGroup>
+
+```bash Curl
+curl -X DELETE "https://api.astracollab.app/v1/files/file_1234567890abcdef" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+```javascript JavaScript SDK
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+// Delete single file
+await client.files.delete('file_1234567890abcdef');
+
+// Bulk delete
+await client.files.bulkDelete([
+  'file_1234567890abcdef',
+  'file_0987654321fedcba'
+]);
+```
+
+```typescript Next.js SDK
+import { useDeleteFile } from '@astracollab/nextjs';
+
+function FileList({ files }) {
+  const { deleteFile, isDeleting } = useDeleteFile();
+
+  const handleDelete = async (fileId) => {
+    if (confirm('Are you sure you want to delete this file?')) {
+      await deleteFile(fileId);
+    }
+  };
+
+  return (
+    <div>
+      {files.map(file => (
+        <div key={file.id}>
+          <span>{file.name}</span>
+          <button 
+            onClick={() => handleDelete(file.id)}
+            disabled={isDeleting}
+          >
+            {isDeleting ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+</CodeGroup>
+
+### Confirmation Dialog
+
+It's recommended to show a confirmation dialog before deleting files:
+
+```javascript
+const deleteFileWithConfirmation = async (fileId, fileName) => {
+  const confirmed = confirm(`Are you sure you want to delete "${fileName}"? This action cannot be undone.`);
+  
+  if (confirmed) {
+    try {
+      await deleteFile(fileId);
+      console.log('File deleted successfully');
+    } catch (error) {
+      console.error('Failed to delete file:', error);
+    }
+  }
+};
+```
+
+### Soft Delete
+
+Some files may be soft-deleted (moved to trash) instead of being permanently deleted. Check your organization settings for this behavior.
+
+### Recovery
+
+Soft-deleted files can be recovered within 30 days:
+
+```javascript
+// Recover a soft-deleted file
+await client.files.recover('file_1234567890abcdef');
+```
+
+### Storage Impact
+
+Deleting files will immediately free up storage space and reduce your usage quota.

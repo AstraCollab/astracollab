@@ -1,0 +1,287 @@
+---
+title: 'Create API Key'
+description: 'Create a new API key for authentication'
+---
+
+## Create API Key
+
+Create a new API key for programmatic access to your AstraCollab storage. API keys are used to authenticate API requests.
+
+### Endpoint
+
+```
+POST /keys
+```
+
+### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Descriptive name for the API key |
+| `permissions` | array | No | Array of permissions (default: all permissions) |
+| `expiresAt` | string | No | ISO 8601 expiration date (default: never expires) |
+
+### Example Request
+
+```bash
+curl -X POST "https://api.astracollab.app/v1/keys" \
+  -H "Authorization: Bearer your-api-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production App Key",
+    "permissions": ["files:read", "files:write", "folders:read"],
+    "expiresAt": "2024-12-31T23:59:59Z"
+  }'
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "key": {
+      "id": "key_1234567890abcdef",
+      "name": "Production App Key",
+      "prefix": "ak_1234",
+      "fullKey": "ak_1234567890abcdefghijklmnopqrstuvwxyz",
+      "permissions": ["files:read", "files:write", "folders:read"],
+      "createdAt": "2024-01-15T10:30:00Z",
+      "expiresAt": "2024-12-31T23:59:59Z",
+      "lastUsedAt": null,
+      "isActive": true
+    }
+  }
+}
+```
+
+<Warning>
+  The full API key is only shown once when created. Make sure to copy and store it securely. You won't be able to retrieve the full key again.
+</Warning>
+
+### API Key Object Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | string | Unique key identifier |
+| `name` | string | Descriptive name for the key |
+| `prefix` | string | First 7 characters of the key (for identification) |
+| `fullKey` | string | Complete API key (only shown on creation) |
+| `permissions` | array | Array of granted permissions |
+| `createdAt` | string | ISO 8601 timestamp of creation |
+| `expiresAt` | string | ISO 8601 expiration date (null if never expires) |
+| `lastUsedAt` | string | ISO 8601 timestamp of last usage (null if never used) |
+| `isActive` | boolean | Whether the key is currently active |
+
+### Available Permissions
+
+| Permission | Description |
+|------------|-------------|
+| `files:read` | Read files and metadata |
+| `files:write` | Upload, update, and delete files |
+| `folders:read` | List and view folders |
+| `folders:write` | Create, update, and delete folders |
+| `keys:read` | View API keys |
+| `keys:write` | Create and manage API keys |
+| `billing:read` | View billing information |
+| `admin` | Full administrative access |
+
+### Error Responses
+
+#### Invalid Name
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_KEY_NAME",
+    "message": "Key name cannot be empty or contain invalid characters",
+    "details": {
+      "name": "",
+      "reason": "Name cannot be empty"
+    }
+  }
+}
+```
+
+#### Invalid Permissions
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_PERMISSIONS",
+    "message": "Invalid permissions specified",
+    "details": {
+      "invalidPermissions": ["invalid:permission"],
+      "validPermissions": ["files:read", "files:write", "folders:read", "folders:write", "keys:read", "keys:write", "billing:read", "admin"]
+    }
+  }
+}
+```
+
+#### Invalid Expiration Date
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_EXPIRATION_DATE",
+    "message": "Expiration date must be in the future",
+    "details": {
+      "expiresAt": "2023-01-01T00:00:00Z",
+      "currentTime": "2024-01-15T10:30:00Z"
+    }
+  }
+}
+```
+
+#### Key Limit Exceeded
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "KEY_LIMIT_EXCEEDED",
+    "message": "Maximum number of API keys reached",
+    "details": {
+      "currentKeys": 10,
+      "maxKeys": 10
+    }
+  }
+}
+```
+
+### SDK Examples
+
+<CodeGroup>
+
+```bash Curl
+curl -X POST "https://api.astracollab.app/v1/keys" \
+  -H "Authorization: Bearer your-api-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My App Key",
+    "permissions": ["files:read", "files:write"]
+  }'
+```
+
+```javascript JavaScript SDK
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+const key = await client.keys.create({
+  name: 'Production App Key',
+  permissions: ['files:read', 'files:write', 'folders:read'],
+  expiresAt: '2024-12-31T23:59:59Z'
+});
+
+console.log('API Key:', key.fullKey);
+```
+
+```typescript Next.js SDK
+import { useCreateApiKey } from '@astracollab/nextjs';
+
+function CreateApiKeyForm() {
+  const { createKey, isCreating } = useCreateApiKey();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    
+    const key = await createKey({
+      name: formData.get('name'),
+      permissions: formData.getAll('permissions'),
+      expiresAt: formData.get('expiresAt') || null
+    });
+    
+    // Store the key securely
+    console.log('New API Key:', key.fullKey);
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input name="name" placeholder="Key name" required />
+      <div>
+        <label>
+          <input type="checkbox" name="permissions" value="files:read" />
+          Read files
+        </label>
+        <label>
+          <input type="checkbox" name="permissions" value="files:write" />
+          Write files
+        </label>
+        <label>
+          <input type="checkbox" name="permissions" value="folders:read" />
+          Read folders
+        </label>
+      </div>
+      <input 
+        type="datetime-local" 
+        name="expiresAt" 
+        placeholder="Expiration date (optional)" 
+      />
+      <button type="submit" disabled={isCreating}>
+        {isCreating ? 'Creating...' : 'Create API Key'}
+      </button>
+    </form>
+  );
+}
+```
+
+</CodeGroup>
+
+### Security Best Practices
+
+#### Key Naming
+- Use descriptive names that indicate the purpose
+- Include environment information (e.g., "Production App", "Development Testing")
+- Include application or service name
+
+#### Permissions
+- Follow the principle of least privilege
+- Only grant necessary permissions
+- Use specific permissions instead of `admin` when possible
+- Regularly review and update permissions
+
+#### Expiration
+- Set expiration dates for temporary keys
+- Use short expiration for testing keys
+- Consider rotating keys regularly
+
+#### Storage
+- Store keys in environment variables
+- Never commit keys to version control
+- Use secure key management services
+- Encrypt keys at rest
+
+### Key Rotation
+
+Regularly rotate your API keys for better security:
+
+```javascript
+const rotateApiKey = async (oldKeyId) => {
+  // Create new key
+  const newKey = await client.keys.create({
+    name: 'Rotated Key',
+    permissions: ['files:read', 'files:write']
+  });
+  
+  // Update application to use new key
+  // ...
+  
+  // Revoke old key
+  await client.keys.revoke(oldKeyId);
+};
+```
+
+### Usage Tracking
+
+Monitor API key usage to detect unusual activity:
+
+```javascript
+const key = await client.keys.get('key_1234567890abcdef');
+console.log('Last used:', key.lastUsedAt);
+console.log('Is active:', key.isActive);
+```

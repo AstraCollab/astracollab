@@ -1,0 +1,430 @@
+---
+title: 'API Keys'
+description: 'Learn how to manage API keys for secure programmatic access'
+---
+
+## API Keys
+
+API keys provide secure programmatic access to your AstraCollab storage. Learn how to create, manage, and secure your API keys effectively.
+
+## Creating API Keys
+
+### Basic API Key Creation
+
+Create a new API key with default permissions:
+
+```javascript
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+const newKey = await client.keys.create({
+  name: 'My Application Key',
+  description: 'API key for my web application'
+});
+
+console.log('New API Key:', newKey.fullKey);
+```
+
+### API Key with Specific Permissions
+
+Create keys with granular permissions:
+
+```javascript
+const restrictedKey = await client.keys.create({
+  name: 'Read-Only Key',
+  permissions: ['files:read', 'folders:read'],
+  expiresAt: '2024-12-31T23:59:59Z'
+});
+
+const adminKey = await client.keys.create({
+  name: 'Admin Key',
+  permissions: ['admin'],
+  description: 'Full administrative access'
+});
+```
+
+### Available Permissions
+
+| Permission | Description | Use Case |
+|------------|-------------|----------|
+| `files:read` | Read files and metadata | View-only applications |
+| `files:write` | Upload, update, delete files | File management apps |
+| `folders:read` | List and view folders | File browsers |
+| `folders:write` | Create, update, delete folders | Organization tools |
+| `keys:read` | View API keys | Key management dashboards |
+| `keys:write` | Create and manage API keys | Administrative tools |
+| `billing:read` | View billing information | Usage monitoring |
+| `admin` | Full administrative access | System administration |
+
+## Managing API Keys
+
+### Listing API Keys
+
+View all your API keys:
+
+```javascript
+// List all keys
+const allKeys = await client.keys.list();
+
+// List active keys only
+const activeKeys = await client.keys.list({
+  status: 'active',
+  sortBy: 'createdAt',
+  sortOrder: 'desc'
+});
+
+// Search for specific keys
+const searchResults = await client.keys.list({
+  search: 'production',
+  status: 'active'
+});
+```
+
+### Key Information
+
+Each API key includes detailed information:
+
+```javascript
+const key = await client.keys.get('key_1234567890abcdef');
+
+console.log('Key Details:', {
+  id: key.id,
+  name: key.name,
+  prefix: key.prefix, // First 7 characters for identification
+  permissions: key.permissions,
+  createdAt: key.createdAt,
+  expiresAt: key.expiresAt,
+  lastUsedAt: key.lastUsedAt,
+  usageCount: key.usageCount,
+  isActive: key.isActive
+});
+```
+
+### Updating API Keys
+
+Update key properties (except the key value itself):
+
+```javascript
+const updatedKey = await client.keys.update('key_1234567890abcdef', {
+  name: 'Updated Key Name',
+  permissions: ['files:read', 'files:write'],
+  expiresAt: '2025-12-31T23:59:59Z'
+});
+```
+
+### Revoking API Keys
+
+Revoke keys to disable access:
+
+```javascript
+// Revoke a single key
+await client.keys.revoke('key_1234567890abcdef');
+
+// Bulk revoke multiple keys
+await client.keys.bulkRevoke([
+  'key_1234567890abcdef',
+  'key_0987654321fedcba'
+]);
+```
+
+## Security Best Practices
+
+### Key Naming Conventions
+
+Use descriptive names that indicate the purpose:
+
+```javascript
+const keyNamingExamples = {
+  production: 'Production App - User Management',
+  staging: 'Staging Environment - Testing',
+  development: 'Dev Server - Local Development',
+  service: 'Background Service - File Processing',
+  integration: 'Third-party Integration - CRM Sync'
+};
+```
+
+### Permission Management
+
+Follow the principle of least privilege:
+
+```javascript
+// Good: Specific permissions
+const readOnlyKey = await client.keys.create({
+  name: 'Analytics Dashboard',
+  permissions: ['files:read', 'folders:read', 'billing:read']
+});
+
+// Avoid: Overly broad permissions
+const overlyBroadKey = await client.keys.create({
+  name: 'Temporary Script',
+  permissions: ['admin'] // Too broad for most use cases
+});
+```
+
+### Key Rotation
+
+Regularly rotate your API keys:
+
+```javascript
+const rotateApiKey = async (oldKeyId, oldKeyName) => {
+  try {
+    // 1. Create new key
+    const newKey = await client.keys.create({
+      name: `${oldKeyName} (Rotated)`,
+      permissions: ['files:read', 'files:write', 'folders:read']
+    });
+    
+    // 2. Update application configuration
+    await updateApplicationConfig(newKey.fullKey);
+    
+    // 3. Verify new key works
+    const testClient = new AstraCollab(newKey.fullKey);
+    await testClient.files.list();
+    
+    // 4. Revoke old key
+    await client.keys.revoke(oldKeyId);
+    
+    console.log('Key rotation completed successfully');
+    
+  } catch (error) {
+    console.error('Key rotation failed:', error);
+    // Consider revoking the new key if rotation fails
+  }
+};
+```
+
+### Expiration Management
+
+Set appropriate expiration dates:
+
+```javascript
+const createTemporaryKey = async (purpose, durationDays = 30) => {
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + durationDays);
+  
+  return await client.keys.create({
+    name: `Temporary - ${purpose}`,
+    permissions: ['files:read'],
+    expiresAt: expiresAt.toISOString()
+  });
+};
+
+// Example usage
+const tempKey = await createTemporaryKey('Data Export', 7);
+```
+
+## Usage Monitoring
+
+### Key Usage Analytics
+
+Monitor how your keys are being used:
+
+```javascript
+const analyzeKeyUsage = async () => {
+  const keys = await client.keys.list();
+  
+  const analytics = {
+    totalKeys: keys.length,
+    activeKeys: keys.filter(k => k.isActive).length,
+    expiredKeys: keys.filter(k => k.expiresAt && new Date(k.expiresAt) < new Date()).length,
+    unusedKeys: keys.filter(k => !k.lastUsedAt).length,
+    mostUsedKey: keys.reduce((max, key) => 
+      key.usageCount > max.usageCount ? key : max
+    ),
+    recentlyUsedKeys: keys
+      .filter(k => k.lastUsedAt)
+      .sort((a, b) => new Date(b.lastUsedAt) - new Date(a.lastUsedAt))
+      .slice(0, 5)
+  };
+  
+  return analytics;
+};
+```
+
+### Usage Alerts
+
+Set up monitoring for unusual activity:
+
+```javascript
+const checkKeySecurity = async () => {
+  const keys = await client.keys.list();
+  const alerts = [];
+  
+  keys.forEach(key => {
+    // Check for unused keys older than 30 days
+    if (!key.lastUsedAt && new Date(key.createdAt) < new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)) {
+      alerts.push({
+        type: 'warning',
+        keyId: key.id,
+        name: key.name,
+        message: 'Key created 30+ days ago but never used'
+      });
+    }
+    
+    // Check for keys with admin permissions
+    if (key.permissions.includes('admin')) {
+      alerts.push({
+        type: 'info',
+        keyId: key.id,
+        name: key.name,
+        message: 'Key has admin permissions - consider reducing scope'
+      });
+    }
+    
+    // Check for expired keys still in use
+    if (key.expiresAt && new Date(key.expiresAt) < new Date() && key.lastUsedAt) {
+      alerts.push({
+        type: 'critical',
+        keyId: key.id,
+        name: key.name,
+        message: 'Expired key still being used'
+      });
+    }
+  });
+  
+  return alerts;
+};
+```
+
+## Environment Management
+
+### Environment-Specific Keys
+
+Create different keys for different environments:
+
+```javascript
+const createEnvironmentKeys = async () => {
+  const environments = {
+    development: {
+      permissions: ['files:read', 'files:write'],
+      expiresAt: null // No expiration for dev
+    },
+    staging: {
+      permissions: ['files:read', 'files:write', 'folders:read'],
+      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) // 90 days
+    },
+    production: {
+      permissions: ['files:read', 'files:write', 'folders:read'],
+      expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000) // 1 year
+    }
+  };
+  
+  const keys = {};
+  
+  for (const [env, config] of Object.entries(environments)) {
+    keys[env] = await client.keys.create({
+      name: `${env.charAt(0).toUpperCase() + env.slice(1)} Environment`,
+      permissions: config.permissions,
+      expiresAt: config.expiresAt?.toISOString()
+    });
+  }
+  
+  return keys;
+};
+```
+
+### Key Configuration Management
+
+Store and manage key configurations securely:
+
+```javascript
+const keyConfigManager = {
+  // Store key configuration (use environment variables in production)
+  storeKeyConfig: (keyId, config) => {
+    localStorage.setItem(`key_config_${keyId}`, JSON.stringify(config));
+  },
+  
+  // Retrieve key configuration
+  getKeyConfig: (keyId) => {
+    const config = localStorage.getItem(`key_config_${keyId}`);
+    return config ? JSON.parse(config) : null;
+  },
+  
+  // Update key configuration
+  updateKeyConfig: (keyId, updates) => {
+    const current = keyConfigManager.getKeyConfig(keyId);
+    const updated = { ...current, ...updates };
+    keyConfigManager.storeKeyConfig(keyId, updated);
+  }
+};
+```
+
+## Emergency Procedures
+
+### Emergency Key Revocation
+
+For security incidents:
+
+```javascript
+const emergencyRevoke = async (suspiciousKeyIds) => {
+  console.log('Emergency revocation initiated...');
+  
+  try {
+    await client.keys.bulkRevoke(suspiciousKeyIds);
+    console.log('Emergency revocation completed');
+    
+    // Notify security team
+    await notifySecurityTeam({
+      action: 'emergency_revocation',
+      keyIds: suspiciousKeyIds,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('Emergency revocation failed:', error);
+    // Escalate to security team
+  }
+};
+```
+
+### Key Recovery
+
+Recover from key compromise:
+
+```javascript
+const recoverFromCompromise = async (compromisedKeyId) => {
+  // 1. Immediately revoke compromised key
+  await client.keys.revoke(compromisedKeyId);
+  
+  // 2. Create new key with same permissions
+  const oldKey = await client.keys.get(compromisedKeyId);
+  const newKey = await client.keys.create({
+    name: `${oldKey.name} (Recovery)`,
+    permissions: oldKey.permissions
+  });
+  
+  // 3. Update all applications
+  await updateAllApplications(newKey.fullKey);
+  
+  // 4. Audit all key usage
+  await auditKeyUsage();
+  
+  return newKey;
+};
+```
+
+## Best Practices Summary
+
+### Creation
+- Use descriptive names
+- Follow least privilege principle
+- Set appropriate expiration dates
+- Document key purposes
+
+### Management
+- Regular key rotation
+- Monitor usage patterns
+- Review permissions periodically
+- Keep key inventory updated
+
+### Security
+- Store keys securely
+- Never commit keys to version control
+- Use environment variables
+
+### Monitoring
+- Track key usage
+- Set up usage alerts
+- Regular security audits
+- Monitor for unusual activity

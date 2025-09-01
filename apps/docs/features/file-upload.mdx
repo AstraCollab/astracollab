@@ -1,0 +1,426 @@
+---
+title: "File Upload"
+description: "Upload files with progress tracking, multipart uploads, and real-time status updates"
+---
+
+## File Upload Features
+
+AstraCollab provides powerful file upload capabilities with support for both small and large files, progress tracking, and real-time status updates.
+
+## Upload Methods
+
+### Single File Upload
+
+For files smaller than 100MB, use the simple single file upload:
+
+```tsx
+import { FileUploaderWithUI } from '@astracollab/nextjs';
+
+function SingleFileUpload() {
+  const config = {
+    baseURL: 'https://api.astracollab.app',
+    apiKey: process.env.ASTRACOLLAB_API_KEY
+  };
+
+  return (
+    <FileUploaderWithUI
+      config={config}
+      maxFiles={1}
+      onUploadComplete={(results) => {
+        console.log('File uploaded:', results[0]);
+      }}
+    />
+  );
+}
+```
+
+### Multipart Upload
+
+For large files (100MB+), AstraCollab automatically uses multipart uploads:
+
+1. **Chunking**: Files are split into 15MB chunks
+2. **Parallel Upload**: Chunks are uploaded in parallel for better performance
+3. **Progress Tracking**: Real-time progress for each chunk
+4. **Resume Capability**: Failed uploads can be resumed
+
+```tsx
+import { useUploadService } from '@astracollab/nextjs';
+
+function LargeFileUpload() {
+  const config = {
+    baseURL: 'https://api.astracollab.app',
+    apiKey: process.env.ASTRACOLLAB_API_KEY
+  };
+
+  const uploadService = useUploadService(config);
+
+  const handleLargeFile = async (file) => {
+    // The SDK automatically handles multipart uploads for large files
+    const fileId = await uploadService.uploadSingleFile({
+      file,
+      fileName: file.name
+    });
+    
+    console.log('Large file uploaded:', fileId);
+  };
+
+  return (
+    <input 
+      type="file" 
+      onChange={(e) => handleLargeFile(e.target.files[0])} 
+    />
+  );
+}
+```
+
+## Progress Tracking
+
+### Real-time Progress Updates
+
+Track upload progress in real-time:
+
+```tsx
+import { useUpload } from '@astracollab/nextjs';
+
+function UploadWithProgress() {
+  const { uploadProgress, isUploading } = useUpload(uploadService);
+
+  return (
+    <div>
+      {isUploading && <p>Uploading files...</p>}
+      
+      {Array.from(uploadProgress.entries()).map(([fileId, progress]) => (
+        <div key={fileId}>
+          <p>{progress.fileName}</p>
+          <div className="progress-bar">
+            <div 
+              className="progress-fill" 
+              style={{ width: `${progress.progressPercentage}%` }}
+            />
+          </div>
+          <p>{progress.progressPercentage}%</p>
+          <p>Status: {progress.status}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+### Progress States
+
+Files go through these states during upload:
+
+- **`pending`**: File is queued for upload
+- **`uploading`**: File is currently being uploaded
+- **`completed`**: Upload finished successfully
+- **`failed`**: Upload failed with an error
+- **`canceled`**: Upload was canceled by user
+
+## File Validation
+
+### Size Limits
+
+- **Free Plan**: 100MB per file
+- **Creator Plan**: 1GB per file
+- **Studio Plan**: 5GB per file
+- **Production Plan**: 10GB per file
+
+### File Type Restrictions
+
+Configure allowed file types:
+
+```tsx
+<FileUploaderWithUI
+  config={config}
+  accept=".jpg,.jpeg,.png,.pdf,.doc,.docx"
+  onUploadError={(error, fileId) => {
+    if (error.includes('file type')) {
+      console.error('Invalid file type');
+    }
+  }}
+/>
+```
+
+### Custom Validation
+
+Add custom validation logic:
+
+```tsx
+function CustomValidation() {
+  const validateFile = (file) => {
+    // Check file size
+    if (file.size > 50 * 1024 * 1024) { // 50MB
+      return 'File size exceeds 50MB limit';
+    }
+    
+    // Check file type
+    const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
+    if (!allowedTypes.includes(file.type)) {
+      return 'File type not allowed';
+    }
+    
+    return null; // File is valid
+  };
+
+  return (
+    <FileUploaderWithUI
+      config={config}
+      onUploadError={(error, fileId) => {
+        const validationError = validateFile(file);
+        if (validationError) {
+          console.error(validationError);
+        }
+      }}
+    />
+  );
+}
+```
+
+## Upload Options
+
+### Folder Organization
+
+Upload files to specific folders:
+
+```tsx
+<FileUploaderWithUI
+  config={config}
+  folderId="my-folder-id"
+  orgId="my-org-id"
+/>
+```
+
+### Multiple Files
+
+Upload multiple files simultaneously:
+
+```tsx
+<FileUploaderWithUI
+  config={config}
+  maxFiles={10}
+  onUploadComplete={(results) => {
+    console.log(`Uploaded ${results.length} files`);
+  }}
+/>
+```
+
+### Custom File Names
+
+Override file names during upload:
+
+```tsx
+import { useUploadService } from '@astracollab/nextjs';
+
+function CustomFileName() {
+  const uploadService = useUploadService(config);
+
+  const uploadWithCustomName = async (file) => {
+    const timestamp = new Date().toISOString();
+    const customName = `${timestamp}-${file.name}`;
+    
+    const fileId = await uploadService.uploadSingleFile({
+      file,
+      fileName: customName
+    });
+  };
+
+  return (
+    <input 
+      type="file" 
+      onChange={(e) => uploadWithCustomName(e.target.files[0])} 
+    />
+  );
+}
+```
+
+## Error Handling
+
+### Upload Failures
+
+Handle various upload error scenarios:
+
+```tsx
+function UploadWithErrorHandling() {
+  const handleUploadError = (error, fileId) => {
+    if (error.includes('network')) {
+      console.error('Network error - check your connection');
+    } else if (error.includes('storage limit')) {
+      console.error('Storage limit exceeded');
+    } else if (error.includes('rate limit')) {
+      console.error('Rate limit exceeded');
+    } else {
+      console.error('Upload failed:', error);
+    }
+  };
+
+  return (
+    <FileUploaderWithUI
+      config={config}
+      onUploadError={handleUploadError}
+    />
+  );
+}
+```
+
+### Retry Logic
+
+Implement automatic retry for failed uploads:
+
+```tsx
+import { useUploadService } from '@astracollab/nextjs';
+
+function UploadWithRetry() {
+  const uploadService = useUploadService(config);
+
+  const uploadWithRetry = async (file, maxRetries = 3) => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const fileId = await uploadService.uploadSingleFile({ file });
+        console.log('Upload successful:', fileId);
+        return fileId;
+      } catch (error) {
+        console.error(`Upload attempt ${attempt} failed:`, error);
+        
+        if (attempt === maxRetries) {
+          throw new Error('Upload failed after all retry attempts');
+        }
+        
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      }
+    }
+  };
+
+  return (
+    <input 
+      type="file" 
+      onChange={(e) => uploadWithRetry(e.target.files[0])} 
+    />
+  );
+}
+```
+
+## Performance Optimization
+
+### Chunk Size Configuration
+
+Adjust chunk size for multipart uploads:
+
+```tsx
+import { UploadService } from '@astracollab/nextjs';
+
+const uploadService = new UploadService('https://api.astracollab.app', 'api-key', {
+  chunkSize: 10 * 1024 * 1024 // 10MB chunks
+});
+```
+
+### Concurrent Uploads
+
+Control the number of concurrent uploads:
+
+```tsx
+const uploadService = new UploadService('https://api.astracollab.app', 'api-key', {
+  maxConcurrentUploads: 3
+});
+```
+
+### Upload Queue
+
+Manage upload queue for better performance:
+
+```tsx
+function UploadQueue() {
+  const [queue, setQueue] = useState([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const addToQueue = (files) => {
+    setQueue(prev => [...prev, ...files]);
+  };
+
+  const processQueue = async () => {
+    if (isProcessing || queue.length === 0) return;
+    
+    setIsProcessing(true);
+    
+    for (const file of queue) {
+      try {
+        await uploadService.uploadSingleFile({ file });
+        setQueue(prev => prev.filter(f => f !== file));
+      } catch (error) {
+        console.error('Failed to upload:', file.name, error);
+      }
+    }
+    
+    setIsProcessing(false);
+  };
+
+  useEffect(() => {
+    processQueue();
+  }, [queue, isProcessing]);
+
+  return (
+    <div>
+      <input 
+        type="file" 
+        multiple 
+        onChange={(e) => addToQueue(Array.from(e.target.files))} 
+      />
+      <p>Queue: {queue.length} files</p>
+      <p>Processing: {isProcessing ? 'Yes' : 'No'}</p>
+    </div>
+  );
+}
+```
+
+## Security Features
+
+### File Scanning
+
+AstraCollab automatically scans uploaded files for malware and viruses.
+
+### Access Control
+
+Control who can upload files:
+
+```tsx
+function SecureUpload() {
+  const [userPermissions, setUserPermissions] = useState(null);
+
+  useEffect(() => {
+    // Check user permissions before allowing upload
+    checkUserPermissions().then(setUserPermissions);
+  }, []);
+
+  if (!userPermissions?.canUpload) {
+    return <p>You don't have permission to upload files</p>;
+  }
+
+  return (
+    <FileUploaderWithUI
+      config={config}
+      maxFiles={userPermissions.maxFiles}
+      maxFileSize={userPermissions.maxFileSize}
+    />
+  );
+}
+```
+
+## Best Practices
+
+1. **File Size Limits**: Always validate file sizes before upload
+2. **File Type Validation**: Restrict allowed file types for security
+3. **Progress Feedback**: Show upload progress to improve user experience
+4. **Error Handling**: Implement comprehensive error handling
+5. **Retry Logic**: Add retry mechanisms for network failures
+6. **Queue Management**: Use upload queues for multiple files
+7. **Security**: Validate files on both client and server side
+
+## Support
+
+Need help with file uploads?
+
+- **API Reference**: Check the [upload endpoints](/api-reference/files/upload)
+- **SDK Documentation**: Use our [Next.js SDK](/sdk/nextjs) or [JavaScript SDK](/sdk/javascript)
+- **Examples**: See [upload examples](/sdk/examples)
+- **Support**: Email us at elias@thenextcreatives.com

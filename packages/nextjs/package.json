@@ -1,0 +1,114 @@
+{
+    "name": "@astracollab/nextjs",
+    "description": "AstraCollab SDK for Next.js",
+    "version": "0.0.1",
+    "author": "AstraCollab",
+    "private": false,
+    "license": "MIT",
+    "keywords": [
+        "astracollab",
+        "storage",
+        "api",
+        "sdk",
+        "nextjs",
+        "react",
+        "file-upload"
+    ],
+    "publishConfig": {
+        "access": "public",
+        "registry": "https://registry.npmjs.org/"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/astracollab/astracollab.git",
+        "directory": "packages/nextjs"
+    },
+    "scripts": {
+        "dev": "tsup --watch",
+        "build": "tsup",
+        "lint": "biome check --write --unsafe .",
+        "lint:ci": "biome check --unsafe .",
+        "test": "vitest",
+        "test:ci": "vitest run --coverage",
+        "type-check": "tsc --noEmit",
+        "storybook": "storybook dev -p 6006",
+        "storybook:build": "storybook build"
+    },
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "require": "./dist/index.js",
+            "import": "./dist/index.mjs",
+            "types": "./dist/index.d.ts"
+        },
+        "./upload-service": {
+            "require": "./dist/upload-service.js",
+            "import": "./dist/upload-service.mjs",
+            "types": "./dist/upload-service.d.ts"
+        },
+        "./hooks": {
+            "require": "./dist/hooks.js",
+            "import": "./dist/hooks.mjs",
+            "types": "./dist/hooks.d.ts"
+        },
+        "./components": {
+            "require": "./dist/components.js",
+            "import": "./dist/components.mjs",
+            "types": "./dist/components.d.ts"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist"
+    ],
+    "engines": {
+        "node": ">=18.0.0"
+    },
+    "dependencies": {
+        "axios": "^1.6.0",
+        "uuid": "^9.0.0",
+        "@tanstack/react-query": "^5.0.0"
+    },
+    "peerDependencies": {
+        "react": ">=18.0.0",
+        "react-dom": ">=18.0.0",
+        "next": ">=14.0.0"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "1.9.4",
+        "@storybook/addon-essentials": "8.6.8",
+        "@storybook/addon-interactions": "8.6.8",
+        "@storybook/addon-links": "8.6.8",
+        "@storybook/addon-webpack5-compiler-swc": "3.0.0",
+        "@storybook/blocks": "8.6.8",
+        "@storybook/react": "8.6.8",
+        "@storybook/react-webpack5": "8.6.8",
+        "@storybook/test": "8.6.8",
+        "@testing-library/jest-dom": "6.6.3",
+        "@testing-library/react": "16.2.0",
+        "@types/node": "22.13.11",
+        "@types/react": "18.3.13",
+        "@types/react-dom": "18.3.1",
+        "@types/uuid": "^9.0.0",
+        "@vitest/coverage-v8": "3.0.9",
+        "concurrently": "9.1.2",
+        "jsdom": "26.0.0",
+        "prop-types": "15.8.1",
+        "react": "18.3.1",
+        "react-dom": "18.3.1",
+        "storybook": "8.6.8",
+        "tsup": "8.4.0",
+        "typescript": "5.8.2",
+        "vitest": "3.0.9"
+    },
+    "pnpm": {
+        "overrides": {
+            "micromatch@<4.0.8": ">=4.0.8"
+        },
+        "onlyBuiltDependencies": [
+            "@biomejs/biome",
+            "@swc/core",
+            "esbuild"
+        ]
+    }
+}

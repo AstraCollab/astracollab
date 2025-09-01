@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/create-next-app).
+# Introduction
 
-## Getting Started
+This repository contains the official documentation for AstraCollab, a powerful storage solution that combines the simplicity of Google Drive with enterprise-grade API access.
 
-First, run the development server:
+## About AstraCollab
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+AstraCollab provides:
+- **File Upload & Management**: Upload files with progress tracking, multipart uploads for large files, and real-time status updates
+- **API Access**: Full REST API with authentication, rate limiting, and comprehensive documentation
+- **SDK & Libraries**: Official SDKs for Next.js and JavaScript with React hooks and components
+- **Billing & Usage**: Per-user and per-storage billing with usage tracking and overage management
+
+## Documentation Structure
+
+- **Guides**: Getting started, development setup, and feature guides
+- **SDK Documentation**: Next.js and JavaScript SDK documentation with examples
+- **API Reference**: Complete API documentation with all endpoints
+- **Features**: Detailed guides for file upload, storage management, billing, and API keys
+
+## Development
+
+### Prerequisites
+
+- Node.js 18+
+- Mintlify CLI
+
+### Local Development
+
+1. Install the Mintlify CLI:
+   ```bash
+   npm i -g mint
+   ```
+
+2. Start the development server:
+   ```bash
+   mint dev
+   ```
+
+3. View your local preview at `http://localhost:3000`
+
+### Publishing Changes
+
+Changes are automatically deployed to production when pushed to the main branch. The documentation is hosted on Mintlify and updates automatically.
+
+## Repository Structure
+
+```
+├── docs.json              # Mintlify configuration
+├── index.mdx              # Homepage
+├── quickstart.mdx         # Quickstart guide
+├── development.mdx        # Development setup
+├── api-reference/         # API documentation
+├── sdk/                   # SDK documentation
+├── features/              # Feature guides
+├── images/                # Documentation images
+└── logo/                  # Brand assets
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Contributing
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test locally with `mint dev`
+5. Submit a pull request
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load Inter, a custom Google Font.
+## Resources
 
-## Learn More
+- **Support**: elias@thenextcreatives.com
 
-To learn more about Next.js, take a look at the following resources:
+## License
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+This documentation is part of the AstraCollab project and is subject to the same license terms.

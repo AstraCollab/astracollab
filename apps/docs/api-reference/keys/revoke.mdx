@@ -1,0 +1,332 @@
+---
+title: 'Revoke API Key'
+description: 'Revoke an API key to disable access'
+---
+
+## Revoke API Key
+
+Revoke an API key to immediately disable access. Once revoked, the key cannot be used for authentication and cannot be reactivated.
+
+<Warning>
+  Revoking an API key will immediately disable all applications using that key. Make sure to update your applications with a new key before revoking the old one.
+</Warning>
+
+### Endpoint
+
+```
+DELETE /keys/{keyId}
+```
+
+### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `keyId` | string | Yes | The ID of the API key to revoke |
+
+### Example Request
+
+```bash
+curl -X DELETE "https://api.astracollab.app/v1/keys/key_1234567890abcdef" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "message": "API key revoked successfully",
+    "keyId": "key_1234567890abcdef",
+    "revokedAt": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+### Error Responses
+
+#### Key Not Found
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "KEY_NOT_FOUND",
+    "message": "API key with ID 'key_1234567890abcdef' not found"
+  }
+}
+```
+
+#### Key Already Revoked
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "KEY_ALREADY_REVOKED",
+    "message": "API key is already revoked",
+    "details": {
+      "keyId": "key_1234567890abcdef",
+      "revokedAt": "2024-01-10T15:20:00Z"
+    }
+  }
+}
+```
+
+#### Access Denied
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "ACCESS_DENIED",
+    "message": "You don't have permission to revoke this API key"
+  }
+}
+```
+
+#### Cannot Revoke Own Key
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "CANNOT_REVOKE_OWN_KEY",
+    "message": "Cannot revoke the API key you are currently using",
+    "details": {
+      "keyId": "key_1234567890abcdef"
+    }
+  }
+}
+```
+
+### Bulk Revoke
+
+To revoke multiple API keys at once:
+
+#### Endpoint
+
+```
+DELETE /keys/bulk
+```
+
+#### Request Body
+
+```json
+{
+  "keyIds": [
+    "key_1234567890abcdef",
+    "key_0987654321fedcba",
+    "key_abcdef1234567890"
+  ]
+}
+```
+
+#### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "revoked": [
+      "key_1234567890abcdef",
+      "key_0987654321fedcba"
+    ],
+    "failed": [
+      {
+        "keyId": "key_abcdef1234567890",
+        "reason": "Key not found"
+      }
+    ],
+    "revokedAt": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+### SDK Examples
+
+<CodeGroup>
+
+```bash Curl
+curl -X DELETE "https://api.astracollab.app/v1/keys/key_1234567890abcdef" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+```javascript JavaScript SDK
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+// Revoke single key
+await client.keys.revoke('key_1234567890abcdef');
+
+// Bulk revoke
+await client.keys.bulkRevoke([
+  'key_1234567890abcdef',
+  'key_0987654321fedcba'
+]);
+```
+
+```typescript Next.js SDK
+import { useRevokeApiKey } from '@astracollab/nextjs';
+
+function ApiKeyList({ keys }) {
+  const { revokeKey, isRevoking } = useRevokeApiKey();
+
+  const handleRevoke = async (keyId, keyName) => {
+    const confirmed = confirm(
+      `Are you sure you want to revoke "${keyName}"? This action cannot be undone and will immediately disable all applications using this key.`
+    );
+    
+    if (confirmed) {
+      await revokeKey(keyId);
+    }
+  };
+
+  return (
+    <div>
+      {keys.map(key => (
+        <div key={key.id}>
+          <h3>{key.name}</h3>
+          <p>Prefix: {key.prefix}</p>
+          <p>Status: {key.isActive ? 'Active' : 'Inactive'}</p>
+          <button 
+            onClick={() => handleRevoke(key.id, key.name)}
+            disabled={isRevoking || !key.isActive}
+          >
+            {isRevoking ? 'Revoking...' : 'Revoke Key'}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+</CodeGroup>
+
+### Confirmation Dialog
+
+Always show a confirmation dialog before revoking keys:
+
+```javascript
+const revokeKeyWithConfirmation = async (keyId, keyName, usageCount) => {
+  const message = usageCount > 0
+    ? `Are you sure you want to revoke "${keyName}"? This key has been used ${usageCount} times and revoking it will immediately disable all applications using it. This action cannot be undone.`
+    : `Are you sure you want to revoke "${keyName}"? This action cannot be undone.`;
+  
+  const confirmed = confirm(message);
+  
+  if (confirmed) {
+    try {
+      await revokeKey(keyId);
+      console.log('API key revoked successfully');
+    } catch (error) {
+      console.error('Failed to revoke API key:', error);
+    }
+  }
+};
+```
+
+### Key Rotation Workflow
+
+Follow this workflow when rotating API keys:
+
+```javascript
+const rotateApiKey = async (oldKeyId, oldKeyName) => {
+  try {
+    // 1. Create new key
+    const newKey = await client.keys.create({
+      name: `${oldKeyName} (Rotated)`,
+      permissions: ['files:read', 'files:write', 'folders:read']
+    });
+    
+    console.log('New API Key created:', newKey.fullKey);
+    
+    // 2. Update applications with new key
+    // This step depends on your application architecture
+    await updateApplicationKey(newKey.fullKey);
+    
+    // 3. Verify new key works
+    const testClient = new AstraCollab(newKey.fullKey);
+    await testClient.files.list();
+    
+    // 4. Revoke old key
+    await client.keys.revoke(oldKeyId);
+    
+    console.log('Key rotation completed successfully');
+    
+  } catch (error) {
+    console.error('Key rotation failed:', error);
+    // Consider revoking the new key if rotation fails
+  }
+};
+```
+
+### Emergency Revocation
+
+For security incidents, you may need to revoke keys immediately:
+
+```javascript
+const emergencyRevoke = async (suspiciousKeyIds) => {
+  console.log('Emergency revocation initiated...');
+  
+  try {
+    await client.keys.bulkRevoke(suspiciousKeyIds);
+    console.log('Emergency revocation completed');
+    
+    // Notify security team
+    await notifySecurityTeam({
+      action: 'emergency_revocation',
+      keyIds: suspiciousKeyIds,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('Emergency revocation failed:', error);
+    // Escalate to security team
+  }
+};
+```
+
+### Audit Trail
+
+Track key revocations for compliance:
+
+```javascript
+const getRevocationHistory = async () => {
+  const keys = await client.keys.list({ status: 'revoked' });
+  
+  return keys.map(key => ({
+    keyId: key.id,
+    name: key.name,
+    revokedAt: key.revokedAt,
+    lastUsedAt: key.lastUsedAt,
+    usageCount: key.usageCount
+  }));
+};
+```
+
+### Best Practices
+
+#### Before Revoking
+- Create a replacement key
+- Update all applications using the key
+- Test the new key thoroughly
+- Notify team members about the change
+
+#### During Revocation
+- Use bulk operations for multiple keys
+- Monitor for failed requests
+- Have a rollback plan ready
+
+#### After Revocation
+- Verify all applications are working
+- Update documentation
+- Remove old keys from configuration files
+- Monitor for any issues
+
+#### Security Considerations
+- Revoke keys immediately if compromised
+- Use different keys for different environments
+- Regularly audit key usage

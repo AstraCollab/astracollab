@@ -1,0 +1,339 @@
+---
+title: "Next.js SDK"
+description: "Official AstraCollab SDK for Next.js applications"
+---
+
+## Next.js SDK
+
+The AstraCollab Next.js SDK provides React hooks, components, and utilities for building file upload and management features in Next.js applications.
+
+## Installation
+
+```bash
+npm install @astracollab/nextjs
+```
+
+<Note>
+  This package automatically installs `@tanstack/react-query` and `axios` as dependencies, so you don't need to install them separately.
+</Note>
+
+## Quick Start
+
+### Basic File Upload Component
+
+```tsx
+import { FileUploaderWithUI } from '@astracollab/nextjs';
+
+function MyComponent() {
+  const config = {
+    baseURL: 'https://api.astracollab.app',
+    apiKey: process.env.ASTRACOLLAB_API_KEY
+  };
+
+  return (
+    <FileUploaderWithUI
+      config={config}
+      folderId="my-folder"
+      orgId="my-org"
+      maxFiles={5}
+      onUploadComplete={(results) => {
+        console.log('Upload completed:', results);
+      }}
+      onUploadError={(error, fileId) => {
+        console.error('Upload failed:', error);
+      }}
+    />
+  );
+}
+```
+
+### Custom UI with Hooks
+
+```tsx
+import { useUploadService, useUpload } from '@astracollab/nextjs';
+
+function CustomUploader() {
+  const config = {
+    baseURL: 'https://api.astracollab.app',
+    apiKey: process.env.ASTRACOLLAB_API_KEY
+  };
+
+  const uploadService = useUploadService(config);
+  const { uploadFiles, uploadProgress, isUploading } = useUpload(uploadService);
+
+  const handleFileSelect = (event) => {
+    const files = Array.from(event.target.files);
+    uploadFiles(files);
+  };
+
+  return (
+    <div>
+      <input type="file" multiple onChange={handleFileSelect} />
+      {isUploading && <p>Uploading files...</p>}
+      
+      {/* Display progress for each file */}
+      {Array.from(uploadProgress.entries()).map(([fileId, progress]) => (
+        <div key={fileId}>
+          <p>{progress.fileName}: {progress.progressPercentage}%</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+## Components
+
+### FileUploaderWithUI
+
+A complete file upload component with drag-and-drop interface and progress tracking.
+
+```tsx
+<FileUploaderWithUI
+  config={UploadServiceConfig}
+  folderId?: string
+  orgId?: string
+  maxFiles?: number
+  onUploadComplete?: (results: { fileId: string; fileName: string; }[]) => void
+  onUploadError?: (error: string, fileId: string) => void
+  onUploadProgress?: (progressMap: Map<string, FileUploadProgress>) => void
+  className?: string
+  dropzoneClassName?: string
+  listClassName?: string
+  itemClassName?: string
+  buttonClassName?: string
+  progressBarClassName?: string
+  statusClassName?: string
+/>
+```
+
+### FileUploader
+
+A minimal file upload component without UI styling.
+
+```tsx
+<FileUploader
+  config={UploadServiceConfig}
+  folderId?: string
+  orgId?: string
+  maxFiles?: number
+  onUploadComplete?: (results: { fileId: string; fileName: string; }[]) => void
+  onUploadError?: (error: string, fileId: string) => void
+  onUploadProgress?: (progressMap: Map<string, FileUploadProgress>) => void
+  className?: string
+  children?: React.ReactNode
+/>
+```
+
+## Hooks
+
+### useUploadService
+
+Creates and manages an upload service instance.
+
+```tsx
+const uploadService = useUploadService({
+  baseURL: string
+  apiKey?: string
+  timeout?: number
+});
+```
+
+### useUpload
+
+Provides upload functionality with progress tracking.
+
+```tsx
+const {
+  uploadFiles,
+  uploadProgress,
+  isUploading,
+  cancelUpload,
+  clearProgress
+} = useUpload(uploadService);
+```
+
+### useFiles
+
+Fetches files from the API.
+
+```tsx
+const {
+  files,
+  isLoading,
+  error,
+  refetch
+} = useFiles(baseURL, apiKey, folderId, orgId);
+```
+
+## Configuration
+
+### UploadServiceConfig
+
+```tsx
+interface UploadServiceConfig {
+  baseURL: string;
+  apiKey?: string;
+  timeout?: number;
+}
+```
+
+### FileUploadProgress
+
+```tsx
+interface FileUploadProgress {
+  fileId: string;
+  fileName: string;
+  totalBytes: number;
+  uploadedBytes: number;
+  progressPercentage: number;
+  status: 'pending' | 'uploading' | 'completed' | 'failed' | 'canceled';
+  error?: string;
+}
+```
+
+## Examples
+
+### Custom Styling
+
+```tsx
+<FileUploaderWithUI
+  config={config}
+  className="my-uploader"
+  dropzoneClassName="custom-dropzone"
+  buttonClassName="custom-button"
+  progressBarClassName="custom-progress"
+/>
+```
+
+### Custom File Input
+
+```tsx
+<FileUploader config={config}>
+  <button className="my-custom-button">
+    Choose Files
+  </button>
+</FileUploader>
+```
+
+### Progress Tracking
+
+```tsx
+function UploadWithProgress() {
+  const [progress, setProgress] = useState(new Map());
+  
+  return (
+    <FileUploaderWithUI
+      config={config}
+      onUploadProgress={setProgress}
+    />
+  );
+}
+```
+
+### File Listing
+
+```tsx
+function FileList() {
+  const { files, isLoading, error } = useFiles(
+    'https://api.astracollab.app',
+    process.env.ASTRACOLLAB_API_KEY,
+    'my-folder',
+    'my-org'
+  );
+
+  if (isLoading) return <div>Loading files...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <ul>
+      {files.map((file) => (
+        <li key={file.id}>{file.name}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+## Advanced Usage
+
+### Direct Service Usage
+
+```tsx
+import { UploadService } from '@astracollab/nextjs';
+
+const uploadService = new UploadService('https://api.astracollab.app', 'your-api-key');
+
+// Upload a single file
+const fileId = await uploadService.uploadSingleFile({
+  file: fileObject,
+  fileName: 'example.jpg',
+  folderId: 'my-folder',
+  orgId: 'my-org'
+});
+
+// Upload multiple files
+await uploadService.uploadMultipleFiles({
+  files: [
+    { id: '1', file: file1, name: 'file1.jpg', size: 1024 },
+    { id: '2', file: file2, name: 'file2.jpg', size: 2048 }
+  ],
+  folderId: 'my-folder',
+  orgId: 'my-org',
+  onProgress: (progressMap) => {
+    console.log('Upload progress:', progressMap);
+  },
+  onError: (errorMsg, fileId) => {
+    console.error('Upload error:', errorMsg);
+  },
+  onSuccess: (results) => {
+    console.log('Upload success:', results);
+  }
+});
+```
+
+## Error Handling
+
+The SDK provides comprehensive error handling:
+
+```tsx
+function UploadWithErrorHandling() {
+  const { uploadFiles, uploadProgress } = useUpload(uploadService);
+
+  const handleUpload = async (files) => {
+    try {
+      await uploadFiles(files);
+    } catch (error) {
+      console.error('Upload failed:', error);
+      // Handle error appropriately
+    }
+  };
+
+  return (
+    <FileUploaderWithUI
+      config={config}
+      onUploadError={(error, fileId) => {
+        console.error(`Upload failed for ${fileId}:`, error);
+        // Show user-friendly error message
+      }}
+    />
+  );
+}
+```
+
+## Best Practices
+
+1. **Environment Variables**: Always use environment variables for API keys
+2. **Error Handling**: Implement proper error handling for upload failures
+3. **Progress Feedback**: Show upload progress to improve user experience
+4. **File Validation**: Validate file types and sizes before upload
+5. **Rate Limiting**: Respect API rate limits in your application
+
+## Support
+
+Need help with the Next.js SDK?
+
+- **Examples**: Check our [examples page](/sdk/examples)
+- **API Reference**: Browse the [complete API documentation](/api-reference/introduction)
+- **Support**: Email us at elias@thenextcreatives.com
+- **Community**: Join our Discord server

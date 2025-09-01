@@ -1,0 +1,56 @@
+{
+    "name": "@astracollab/js",
+    "description": "Official AstraCollab JavaScript SDK for Node.js and browser environments",
+    "version": "0.1.0",
+    "author": "AstraCollab",
+    "license": "MIT",
+    "keywords": ["astracollab", "storage", "file-upload", "api", "sdk"],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/astracollab/astracollab.git"
+    },
+    "scripts": {
+        "dev": "tsup --watch",
+        "build": "tsup",
+        "lint": "biome check --write --unsafe .",
+        "lint:ci": "biome check --unsafe .",
+        "test": "vitest",
+        "test:ci": "vitest run --coverage",
+        "type-check": "tsc --noEmit"
+    },
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "require": "./dist/index.js",
+            "import": "./dist/index.mjs"
+        }
+    },
+    "files": ["dist"],
+    "engines": {
+        "node": ">=18.0.0"
+    },
+    "dependencies": {
+        "axios": "^1.6.0"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "1.9.4",
+        "@types/node": "22.13.11",
+        "@vitest/coverage-v8": "3.0.9",
+        "tsup": "8.4.0",
+        "typescript": "5.8.2",
+        "vitest": "3.0.9"
+    },
+    "peerDependencies": {},
+    "pnpm": {
+        "overrides": {
+            "micromatch@<4.0.8": ">=4.0.8"
+        },
+        "onlyBuiltDependencies": [
+            "@biomejs/biome",
+            "@swc/core",
+            "esbuild",
+            "lefthook"
+        ]
+    }
+}

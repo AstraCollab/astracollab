@@ -1,0 +1,561 @@
+---
+title: "Examples"
+description: "Code examples and integration patterns for AstraCollab"
+---
+
+## Examples
+
+Explore common integration patterns and use cases for AstraCollab. These examples demonstrate best practices and real-world scenarios.
+
+## File Upload Examples
+
+### Basic File Upload
+
+```tsx
+import { FileUploaderWithUI } from '@astracollab/nextjs';
+
+function BasicUpload() {
+  const config = {
+    baseURL: 'https://api.astracollab.app',
+    apiKey: process.env.ASTRACOLLAB_API_KEY
+  };
+
+  return (
+    <FileUploaderWithUI
+      config={config}
+      onUploadComplete={(results) => {
+        console.log('Upload completed:', results);
+      }}
+    />
+  );
+}
+```
+
+### Custom File Upload with Progress
+
+```tsx
+import { useUploadService, useUpload } from '@astracollab/nextjs';
+import { useState } from 'react';
+
+function CustomUpload() {
+  const [uploadProgress, setUploadProgress] = useState(new Map());
+  
+  const config = {
+    baseURL: 'https://api.astracollab.app',
+    apiKey: process.env.ASTRACOLLAB_API_KEY
+  };
+
+  const uploadService = useUploadService(config);
+  const { uploadFiles, isUploading } = useUpload(uploadService);
+
+  const handleFileSelect = (event) => {
+    const files = Array.from(event.target.files);
+    uploadFiles(files);
+  };
+
+  return (
+    <div>
+      <input type="file" multiple onChange={handleFileSelect} />
+      {isUploading && <p>Uploading files...</p>}
+      
+      {Array.from(uploadProgress.entries()).map(([fileId, progress]) => (
+        <div key={fileId}>
+          <p>{progress.fileName}: {progress.progressPercentage}%</p>
+          <div className="progress-bar">
+            <div 
+              className="progress-fill" 
+              style={{ width: `${progress.progressPercentage}%` }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+### Drag and Drop Upload
+
+```tsx
+import { useUploadService, useUpload } from '@astracollab/nextjs';
+import { useState, useCallback } from 'react';
+
+function DragDropUpload() {
+  const [isDragOver, setIsDragOver] = useState(false);
+  
+  const config = {
+    baseURL: 'https://api.astracollab.app',
+    apiKey: process.env.ASTRACOLLAB_API_KEY
+  };
+
+  const uploadService = useUploadService(config);
+  const { uploadFiles } = useUpload(uploadService);
+
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    
+    const files = Array.from(e.dataTransfer.files);
+    uploadFiles(files);
+  }, [uploadFiles]);
+
+  return (
+    <div
+      className={`dropzone ${isDragOver ? 'drag-over' : ''}`}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      <p>Drag and drop files here</p>
+    </div>
+  );
+}
+```
+
+## File Management Examples
+
+### File List with Search
+
+```tsx
+import { useFiles } from '@astracollab/nextjs';
+import { useState } from 'react';
+
+function FileList() {
+  const [searchTerm, setSearchTerm] = useState('');
+  
+  const { files, isLoading, error } = useFiles(
+    'https://api.astracollab.app',
+    process.env.ASTRACOLLAB_API_KEY
+  );
+
+  const filteredFiles = files.filter(file => 
+    file.name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  if (isLoading) return <div>Loading files...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <div>
+      <input
+        type="text"
+        placeholder="Search files..."
+        value={searchTerm}
+        onChange={(e) => setSearchTerm(e.target.value)}
+      />
+      
+      <ul>
+        {filteredFiles.map((file) => (
+          <li key={file.id}>
+            <span>{file.name}</span>
+            <span>{(file.size / 1024 / 1024).toFixed(2)} MB</span>
+            <span>{new Date(file.uploadedAt).toLocaleDateString()}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+```
+
+### File Preview Component
+
+```tsx
+import { useFiles } from '@astracollab/nextjs';
+import { useState } from 'react';
+
+function FilePreview({ fileId }) {
+  const [previewUrl, setPreviewUrl] = useState(null);
+  
+  const config = {
+    baseURL: 'https://api.astracollab.app',
+    apiKey: process.env.ASTRACOLLAB_API_KEY
+  };
+
+  const getPreviewUrl = async () => {
+    try {
+      const response = await fetch(`${config.baseURL}/v1/files/${fileId}/preview`, {
+        headers: {
+          'Authorization': `Bearer ${config.apiKey}`
+        }
+      });
+      
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        setPreviewUrl(url);
+      }
+    } catch (error) {
+      console.error('Failed to get preview:', error);
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={getPreviewUrl}>Preview File</button>
+      {previewUrl && (
+        <div>
+          <img src={previewUrl} alt="File preview" />
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+## Integration Examples
+
+### Next.js App Router Integration
+
+```tsx
+// app/upload/page.tsx
+'use client';
+
+import { FileUploaderWithUI } from '@astracollab/nextjs';
+
+export default function UploadPage() {
+  const config = {
+    baseURL: process.env.NEXT_PUBLIC_ASTRACOLLAB_BASE_URL,
+    apiKey: process.env.NEXT_PUBLIC_ASTRACOLLAB_API_KEY
+  };
+
+  return (
+    <div className="container mx-auto p-4">
+      <h1 className="text-2xl font-bold mb-4">Upload Files</h1>
+      <FileUploaderWithUI
+        config={config}
+        className="max-w-2xl"
+        onUploadComplete={(results) => {
+          // Handle upload completion
+          console.log('Upload completed:', results);
+        }}
+      />
+    </div>
+  );
+}
+```
+
+### React Hook Form Integration
+
+```tsx
+import { useForm } from 'react-hook-form';
+import { FileUploader } from '@astracollab/nextjs';
+
+function FormWithUpload() {
+  const { register, handleSubmit, setValue, watch } = useForm();
+  
+  const config = {
+    baseURL: 'https://api.astracollab.app',
+    apiKey: process.env.ASTRACOLLAB_API_KEY
+  };
+
+  const onSubmit = (data) => {
+    console.log('Form data:', data);
+    // Submit form with file IDs
+  };
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <input {...register('title')} placeholder="Document title" />
+      
+      <FileUploader config={config}>
+        <button type="button">Choose Files</button>
+      </FileUploader>
+      
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+### Zustand State Management
+
+```tsx
+import { create } from 'zustand';
+import { FileUploaderWithUI } from '@astracollab/nextjs';
+
+const useFileStore = create((set, get) => ({
+  files: [],
+  uploadProgress: new Map(),
+  addFile: (file) => set((state) => ({ 
+    files: [...state.files, file] 
+  })),
+  updateProgress: (fileId, progress) => set((state) => ({
+    uploadProgress: new Map(state.uploadProgress).set(fileId, progress)
+  }))
+}));
+
+function UploadWithState() {
+  const { addFile, updateProgress } = useFileStore();
+  
+  const config = {
+    baseURL: 'https://api.astracollab.app',
+    apiKey: process.env.ASTRACOLLAB_API_KEY
+  };
+
+  return (
+    <FileUploaderWithUI
+      config={config}
+      onUploadComplete={(results) => {
+        results.forEach(result => {
+          addFile({
+            id: result.fileId,
+            name: result.fileName
+          });
+        });
+      }}
+      onUploadProgress={(progressMap) => {
+        progressMap.forEach((progress, fileId) => {
+          updateProgress(fileId, progress);
+        });
+      }}
+    />
+  );
+}
+```
+
+## Advanced Examples
+
+### Multipart Upload for Large Files
+
+```tsx
+import { useUploadService } from '@astracollab/nextjs';
+import { useState } from 'react';
+
+function LargeFileUpload() {
+  const [uploadStatus, setUploadStatus] = useState('idle');
+  
+  const config = {
+    baseURL: 'https://api.astracollab.app',
+    apiKey: process.env.ASTRACOLLAB_API_KEY
+  };
+
+  const uploadService = useUploadService(config);
+
+  const handleLargeFileUpload = async (file) => {
+    if (file.size > 100 * 1024 * 1024) { // 100MB
+      setUploadStatus('starting-multipart');
+      
+      try {
+        // Start multipart upload
+        const multipartResponse = await fetch(`${config.baseURL}/v1/files/multipart-upload-start`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${config.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            totalChunks: Math.ceil(file.size / (15 * 1024 * 1024)) // 15MB chunks
+          })
+        });
+
+        const { uploadId, presignedUrls } = await multipartResponse.json();
+        
+        setUploadStatus('uploading-chunks');
+        
+        // Upload chunks
+        const chunkSize = 15 * 1024 * 1024; // 15MB
+        const chunks = [];
+        
+        for (let i = 0; i < presignedUrls.length; i++) {
+          const start = i * chunkSize;
+          const end = Math.min(start + chunkSize, file.size);
+          const chunk = file.slice(start, end);
+          
+          await fetch(presignedUrls[i].url, {
+            method: 'PUT',
+            body: chunk
+          });
+          
+          chunks.push({
+            partNumber: i + 1,
+            etag: `"etag-${i + 1}"` // In real implementation, get actual ETag
+          });
+        }
+        
+        setUploadStatus('completing-upload');
+        
+        // Complete multipart upload
+        await fetch(`${config.baseURL}/v1/files/multipart-upload-complete`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${config.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            uploadId,
+            parts: chunks
+          })
+        });
+        
+        setUploadStatus('completed');
+      } catch (error) {
+        setUploadStatus('error');
+        console.error('Multipart upload failed:', error);
+      }
+    } else {
+      // Use regular upload for smaller files
+      uploadService.uploadSingleFile({ file });
+    }
+  };
+
+  return (
+    <div>
+      <input 
+        type="file" 
+        onChange={(e) => handleLargeFileUpload(e.target.files[0])} 
+      />
+      <p>Status: {uploadStatus}</p>
+    </div>
+  );
+}
+```
+
+### Real-time File Sync
+
+```tsx
+import { useFiles } from '@astracollab/nextjs';
+import { useEffect, useState } from 'react';
+
+function RealTimeFileSync() {
+  const [lastSync, setLastSync] = useState(null);
+  
+  const { files, refetch } = useFiles(
+    'https://api.astracollab.app',
+    process.env.ASTRACOLLAB_API_KEY
+  );
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refetch();
+      setLastSync(new Date());
+    }, 30000); // Sync every 30 seconds
+
+    return () => clearInterval(interval);
+  }, [refetch]);
+
+  return (
+    <div>
+      <h2>Files (Auto-syncing)</h2>
+      <p>Last sync: {lastSync?.toLocaleTimeString()}</p>
+      
+      <ul>
+        {files.map((file) => (
+          <li key={file.id}>{file.name}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+```
+
+## Error Handling Examples
+
+### Comprehensive Error Handling
+
+```tsx
+import { FileUploaderWithUI } from '@astracollab/nextjs';
+import { toast } from 'react-hot-toast';
+
+function UploadWithErrorHandling() {
+  const config = {
+    baseURL: 'https://api.astracollab.app',
+    apiKey: process.env.ASTRACOLLAB_API_KEY
+  };
+
+  const handleUploadError = (error, fileId) => {
+    console.error('Upload error:', error);
+    
+    if (error.includes('rate limit')) {
+      toast.error('Rate limit exceeded. Please try again later.');
+    } else if (error.includes('storage limit')) {
+      toast.error('Storage limit exceeded. Please upgrade your plan.');
+    } else if (error.includes('file size')) {
+      toast.error('File size exceeds the maximum allowed limit.');
+    } else {
+      toast.error('Upload failed. Please try again.');
+    }
+  };
+
+  return (
+    <FileUploaderWithUI
+      config={config}
+      onUploadError={handleUploadError}
+      onUploadComplete={(results) => {
+        toast.success(`Successfully uploaded ${results.length} file(s)`);
+      }}
+    />
+  );
+}
+```
+
+## Performance Examples
+
+### Lazy Loading File List
+
+```tsx
+import { useFiles } from '@astracollab/nextjs';
+import { useState } from 'react';
+
+function LazyFileList() {
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  
+  const { files, isLoading } = useFiles(
+    'https://api.astracollab.app',
+    process.env.ASTRACOLLAB_API_KEY,
+    undefined,
+    undefined,
+    page
+  );
+
+  const loadMore = () => {
+    if (files.length < 50) { // Assuming 50 is the page size
+      setHasMore(false);
+    } else {
+      setPage(prev => prev + 1);
+    }
+  };
+
+  return (
+    <div>
+      <ul>
+        {files.map((file) => (
+          <li key={file.id}>{file.name}</li>
+        ))}
+      </ul>
+      
+      {hasMore && (
+        <button 
+          onClick={loadMore} 
+          disabled={isLoading}
+        >
+          {isLoading ? 'Loading...' : 'Load More'}
+        </button>
+      )}
+    </div>
+  );
+}
+```
+
+## Support
+
+Need help implementing these examples?
+
+- **Documentation**: Browse our comprehensive guides
+- **API Reference**: Check the [complete API documentation](/api-reference/introduction)
+- **Support**: Email us at elias@thenextcreatives.com
+- **Community**: Join our Discord server

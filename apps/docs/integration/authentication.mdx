@@ -1,0 +1,253 @@
+---
+title: 'Authentication'
+description: 'Learn how to integrate AstraCollab authentication into your applications'
+---
+
+## Authentication
+
+Integrate AstraCollab authentication into your applications using API keys, OAuth, or custom authentication flows.
+
+## API Key Authentication
+
+### Basic Integration
+
+The simplest way to authenticate with AstraCollab is using API keys:
+
+```javascript
+import { AstraCollab } from '@astracollab/sdk';
+
+// Initialize client with API key
+const client = new AstraCollab('your-api-key-here');
+
+// Make authenticated requests
+const files = await client.files.list();
+```
+
+### Environment-Based Configuration
+
+Configure API keys for different environments:
+
+```javascript
+// config/auth.js
+const getApiKey = () => {
+  switch (process.env.NODE_ENV) {
+    case 'production':
+      return process.env.ASTRACOLLAB_PROD_API_KEY;
+    case 'staging':
+      return process.env.ASTRACOLLAB_STAGING_API_KEY;
+    case 'development':
+      return process.env.ASTRACOLLAB_DEV_API_KEY;
+    default:
+      throw new Error('Invalid environment');
+  }
+};
+
+// Initialize client
+const client = new AstraCollab(getApiKey());
+```
+
+## Error Handling
+
+### Authentication Errors
+
+Handle authentication errors gracefully:
+
+```javascript
+class AuthErrorHandler {
+  static handleError(error) {
+    switch (error.code) {
+      case 'INVALID_API_KEY':
+        return this.handleInvalidKey();
+      case 'API_KEY_EXPIRED':
+        return this.handleExpiredKey();
+      case 'INSUFFICIENT_PERMISSIONS':
+        return this.handleInsufficientPermissions();
+      case 'RATE_LIMITED':
+        return this.handleRateLimit();
+      default:
+        return this.handleGenericError(error);
+    }
+  }
+
+  static handleInvalidKey() {
+    // Redirect to login or refresh token
+    window.location.href = '/auth/login';
+  }
+
+  static handleExpiredKey() {
+    // Attempt to refresh token
+    return this.refreshToken();
+  }
+
+  static handleInsufficientPermissions() {
+    // Show permission error
+    return {
+      type: 'error',
+      message: 'You don\'t have permission to perform this action'
+    };
+  }
+
+  static handleRateLimit() {
+    // Show rate limit message
+    return {
+      type: 'warning',
+      message: 'Rate limit exceeded. Please try again later.'
+    };
+  }
+
+  static handleGenericError(error) {
+    console.error('Authentication error:', error);
+    return {
+      type: 'error',
+      message: 'An authentication error occurred'
+    };
+  }
+}
+```
+
+## Security Best Practices
+
+### Key Storage
+
+Store API keys securely:
+
+```javascript
+// Secure key storage
+const secureKeyStorage = {
+  // Browser environment
+  browser: {
+    store: (key, value) => {
+      // Use sessionStorage for temporary storage
+      sessionStorage.setItem(key, value);
+    },
+    retrieve: (key) => {
+      return sessionStorage.getItem(key);
+    },
+    remove: (key) => {
+      sessionStorage.removeItem(key);
+    }
+  },
+
+  // Node.js environment
+  node: {
+    store: (key, value) => {
+      // Use environment variables or secure key management
+      process.env[key] = value;
+    },
+    retrieve: (key) => {
+      return process.env[key];
+    },
+    remove: (key) => {
+      delete process.env[key];
+    }
+  }
+};
+```
+
+### Token Validation
+
+Validate tokens before use:
+
+```javascript
+const validateToken = (token) => {
+  if (!token) {
+    throw new Error('No token provided');
+  }
+
+  if (token.length < 20) {
+    throw new Error('Invalid token format');
+  }
+
+  // Additional validation as needed
+  return true;
+};
+
+const safeClientInit = (token) => {
+  try {
+    validateToken(token);
+    return new AstraCollab(token);
+  } catch (error) {
+    console.error('Token validation failed:', error);
+    throw error;
+  }
+};
+```
+
+## Testing Authentication
+
+### Mock Authentication
+
+Create mock authentication for testing:
+
+```javascript
+// test/mocks/auth.js
+export const mockAuth = {
+  apiKey: 'test_api_key_1234567890abcdef',
+  user: {
+    id: 'user_123',
+    email: 'test@example.com',
+    permissions: ['files:read', 'files:write']
+  },
+  
+  createMockClient: () => {
+    return new AstraCollab(mockAuth.apiKey);
+  },
+  
+  mockLogin: async (email, password) => {
+    if (email === 'test@example.com' && password === 'password') {
+      return {
+        success: true,
+        user: mockAuth.user,
+        apiKey: mockAuth.apiKey
+      };
+    }
+    throw new Error('Invalid credentials');
+  }
+};
+```
+
+### Integration Tests
+
+Test authentication integration:
+
+```javascript
+// test/integration/auth.test.js
+import { AstraCollab } from '@astracollab/sdk';
+
+describe('Authentication Integration', () => {
+  test('should authenticate with valid API key', async () => {
+    const client = new AstraCollab(process.env.TEST_API_KEY);
+    const files = await client.files.list();
+    expect(files).toBeDefined();
+  });
+
+  test('should reject invalid API key', async () => {
+    const client = new AstraCollab('invalid_key');
+    await expect(client.files.list()).rejects.toThrow();
+  });
+
+  test('should handle expired token', async () => {
+    const client = new AstraCollab(expiredToken);
+    await expect(client.files.list()).rejects.toThrow();
+  });
+});
+```
+
+## Best Practices Summary
+
+### Security
+- Store keys securely (environment variables, secure storage)
+- Use least privilege principle
+- Validate tokens before use
+
+### User Experience
+- Handle authentication errors gracefully
+- Provide clear error messages
+- Implement automatic token refresh
+- Support multiple authentication methods
+
+### Development
+- Use environment-specific configurations
+- Implement comprehensive testing
+- Monitor authentication failures
+- Document authentication flows

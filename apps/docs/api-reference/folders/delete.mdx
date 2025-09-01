@@ -1,0 +1,311 @@
+---
+title: 'Delete Folder'
+description: 'Delete a folder and its contents from your storage'
+---
+
+## Delete Folder
+
+Permanently delete a folder and all its contents from your storage. This action cannot be undone.
+
+<Warning>
+  Deleting a folder will permanently remove all files and subfolders within it. This action cannot be undone.
+</Warning>
+
+### Endpoint
+
+```
+DELETE /folders/{folderId}
+```
+
+### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `folderId` | string | Yes | The ID of the folder to delete |
+
+### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `force` | boolean | No | Force deletion even if folder contains files (default: false) |
+| `recursive` | boolean | No | Delete subfolders recursively (default: true) |
+
+### Example Request
+
+```bash
+curl -X DELETE "https://api.astracollab.app/v1/folders/folder_1234567890abcdef" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Folder deleted successfully",
+    "folderId": "folder_1234567890abcdef",
+    "deletedFiles": 15,
+    "deletedSubfolders": 3,
+    "freedSpace": 52428800,
+    "deletedAt": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+### Error Responses
+
+#### Folder Not Found
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "FOLDER_NOT_FOUND",
+    "message": "Folder with ID 'folder_1234567890abcdef' not found"
+  }
+}
+```
+
+#### Folder Not Empty
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "FOLDER_NOT_EMPTY",
+    "message": "Folder contains files and cannot be deleted",
+    "details": {
+      "fileCount": 15,
+      "subfolderCount": 3
+    }
+  }
+}
+```
+
+#### Access Denied
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "ACCESS_DENIED",
+    "message": "You don't have permission to delete this folder"
+  }
+}
+```
+
+#### Folder in Use
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "FOLDER_IN_USE",
+    "message": "Folder is currently being used and cannot be deleted",
+    "details": {
+      "reason": "Active file operations"
+    }
+  }
+}
+```
+
+### Force Delete
+
+To delete a folder that contains files, use the `force` parameter:
+
+```bash
+curl -X DELETE "https://api.astracollab.app/v1/folders/folder_1234567890abcdef?force=true" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Non-Recursive Delete
+
+To delete only the folder (not its contents), use `recursive=false`:
+
+```bash
+curl -X DELETE "https://api.astracollab.app/v1/folders/folder_1234567890abcdef?recursive=false" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Bulk Delete
+
+To delete multiple folders at once:
+
+#### Endpoint
+
+```
+DELETE /folders/bulk
+```
+
+#### Request Body
+
+```json
+{
+  "folderIds": [
+    "folder_1234567890abcdef",
+    "folder_0987654321fedcba",
+    "folder_abcdef1234567890"
+  ],
+  "force": true,
+  "recursive": true
+}
+```
+
+#### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "deleted": [
+      {
+        "folderId": "folder_1234567890abcdef",
+        "deletedFiles": 15,
+        "deletedSubfolders": 3,
+        "freedSpace": 52428800
+      },
+      {
+        "folderId": "folder_0987654321fedcba",
+        "deletedFiles": 8,
+        "deletedSubfolders": 1,
+        "freedSpace": 20971520
+      }
+    ],
+    "failed": [
+      {
+        "folderId": "folder_abcdef1234567890",
+        "reason": "Folder not found"
+      }
+    ],
+    "totalFreedSpace": 73400320,
+    "deletedAt": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+### SDK Examples
+
+<CodeGroup>
+
+```bash Curl
+curl -X DELETE "https://api.astracollab.app/v1/folders/folder_1234567890abcdef" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+```javascript JavaScript SDK
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+// Delete single folder
+await client.folders.delete('folder_1234567890abcdef');
+
+// Force delete folder with contents
+await client.folders.delete('folder_1234567890abcdef', {
+  force: true,
+  recursive: true
+});
+
+// Bulk delete
+await client.folders.bulkDelete([
+  'folder_1234567890abcdef',
+  'folder_0987654321fedcba'
+], {
+  force: true
+});
+```
+
+```typescript Next.js SDK
+import { useDeleteFolder } from '@astracollab/nextjs';
+
+function FolderList({ folders }) {
+  const { deleteFolder, isDeleting } = useDeleteFolder();
+
+  const handleDelete = async (folderId, folderName) => {
+    const confirmed = confirm(
+      `Are you sure you want to delete "${folderName}" and all its contents? This action cannot be undone.`
+    );
+    
+    if (confirmed) {
+      await deleteFolder(folderId, {
+        force: true,
+        recursive: true
+      });
+    }
+  };
+
+  return (
+    <div>
+      {folders.map(folder => (
+        <div key={folder.id}>
+          <span>{folder.name}</span>
+          <button 
+            onClick={() => handleDelete(folder.id, folder.name)}
+            disabled={isDeleting}
+          >
+            {isDeleting ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+</CodeGroup>
+
+### Confirmation Dialog
+
+Always show a confirmation dialog before deleting folders:
+
+```javascript
+const deleteFolderWithConfirmation = async (folderId, folderName, fileCount) => {
+  const message = fileCount > 0 
+    ? `Are you sure you want to delete "${folderName}" and all ${fileCount} files within it? This action cannot be undone.`
+    : `Are you sure you want to delete "${folderName}"? This action cannot be undone.`;
+  
+  const confirmed = confirm(message);
+  
+  if (confirmed) {
+    try {
+      await deleteFolder(folderId, { force: true });
+      console.log('Folder deleted successfully');
+    } catch (error) {
+      console.error('Failed to delete folder:', error);
+    }
+  }
+};
+```
+
+### Pre-deletion Check
+
+Check folder contents before deletion:
+
+```javascript
+const checkFolderContents = async (folderId) => {
+  const folder = await client.folders.get(folderId);
+  const files = await client.files.list({ folderId });
+  
+  return {
+    folder,
+    fileCount: files.length,
+    totalSize: files.reduce((sum, file) => sum + file.size, 0)
+  };
+};
+```
+
+### Storage Impact
+
+Deleting folders will immediately free up storage space and reduce your usage quota. The freed space is reported in the response.
+
+### Recovery
+
+Some folders may be soft-deleted (moved to trash) instead of being permanently deleted. Check your organization settings for this behavior.
+
+Soft-deleted folders can be recovered within 30 days:
+
+```javascript
+// Recover a soft-deleted folder
+await client.folders.recover('folder_1234567890abcdef');
+```

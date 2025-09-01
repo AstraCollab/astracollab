@@ -1,0 +1,160 @@
+---
+title: 'List Files'
+description: 'Retrieve a list of files from your storage'
+---
+
+## List Files
+
+Retrieve a paginated list of files from your storage. You can filter by folder, file type, and other criteria.
+
+### Endpoint
+
+```
+GET /files
+```
+
+### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `page` | number | No | Page number (default: 1) |
+| `limit` | number | No | Number of files per page (default: 20, max: 100) |
+| `folderId` | string | No | Filter files by folder ID |
+| `type` | string | No | Filter by file type (e.g., "image", "document", "video") |
+| `search` | string | No | Search files by name |
+| `sortBy` | string | No | Sort field ("name", "size", "uploadedAt", "updatedAt") |
+| `sortOrder` | string | No | Sort order ("asc" or "desc", default: "desc") |
+
+### Example Request
+
+```bash
+curl -X GET "https://api.astracollab.app/v1/files?page=1&limit=20&folderId=folder_123" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "files": [
+      {
+        "id": "file_1234567890abcdef",
+        "name": "example.jpg",
+        "size": 1024000,
+        "type": "image/jpeg",
+        "url": "https://storage.astracollab.app/files/file_1234567890abcdef",
+        "folderId": "folder_123",
+        "uploadedAt": "2024-01-15T10:30:00Z",
+        "updatedAt": "2024-01-15T10:30:00Z",
+        "metadata": {
+          "width": 1920,
+          "height": 1080
+        }
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 150,
+      "totalPages": 8,
+      "hasNext": true,
+      "hasPrev": false
+    }
+  }
+}
+```
+
+### File Object Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | string | Unique file identifier |
+| `name` | string | Original filename |
+| `size` | number | File size in bytes |
+| `type` | string | MIME type |
+| `url` | string | Direct download URL |
+| `folderId` | string | Parent folder ID (null if in root) |
+| `uploadedAt` | string | ISO 8601 timestamp of upload |
+| `updatedAt` | string | ISO 8601 timestamp of last update |
+| `metadata` | object | Additional file metadata |
+
+### Error Responses
+
+#### Invalid Parameters
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_PARAMETERS",
+    "message": "Invalid query parameters",
+    "details": {
+      "limit": "Must be between 1 and 100"
+    }
+  }
+}
+```
+
+#### Folder Not Found
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "FOLDER_NOT_FOUND",
+    "message": "Folder with ID 'folder_123' not found"
+  }
+}
+```
+
+### Rate Limiting
+
+This endpoint is subject to [rate limiting](/api-reference/authentication#rate-limiting) based on your plan.
+
+### SDK Examples
+
+<CodeGroup>
+
+```bash Curl
+curl -X GET "https://api.astracollab.app/v1/files" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+```javascript JavaScript SDK
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+const files = await client.files.list({
+  page: 1,
+  limit: 20,
+  folderId: 'folder_123'
+});
+```
+
+```typescript Next.js SDK
+import { useFiles } from '@astracollab/nextjs';
+
+function FileList() {
+  const { files, isLoading, error } = useFiles({
+    page: 1,
+    limit: 20,
+    folderId: 'folder_123'
+  });
+
+  if (isLoading) return <div>Loading...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <div>
+      {files.map(file => (
+        <div key={file.id}>{file.name}</div>
+      ))}
+    </div>
+  );
+}
+```
+
+</CodeGroup>

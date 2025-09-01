@@ -1,0 +1,234 @@
+---
+title: 'Create Folder'
+description: 'Create a new folder in your storage'
+---
+
+## Create Folder
+
+Create a new folder to organize your files. Folders can be nested to create a hierarchical structure.
+
+### Endpoint
+
+```
+POST /folders
+```
+
+### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Name of the folder |
+| `parentFolderId` | string | No | ID of the parent folder (null for root) |
+| `description` | string | No | Optional description of the folder |
+
+### Example Request
+
+```bash
+curl -X POST "https://api.astracollab.app/v1/folders" \
+  -H "Authorization: Bearer your-api-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Documents",
+    "parentFolderId": "folder_123",
+    "description": "Personal documents and files"
+  }'
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "folder": {
+      "id": "folder_4567890abcdef123",
+      "name": "My Documents",
+      "description": "Personal documents and files",
+      "parentFolderId": "folder_123",
+      "path": "/Work/My Documents",
+      "createdAt": "2024-01-15T10:30:00Z",
+      "updatedAt": "2024-01-15T10:30:00Z",
+      "fileCount": 0,
+      "totalSize": 0
+    }
+  }
+}
+```
+
+### Folder Object Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | string | Unique folder identifier |
+| `name` | string | Folder name |
+| `description` | string | Optional folder description |
+| `parentFolderId` | string | Parent folder ID (null if root) |
+| `path` | string | Full path to the folder |
+| `createdAt` | string | ISO 8601 timestamp of creation |
+| `updatedAt` | string | ISO 8601 timestamp of last update |
+| `fileCount` | number | Number of files in the folder |
+| `totalSize` | number | Total size of files in bytes |
+
+### Error Responses
+
+#### Invalid Folder Name
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_FOLDER_NAME",
+    "message": "Folder name cannot be empty or contain invalid characters",
+    "details": {
+      "name": "My Documents/",
+      "reason": "Contains invalid character '/'"
+    }
+  }
+}
+```
+
+#### Parent Folder Not Found
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "PARENT_FOLDER_NOT_FOUND",
+    "message": "Parent folder with ID 'folder_123' not found"
+  }
+}
+```
+
+#### Folder Already Exists
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "FOLDER_ALREADY_EXISTS",
+    "message": "Folder 'My Documents' already exists in this location",
+    "details": {
+      "existingFolderId": "folder_existing123"
+    }
+  }
+}
+```
+
+#### Storage Quota Exceeded
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "STORAGE_QUOTA_EXCEEDED",
+    "message": "Cannot create folder: storage quota exceeded",
+    "details": {
+      "used": "9.5 GB",
+      "limit": "10 GB"
+    }
+  }
+}
+```
+
+### Nested Folders
+
+You can create nested folder structures:
+
+```javascript
+// Create a folder hierarchy
+const createFolderStructure = async () => {
+  // Create root folder
+  const workFolder = await client.folders.create({
+    name: "Work",
+    description: "Work-related files"
+  });
+
+  // Create subfolder
+  const projectsFolder = await client.folders.create({
+    name: "Projects",
+    parentFolderId: workFolder.id,
+    description: "Project files"
+  });
+
+  // Create sub-subfolder
+  const currentProject = await client.folders.create({
+    name: "Current Project",
+    parentFolderId: projectsFolder.id,
+    description: "Current project files"
+  });
+};
+```
+
+### SDK Examples
+
+<CodeGroup>
+
+```bash Curl
+curl -X POST "https://api.astracollab.app/v1/folders" \
+  -H "Authorization: Bearer your-api-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Documents",
+    "description": "Personal documents"
+  }'
+```
+
+```javascript JavaScript SDK
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+const folder = await client.folders.create({
+  name: 'My Documents',
+  parentFolderId: 'folder_123',
+  description: 'Personal documents and files'
+});
+```
+
+```typescript Next.js SDK
+import { useCreateFolder } from '@astracollab/nextjs';
+
+function CreateFolderForm() {
+  const { createFolder, isCreating } = useCreateFolder();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    
+    await createFolder({
+      name: formData.get('name'),
+      parentFolderId: formData.get('parentFolderId') || null,
+      description: formData.get('description') || null
+    });
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input name="name" placeholder="Folder name" required />
+      <input name="parentFolderId" placeholder="Parent folder ID (optional)" />
+      <textarea name="description" placeholder="Description (optional)" />
+      <button type="submit" disabled={isCreating}>
+        {isCreating ? 'Creating...' : 'Create Folder'}
+      </button>
+    </form>
+  );
+}
+```
+
+</CodeGroup>
+
+### Folder Naming Rules
+
+- **Length**: 1-255 characters
+- **Characters**: Letters, numbers, spaces, hyphens, underscores
+- **Reserved**: Cannot use reserved names like "..", ".", "CON", "PRN"
+- **Case**: Names are case-sensitive
+- **Uniqueness**: Names must be unique within the same parent folder
+
+### Best Practices
+
+- Use descriptive folder names
+- Keep folder hierarchies shallow (max 10 levels)
+- Use consistent naming conventions
+- Add descriptions for better organization
+- Consider using prefixes for special folders (e.g., "_Archive", "Draft_")

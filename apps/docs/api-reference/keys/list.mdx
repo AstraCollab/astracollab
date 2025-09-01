@@ -1,0 +1,332 @@
+---
+title: 'List API Keys'
+description: 'Retrieve a list of your API keys'
+---
+
+## List API Keys
+
+Retrieve a paginated list of your API keys. This endpoint shows key metadata but not the full key values for security.
+
+### Endpoint
+
+```
+GET /keys
+```
+
+### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `page` | number | No | Page number (default: 1) |
+| `limit` | number | No | Number of keys per page (default: 20, max: 100) |
+| `status` | string | No | Filter by status ("active", "expired", "revoked") |
+| `search` | string | No | Search keys by name |
+| `sortBy` | string | No | Sort field ("name", "createdAt", "lastUsedAt") |
+| `sortOrder` | string | No | Sort order ("asc" or "desc", default: "desc") |
+
+### Example Request
+
+```bash
+curl -X GET "https://api.astracollab.app/v1/keys?page=1&limit=20" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "keys": [
+      {
+        "id": "key_1234567890abcdef",
+        "name": "Production App Key",
+        "prefix": "ak_1234",
+        "permissions": ["files:read", "files:write", "folders:read"],
+        "createdAt": "2024-01-15T10:30:00Z",
+        "expiresAt": "2024-12-31T23:59:59Z",
+        "lastUsedAt": "2024-01-20T15:45:00Z",
+        "isActive": true,
+        "usageCount": 1250
+      },
+      {
+        "id": "key_0987654321fedcba",
+        "name": "Development Testing",
+        "prefix": "ak_5678",
+        "permissions": ["files:read", "files:write"],
+        "createdAt": "2024-01-10T09:15:00Z",
+        "expiresAt": null,
+        "lastUsedAt": "2024-01-19T11:20:00Z",
+        "isActive": true,
+        "usageCount": 89
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 5,
+      "totalPages": 1,
+      "hasNext": false,
+      "hasPrev": false
+    }
+  }
+}
+```
+
+### API Key Object Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | string | Unique key identifier |
+| `name` | string | Descriptive name for the key |
+| `prefix` | string | First 7 characters of the key (for identification) |
+| `permissions` | array | Array of granted permissions |
+| `createdAt` | string | ISO 8601 timestamp of creation |
+| `expiresAt` | string | ISO 8601 expiration date (null if never expires) |
+| `lastUsedAt` | string | ISO 8601 timestamp of last usage (null if never used) |
+| `isActive` | boolean | Whether the key is currently active |
+| `usageCount` | number | Total number of API requests made with this key |
+
+### Filter by Status
+
+Filter keys by their current status:
+
+```bash
+# Active keys only
+curl -X GET "https://api.astracollab.app/v1/keys?status=active"
+
+# Expired keys
+curl -X GET "https://api.astracollab.app/v1/keys?status=expired"
+
+# Revoked keys
+curl -X GET "https://api.astracollab.app/v1/keys?status=revoked"
+```
+
+### Search Keys
+
+Search for keys by name:
+
+```bash
+curl -X GET "https://api.astracollab.app/v1/keys?search=production" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Sort Options
+
+Sort keys by different criteria:
+
+```bash
+# Sort by name (alphabetical)
+curl -X GET "https://api.astracollab.app/v1/keys?sortBy=name&sortOrder=asc"
+
+# Sort by creation date (newest first)
+curl -X GET "https://api.astracollab.app/v1/keys?sortBy=createdAt&sortOrder=desc"
+
+# Sort by last usage (most recently used first)
+curl -X GET "https://api.astracollab.app/v1/keys?sortBy=lastUsedAt&sortOrder=desc"
+```
+
+### Error Responses
+
+#### Invalid Parameters
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_PARAMETERS",
+    "message": "Invalid query parameters",
+    "details": {
+      "limit": "Must be between 1 and 100"
+    }
+  }
+}
+```
+
+#### Invalid Status Filter
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_STATUS",
+    "message": "Invalid status filter",
+    "details": {
+      "status": "invalid",
+      "validStatuses": ["active", "expired", "revoked"]
+    }
+  }
+}
+```
+
+### SDK Examples
+
+<CodeGroup>
+
+```bash Curl
+curl -X GET "https://api.astracollab.app/v1/keys" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+```javascript JavaScript SDK
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+// List all keys
+const keys = await client.keys.list();
+
+// List active keys only
+const activeKeys = await client.keys.list({
+  status: 'active',
+  page: 1,
+  limit: 20
+});
+
+// Search for specific keys
+const searchResults = await client.keys.list({
+  search: 'production',
+  sortBy: 'lastUsedAt',
+  sortOrder: 'desc'
+});
+```
+
+```typescript Next.js SDK
+import { useApiKeys } from '@astracollab/nextjs';
+
+function ApiKeyList() {
+  const { keys, isLoading, error } = useApiKeys({
+    page: 1,
+    limit: 20,
+    status: 'active',
+    sortBy: 'lastUsedAt',
+    sortOrder: 'desc'
+  });
+
+  if (isLoading) return <div>Loading API keys...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <div>
+      {keys.map(key => (
+        <div key={key.id}>
+          <h3>{key.name}</h3>
+          <p>Prefix: {key.prefix}</p>
+          <p>Permissions: {key.permissions.join(', ')}</p>
+          <p>Last used: {key.lastUsedAt || 'Never'}</p>
+          <p>Usage count: {key.usageCount}</p>
+          <p>Status: {key.isActive ? 'Active' : 'Inactive'}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+</CodeGroup>
+
+### Key Management Dashboard
+
+Build a comprehensive key management interface:
+
+```javascript
+const KeyManagementDashboard = () => {
+  const [activeKeys, setActiveKeys] = useState([]);
+  const [expiredKeys, setExpiredKeys] = useState([]);
+  const [revokedKeys, setRevokedKeys] = useState([]);
+
+  useEffect(() => {
+    const fetchKeys = async () => {
+      const [active, expired, revoked] = await Promise.all([
+        client.keys.list({ status: 'active' }),
+        client.keys.list({ status: 'expired' }),
+        client.keys.list({ status: 'revoked' })
+      ]);
+      
+      setActiveKeys(active.keys);
+      setExpiredKeys(expired.keys);
+      setRevokedKeys(revoked.keys);
+    };
+    
+    fetchKeys();
+  }, []);
+
+  return (
+    <div>
+      <h2>Active Keys ({activeKeys.length})</h2>
+      <KeyList keys={activeKeys} />
+      
+      <h2>Expired Keys ({expiredKeys.length})</h2>
+      <KeyList keys={expiredKeys} />
+      
+      <h2>Revoked Keys ({revokedKeys.length})</h2>
+      <KeyList keys={revokedKeys} />
+    </div>
+  );
+};
+```
+
+### Usage Analytics
+
+Track key usage patterns:
+
+```javascript
+const getKeyUsageAnalytics = (keys) => {
+  const totalUsage = keys.reduce((sum, key) => sum + key.usageCount, 0);
+  const mostUsedKey = keys.reduce((max, key) => 
+    key.usageCount > max.usageCount ? key : max
+  );
+  const recentlyUsedKeys = keys
+    .filter(key => key.lastUsedAt)
+    .sort((a, b) => new Date(b.lastUsedAt) - new Date(a.lastUsedAt))
+    .slice(0, 5);
+
+  return {
+    totalUsage,
+    mostUsedKey,
+    recentlyUsedKeys,
+    averageUsage: totalUsage / keys.length
+  };
+};
+```
+
+### Security Monitoring
+
+Monitor for suspicious activity:
+
+```javascript
+const checkKeySecurity = (keys) => {
+  const issues = [];
+  
+  keys.forEach(key => {
+    // Check for unused keys
+    if (!key.lastUsedAt && new Date(key.createdAt) < new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)) {
+      issues.push({
+        keyId: key.id,
+        name: key.name,
+        issue: 'Key created 30+ days ago but never used'
+      });
+    }
+    
+    // Check for keys with admin permissions
+    if (key.permissions.includes('admin')) {
+      issues.push({
+        keyId: key.id,
+        name: key.name,
+        issue: 'Key has admin permissions - consider reducing scope'
+      });
+    }
+    
+    // Check for expired keys still in use
+    if (key.expiresAt && new Date(key.expiresAt) < new Date() && key.lastUsedAt) {
+      issues.push({
+        keyId: key.id,
+        name: key.name,
+        issue: 'Expired key still being used'
+      });
+    }
+  });
+  
+  return issues;
+};
+```

@@ -1,0 +1,508 @@
+---
+title: "Billing & Usage"
+description: "Per-user and per-storage billing with usage tracking and overage management"
+---
+
+## Billing & Usage
+
+AstraCollab offers transparent, predictable pricing with per-user and per-storage billing. Monitor your usage, track costs, and manage your subscription with ease.
+
+## Pricing Plans
+
+### Free Plan
+- **Price**: $0/month
+- **Included Storage**: 2GB
+- **No API access**
+
+### Creator Plan
+- **Price**: $8/user/month
+- **Included Storage**: 100GB per user
+- **Additional Storage**: $0.05/GB/month
+- **Full API Access**
+
+
+## Usage Tracking
+
+### Storage Usage
+
+Monitor your storage consumption in real-time:
+
+```tsx
+import { useBilling } from '@astracollab/nextjs';
+
+function StorageUsage() {
+  const { billing, isLoading } = useBilling(
+    'https://api.astracollab.app',
+    process.env.ASTRACOLLAB_API_KEY
+  );
+
+  if (isLoading) return <div>Loading usage data...</div>;
+
+  const { subscription } = billing;
+  const usagePercentage = (subscription.currentUsageGB / subscription.includedStorageGB) * 100;
+
+  return (
+    <div>
+      <h3>Storage Usage</h3>
+      <div className="usage-bar">
+        <div 
+          className="usage-fill" 
+          style={{ width: `${Math.min(usagePercentage, 100)}%` }}
+        />
+      </div>
+      <p>{subscription.currentUsageGB}GB / {subscription.includedStorageGB}GB</p>
+      <p>{usagePercentage.toFixed(1)}% used</p>
+      
+      {subscription.overageGB > 0 && (
+        <p className="warning">
+          Overage: {subscription.overageGB}GB (${subscription.monthlyCost.overage})
+        </p>
+      )}
+    </div>
+  );
+}
+```
+
+### API Usage
+
+Track your API request consumption:
+
+```tsx
+function APIUsage() {
+  const { billing } = useBilling(
+    'https://api.astracollab.app',
+    process.env.ASTRACOLLAB_API_KEY
+  );
+
+  const { subscription } = billing;
+  const requestsUsed = subscription.apiRequestsUsed || 0;
+  const requestsLimit = subscription.apiRequestsLimit || 10000;
+  const requestsPercentage = (requestsUsed / requestsLimit) * 100;
+
+  return (
+    <div>
+      <h3>API Usage</h3>
+      <div className="usage-bar">
+        <div 
+          className="usage-fill" 
+          style={{ width: `${Math.min(requestsPercentage, 100)}%` }}
+        />
+      </div>
+      <p>{requestsUsed.toLocaleString()} / {requestsLimit.toLocaleString()} requests</p>
+      <p>{requestsPercentage.toFixed(1)}% used</p>
+    </div>
+  );
+}
+```
+
+## Billing Information
+
+### Current Subscription
+
+Get detailed billing information:
+
+```tsx
+function BillingInfo() {
+  const { billing } = useBilling(
+    'https://api.astracollab.app',
+    process.env.ASTRACOLLAB_API_KEY
+  );
+
+  const { subscription } = billing;
+
+  return (
+    <div>
+      <h3>Billing Information</h3>
+      <div>
+        <p><strong>Plan:</strong> {subscription.plan}</p>
+        <p><strong>Status:</strong> {subscription.status}</p>
+        <p><strong>Users:</strong> {subscription.userCount}</p>
+        <p><strong>Base Cost:</strong> ${subscription.monthlyCost.base}</p>
+        <p><strong>Overage Cost:</strong> ${subscription.monthlyCost.overage}</p>
+        <p><strong>Total Cost:</strong> ${subscription.monthlyCost.total}</p>
+      </div>
+    </div>
+  );
+}
+```
+
+### Usage History
+
+View historical usage data:
+
+```tsx
+function UsageHistory() {
+  const { billing } = useBilling(
+    'https://api.astracollab.app',
+    process.env.ASTRACOLLAB_API_KEY
+  );
+
+  const { usageHistory } = billing;
+
+  return (
+    <div>
+      <h3>Usage History</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Period</th>
+            <th>Files</th>
+            <th>Storage (GB)</th>
+            <th>API Requests</th>
+          </tr>
+        </thead>
+        <tbody>
+          {usageHistory.map((period) => (
+            <tr key={period.period}>
+              <td>{period.period}</td>
+              <td>{period.filesCount}</td>
+              <td>{period.storageGB}</td>
+              <td>{period.apiRequests}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+```
+
+## Cost Calculation
+
+### Storage Costs
+
+Understand how storage costs are calculated:
+
+```tsx
+function StorageCostBreakdown() {
+  const { billing } = useBilling(
+    'https://api.astracollab.app',
+    process.env.ASTRACOLLAB_API_KEY
+  );
+
+  const { subscription } = billing;
+  const includedStorage = subscription.includedStorageGB;
+  const currentUsage = subscription.currentUsageGB;
+  const overage = Math.max(0, currentUsage - includedStorage);
+  
+  const overageRate = {
+    'creator': 0.03,
+    'studio': 0.025,
+    'production': 0.02
+  }[subscription.plan];
+
+  const overageCost = overage * overageRate;
+
+  return (
+    <div>
+      <h3>Storage Cost Breakdown</h3>
+      <div>
+        <p>Included Storage: {includedStorage}GB (included in plan)</p>
+        <p>Current Usage: {currentUsage}GB</p>
+        <p>Overage: {overage}GB</p>
+        <p>Overage Rate: ${overageRate}/GB/month</p>
+        <p>Overage Cost: ${overageCost.toFixed(2)}</p>
+      </div>
+    </div>
+  );
+}
+```
+
+### User Costs
+
+Calculate per-user costs:
+
+```tsx
+function UserCostBreakdown() {
+  const { billing } = useBilling(
+    'https://api.astracollab.app',
+    process.env.ASTRACOLLAB_API_KEY
+  );
+
+  const { subscription } = billing;
+  const userCount = subscription.userCount;
+  
+  const planPricing = {
+    'creator': 12,
+    'studio': 25,
+    'production': 45
+  };
+
+  const userCost = planPricing[subscription.plan];
+  const totalUserCost = userCount * userCost;
+
+  return (
+    <div>
+      <h3>User Cost Breakdown</h3>
+      <div>
+        <p>Plan: {subscription.plan}</p>
+        <p>Users: {userCount}</p>
+        <p>Cost per User: ${userCost}/month</p>
+        <p>Total User Cost: ${totalUserCost}/month</p>
+      </div>
+    </div>
+  );
+}
+```
+
+## Usage Alerts
+
+### Storage Alerts
+
+Set up alerts for storage usage:
+
+```tsx
+function StorageAlerts() {
+  const [alerts, setAlerts] = useState([]);
+  const { billing } = useBilling(
+    'https://api.astracollab.app',
+    process.env.ASTRACOLLAB_API_KEY
+  );
+
+  const { subscription } = billing;
+  const usagePercentage = (subscription.currentUsageGB / subscription.includedStorageGB) * 100;
+
+  useEffect(() => {
+    const newAlerts = [];
+    
+    if (usagePercentage >= 90) {
+      newAlerts.push({
+        type: 'warning',
+        message: 'Storage usage is at 90%. Consider upgrading your plan.'
+      });
+    }
+    
+    if (usagePercentage >= 100) {
+      newAlerts.push({
+        type: 'error',
+        message: 'Storage limit exceeded. You will be charged for overage.'
+      });
+    }
+    
+    setAlerts(newAlerts);
+  }, [usagePercentage]);
+
+  return (
+    <div>
+      {alerts.map((alert, index) => (
+        <div key={index} className={`alert alert-${alert.type}`}>
+          {alert.message}
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+### API Rate Limit Alerts
+
+Monitor API usage:
+
+```tsx
+function APIRateLimitAlerts() {
+  const { billing } = useBilling(
+    'https://api.astracollab.app',
+    process.env.ASTRACOLLAB_API_KEY
+  );
+
+  const { subscription } = billing;
+  const requestsUsed = subscription.apiRequestsUsed || 0;
+  const requestsLimit = subscription.apiRequestsLimit || 10000;
+  const requestsPercentage = (requestsUsed / requestsLimit) * 100;
+
+  return (
+    <div>
+      {requestsPercentage >= 80 && (
+        <div className="alert alert-warning">
+          API usage is at {requestsPercentage.toFixed(1)}%. 
+          Rate limiting may occur soon.
+        </div>
+      )}
+      
+      {requestsPercentage >= 100 && (
+        <div className="alert alert-error">
+          API rate limit exceeded. Requests will be throttled.
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+## Plan Management
+
+### Upgrade Plan
+
+Handle plan upgrades:
+
+```tsx
+function PlanUpgrade() {
+  const { billing } = useBilling(
+    'https://api.astracollab.app',
+    process.env.ASTRACOLLAB_API_KEY
+  );
+
+  const handleUpgrade = async (newPlan) => {
+    try {
+      const response = await fetch('/api/billing/upgrade', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.ASTRACOLLAB_API_KEY}`
+        },
+        body: JSON.stringify({ plan: newPlan })
+      });
+
+      if (response.ok) {
+        console.log('Plan upgraded successfully');
+        // Refresh billing data
+      }
+    } catch (error) {
+      console.error('Failed to upgrade plan:', error);
+    }
+  };
+
+  return (
+    <div>
+      <h3>Upgrade Plan</h3>
+      <div>
+        <button onClick={() => handleUpgrade('studio')}>
+          Upgrade to Studio
+        </button>
+        <button onClick={() => handleUpgrade('production')}>
+          Upgrade to Production
+        </button>
+      </div>
+    </div>
+  );
+}
+```
+
+### Add Users
+
+Manage user count:
+
+```tsx
+function UserManagement() {
+  const [userCount, setUserCount] = useState(1);
+
+  const handleAddUsers = async (count) => {
+    try {
+      const response = await fetch('/api/billing/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.ASTRACOLLAB_API_KEY}`
+        },
+        body: JSON.stringify({ userCount: count })
+      });
+
+      if (response.ok) {
+        console.log('User count updated successfully');
+        setUserCount(count);
+      }
+    } catch (error) {
+      console.error('Failed to update user count:', error);
+    }
+  };
+
+  return (
+    <div>
+      <h3>User Management</h3>
+      <div>
+        <label>Number of Users:</label>
+        <input
+          type="number"
+          min="1"
+          value={userCount}
+          onChange={(e) => setUserCount(parseInt(e.target.value))}
+        />
+        <button onClick={() => handleAddUsers(userCount)}>
+          Update User Count
+        </button>
+      </div>
+    </div>
+  );
+}
+```
+
+## Invoice Management
+
+### View Invoices
+
+Access billing history:
+
+```tsx
+function InvoiceHistory() {
+  const [invoices, setInvoices] = useState([]);
+
+  useEffect(() => {
+    const fetchInvoices = async () => {
+      try {
+        const response = await fetch('/api/billing/invoices', {
+          headers: {
+            'Authorization': `Bearer ${process.env.ASTRACOLLAB_API_KEY}`
+          }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setInvoices(data.invoices);
+        }
+      } catch (error) {
+        console.error('Failed to fetch invoices:', error);
+      }
+    };
+
+    fetchInvoices();
+  }, []);
+
+  return (
+    <div>
+      <h3>Invoice History</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Amount</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {invoices.map((invoice) => (
+            <tr key={invoice.id}>
+              <td>{new Date(invoice.date).toLocaleDateString()}</td>
+              <td>${invoice.amount}</td>
+              <td>{invoice.status}</td>
+              <td>
+                <a href={invoice.downloadUrl} target="_blank" rel="noopener">
+                  Download
+                </a>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+```
+
+## Best Practices
+
+1. **Monitor Usage**: Regularly check storage and API usage
+2. **Set Alerts**: Configure alerts for usage thresholds
+3. **Plan Ahead**: Upgrade before hitting limits
+4. **Optimize Storage**: Clean up unused files regularly
+5. **Review Costs**: Monitor monthly billing statements
+6. **User Management**: Keep user count accurate
+
+## Support
+
+Need help with billing?
+
+- **Billing API**: Check the [billing endpoints](/api-reference/billing/overview)
+- **Usage API**: Monitor usage with [usage endpoints](/api-reference/billing/usage)
+- **Support**: Email us at billing@astracollab.app
+- **Documentation**: Review our [billing guide](/features/billing)

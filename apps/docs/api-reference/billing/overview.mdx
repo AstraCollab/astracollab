@@ -1,0 +1,334 @@
+---
+title: 'Billing Overview'
+description: 'Get an overview of your billing information and current plan'
+---
+
+## Billing Overview
+
+Retrieve an overview of your billing information, including current plan, usage, and upcoming charges.
+
+### Endpoint
+
+```
+GET /billing
+```
+
+### Example Request
+
+```bash
+curl -X GET "https://api.astracollab.app/v1/billing" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "plan": {
+      "id": "plan_studio",
+      "name": "Studio",
+      "price": 29.99,
+      "currency": "USD",
+      "billingCycle": "monthly",
+      "features": {
+        "storage": {
+          "limit": 107374182400,
+          "used": 53687091200,
+          "unit": "bytes"
+        },
+        "requests": {
+          "limit": 50000,
+          "used": 12500,
+          "unit": "requests_per_hour"
+        },
+        "fileSize": {
+          "limit": 5368709120,
+          "unit": "bytes"
+        }
+      }
+    },
+    "usage": {
+      "currentPeriod": {
+        "start": "2024-01-01T00:00:00Z",
+        "end": "2024-01-31T23:59:59Z",
+        "storage": {
+          "used": 53687091200,
+          "percentage": 50.0
+        },
+        "requests": {
+          "used": 12500,
+          "percentage": 25.0
+        },
+        "files": {
+          "count": 1500,
+          "limit": 10000
+        }
+      },
+      "projected": {
+        "storage": 64424509440,
+        "requests": 15000,
+        "files": 1800
+      }
+    },
+    "billing": {
+      "nextBillingDate": "2024-02-01T00:00:00Z",
+      "currentBalance": 0.00,
+      "currency": "USD",
+      "paymentMethod": {
+        "type": "card",
+        "last4": "4242",
+        "brand": "visa",
+        "expiryMonth": 12,
+        "expiryYear": 2025
+      }
+    },
+    "limits": {
+      "storage": {
+        "limit": 107374182400,
+        "used": 53687091200,
+        "remaining": 53687091200,
+        "unit": "bytes"
+      },
+      "requests": {
+        "limit": 50000,
+        "used": 12500,
+        "remaining": 37500,
+        "unit": "requests_per_hour"
+      },
+      "fileSize": {
+        "limit": 5368709120,
+        "unit": "bytes"
+      },
+      "apiKeys": {
+        "limit": 10,
+        "used": 3,
+        "remaining": 7
+      }
+    }
+  }
+}
+```
+
+### Response Object Properties
+
+#### Plan Information
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | string | Plan identifier |
+| `name` | string | Plan name |
+| `price` | number | Monthly price |
+| `currency` | string | Currency code |
+| `billingCycle` | string | Billing frequency |
+| `features` | object | Plan features and limits |
+
+#### Usage Information
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `currentPeriod` | object | Current billing period usage |
+| `projected` | object | Projected usage for current period |
+
+#### Billing Information
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `nextBillingDate` | string | Next billing date |
+| `currentBalance` | number | Current account balance |
+| `currency` | string | Currency code |
+| `paymentMethod` | object | Payment method details |
+
+#### Limits Information
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `storage` | object | Storage limits and usage |
+| `requests` | object | API request limits |
+| `fileSize` | object | Maximum file size limit |
+| `apiKeys` | object | API key limits |
+
+### Available Plans
+
+| Plan | Price | Storage | Requests/Hour | Max File Size | API Keys |
+|------|-------|---------|---------------|---------------|----------|
+| Free | $0 | 1 GB | 1,000 | 100 MB | 2 |
+| Creator | $9.99 | 10 GB | 10,000 | 1 GB | 5 |
+| Studio | $29.99 | 100 GB | 50,000 | 5 GB | 10 |
+| Production | $99.99 | 1 TB | 100,000 | 10 GB | 25 |
+
+### Error Responses
+
+#### Insufficient Permissions
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INSUFFICIENT_PERMISSIONS",
+    "message": "You don't have permission to view billing information"
+  }
+}
+```
+
+#### Billing Not Available
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "BILLING_NOT_AVAILABLE",
+    "message": "Billing information is not available for this account"
+  }
+}
+```
+
+### SDK Examples
+
+<CodeGroup>
+
+```bash Curl
+curl -X GET "https://api.astracollab.app/v1/billing" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+```javascript JavaScript SDK
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+const billing = await client.billing.get();
+
+console.log('Current plan:', billing.plan.name);
+console.log('Storage used:', billing.usage.currentPeriod.storage.used);
+console.log('Next billing:', billing.billing.nextBillingDate);
+```
+
+```typescript Next.js SDK
+import { useBilling } from '@astracollab/nextjs';
+
+function BillingDashboard() {
+  const { billing, isLoading, error } = useBilling();
+
+  if (isLoading) return <div>Loading billing information...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  const formatBytes = (bytes) => {
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    if (bytes === 0) return '0 Bytes';
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
+  };
+
+  return (
+    <div>
+      <h2>Billing Overview</h2>
+      <div>
+        <h3>Current Plan: {billing.plan.name}</h3>
+        <p>Price: ${billing.plan.price}/{billing.plan.billingCycle}</p>
+      </div>
+      
+      <div>
+        <h3>Usage</h3>
+        <p>Storage: {formatBytes(billing.usage.currentPeriod.storage.used)} / {formatBytes(billing.limits.storage.limit)}</p>
+        <p>Requests: {billing.usage.currentPeriod.requests.used} / {billing.limits.requests.limit} per hour</p>
+        <p>Files: {billing.usage.currentPeriod.files.count} / {billing.usage.currentPeriod.files.limit}</p>
+      </div>
+      
+      <div>
+        <h3>Next Billing</h3>
+        <p>Date: {new Date(billing.billing.nextBillingDate).toLocaleDateString()}</p>
+        <p>Balance: ${billing.billing.currentBalance}</p>
+      </div>
+    </div>
+  );
+}
+```
+
+</CodeGroup>
+
+### Usage Monitoring
+
+Monitor usage to avoid hitting limits:
+
+```javascript
+const checkUsageAlerts = (billing) => {
+  const alerts = [];
+  
+  // Storage usage alerts
+  const storagePercentage = billing.usage.currentPeriod.storage.percentage;
+  if (storagePercentage > 90) {
+    alerts.push({
+      type: 'warning',
+      message: `Storage usage is at ${storagePercentage}%`
+    });
+  } else if (storagePercentage > 80) {
+    alerts.push({
+      type: 'info',
+      message: `Storage usage is at ${storagePercentage}%`
+    });
+  }
+  
+  // Request usage alerts
+  const requestPercentage = billing.usage.currentPeriod.requests.percentage;
+  if (requestPercentage > 90) {
+    alerts.push({
+      type: 'warning',
+      message: `Request usage is at ${requestPercentage}%`
+    });
+  }
+  
+  return alerts;
+};
+```
+
+### Plan Comparison
+
+Compare current plan with others:
+
+```javascript
+const comparePlans = (currentPlan) => {
+  const plans = [
+    { id: 'free', name: 'Free', price: 0, storage: 1073741824 },
+    { id: 'creator', name: 'Creator', price: 9.99, storage: 10737418240 },
+    { id: 'studio', name: 'Studio', price: 29.99, storage: 107374182400 },
+    { id: 'production', name: 'Production', price: 99.99, storage: 1099511627776 }
+  ];
+  
+  return plans.map(plan => ({
+    ...plan,
+    isCurrent: plan.id === currentPlan.id,
+    upgradeCost: plan.price - currentPlan.price
+  }));
+};
+```
+
+### Cost Optimization
+
+Analyze usage patterns for cost optimization:
+
+```javascript
+const analyzeCostOptimization = (billing) => {
+  const recommendations = [];
+  
+  // Check if current plan is overkill
+  const storageUtilization = billing.usage.currentPeriod.storage.percentage;
+  if (storageUtilization < 20) {
+    recommendations.push({
+      type: 'downgrade',
+      message: 'Consider downgrading to a lower plan - you\'re only using 20% of storage'
+    });
+  }
+  
+  // Check if approaching limits
+  if (storageUtilization > 80) {
+    recommendations.push({
+      type: 'upgrade',
+      message: 'Consider upgrading to avoid hitting storage limits'
+    });
+  }
+  
+  return recommendations;
+};
+```

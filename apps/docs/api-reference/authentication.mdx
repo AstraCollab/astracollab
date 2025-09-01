@@ -1,0 +1,120 @@
+---
+title: 'Authentication'
+description: 'Learn how to authenticate with the AstraCollab API'
+---
+
+## API Key Authentication
+
+All AstraCollab API endpoints require authentication using API keys. You can manage your API keys through the dashboard or via the API.
+
+## Getting Your API Key
+
+1. **Dashboard**: Navigate to your organization settings in the AstraCollab dashboard
+2. **API Keys Section**: Go to the API Keys tab
+3. **Create Key**: Click "Create API Key" and give it a descriptive name
+4. **Copy Key**: Copy the generated API key (it starts with `ak_`)
+
+<Warning>
+  API keys are only shown once when created. Make sure to copy and store them securely.
+</Warning>
+
+## Using Your API Key
+
+Include your API key in the `Authorization` header of all API requests:
+
+```bash
+Authorization: Bearer your-api-key-here
+```
+
+### Example Request
+
+```bash
+curl -X GET "https://api.astracollab.app/v1/files" \
+  -H "Authorization: Bearer ak_1234567890abcdef"
+```
+
+## API Key Permissions
+
+API keys inherit the permissions of the organization they belong to:
+
+- **Read Access**: View files, folders, and metadata
+- **Write Access**: Upload, update, and delete files
+- **Admin Access**: Manage API keys, billing, and organization settings
+
+## Security Best Practices
+
+<Note>
+  Keep your API keys secure and never expose them in client-side code.
+</Note>
+
+### Do's
+- Store API keys in environment variables
+- Use different keys for different environments (dev, staging, prod)
+- Rotate keys regularly
+- Use the minimum required permissions
+
+### Don'ts
+- Never commit API keys to version control
+- Don't share keys publicly
+- Avoid using the same key across multiple applications
+- Don't hardcode keys in client-side applications
+
+## Rate Limiting
+
+API keys are subject to rate limiting based on your plan:
+
+- **Free Plan**: 1,000 requests per hour
+- **Creator Plan**: 10,000 requests per hour
+- **Studio Plan**: 50,000 requests per hour
+- **Production Plan**: 100,000 requests per hour
+
+Rate limit headers are included in all responses:
+
+```
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 999
+X-RateLimit-Reset: 1640995200
+```
+
+## Error Responses
+
+### Invalid API Key
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_API_KEY",
+    "message": "Invalid or expired API key",
+    "details": {
+      "keyId": "ak_1234567890abcdef"
+    }
+  }
+}
+```
+
+### Rate Limited
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "RATE_LIMITED",
+    "message": "Rate limit exceeded",
+    "details": {
+      "limit": 1000,
+      "reset": 1640995200
+    }
+  }
+}
+```
+
+## Managing API Keys
+
+You can manage your API keys through the API:
+
+- `GET /keys` - List all API keys
+- `POST /keys` - Create a new API key
+- `DELETE /keys/{keyId}` - Revoke an API key
+
+See the [API Keys](/api-reference/keys/create) section for detailed endpoint documentation.

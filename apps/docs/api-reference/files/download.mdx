@@ -1,0 +1,218 @@
+---
+title: 'Download File'
+description: 'Download a file from your storage'
+---
+
+## Download File
+
+Download a file from your storage. You can get the direct download URL or download the file directly.
+
+### Endpoint
+
+```
+GET /files/{fileId}
+```
+
+### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `fileId` | string | Yes | The ID of the file to download |
+
+### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `download` | boolean | No | Force download instead of redirect (default: false) |
+| `expires` | number | No | URL expiration time in seconds (max: 3600) |
+
+### Example Request
+
+```bash
+curl -X GET "https://api.astracollab.app/v1/files/file_1234567890abcdef" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "file": {
+      "id": "file_1234567890abcdef",
+      "name": "example.jpg",
+      "size": 1024000,
+      "type": "image/jpeg",
+      "url": "https://storage.astracollab.app/files/file_1234567890abcdef",
+      "downloadUrl": "https://storage.astracollab.app/files/file_1234567890abcdef?download=true&expires=3600",
+      "folderId": "folder_123",
+      "uploadedAt": "2024-01-15T10:30:00Z",
+      "updatedAt": "2024-01-15T10:30:00Z",
+      "metadata": {
+        "width": 1920,
+        "height": 1080
+      }
+    }
+  }
+}
+```
+
+### Direct Download
+
+To download the file directly (instead of getting metadata):
+
+```bash
+curl -X GET "https://api.astracollab.app/v1/files/file_1234567890abcdef?download=true" \
+  -H "Authorization: Bearer your-api-key-here" \
+  --output example.jpg
+```
+
+### Presigned URLs
+
+For secure, time-limited access to files:
+
+```bash
+curl -X GET "https://api.astracollab.app/v1/files/file_1234567890abcdef?expires=3600" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+This returns a presigned URL that's valid for 1 hour and can be shared without authentication.
+
+### Error Responses
+
+#### File Not Found
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "FILE_NOT_FOUND",
+    "message": "File with ID 'file_1234567890abcdef' not found"
+  }
+}
+```
+
+#### Access Denied
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "ACCESS_DENIED",
+    "message": "You don't have permission to access this file"
+  }
+}
+```
+
+#### URL Expired
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "URL_EXPIRED",
+    "message": "Download URL has expired"
+  }
+}
+```
+
+### SDK Examples
+
+<CodeGroup>
+
+```bash Curl
+curl -X GET "https://api.astracollab.app/v1/files/file_1234567890abcdef" \
+  -H "Authorization: Bearer your-api-key-here"
+```
+
+```javascript JavaScript SDK
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+// Get file metadata
+const file = await client.files.get('file_1234567890abcdef');
+
+// Download file
+const blob = await client.files.download('file_1234567890abcdef');
+
+// Get presigned URL
+const url = await client.files.getDownloadUrl('file_1234567890abcdef', {
+  expires: 3600
+});
+```
+
+```typescript Next.js SDK
+import { useFile } from '@astracollab/nextjs';
+
+function FileViewer({ fileId }) {
+  const { file, isLoading, error } = useFile(fileId);
+
+  const handleDownload = async () => {
+    const url = await file.downloadUrl();
+    window.open(url, '_blank');
+  };
+
+  if (isLoading) return <div>Loading...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <div>
+      <h3>{file.name}</h3>
+      <p>Size: {file.size} bytes</p>
+      <button onClick={handleDownload}>Download</button>
+    </div>
+  );
+}
+```
+
+</CodeGroup>
+
+### Browser Download
+
+For browser-based downloads, you can use the download URL directly:
+
+```javascript
+const downloadFile = async (fileId) => {
+  const response = await fetch(`https://api.astracollab.app/v1/files/${fileId}?download=true`, {
+    headers: {
+      'Authorization': 'Bearer your-api-key-here'
+    }
+  });
+  
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'filename.jpg';
+  a.click();
+  window.URL.revokeObjectURL(url);
+};
+```
+
+### Streaming Downloads
+
+For large files, you can stream the download:
+
+```javascript
+const streamDownload = async (fileId) => {
+  const response = await fetch(`https://api.astracollab.app/v1/files/${fileId}`, {
+    headers: {
+      'Authorization': 'Bearer your-api-key-here'
+    }
+  });
+
+  const reader = response.body.getReader();
+  const chunks = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+
+  const blob = new Blob(chunks);
+  return blob;
+};
+```

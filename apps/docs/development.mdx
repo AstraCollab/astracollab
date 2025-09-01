@@ -1,0 +1,390 @@
+---
+title: "Development"
+description: "Set up your local development environment for AstraCollab"
+---
+
+## Development Setup
+
+Get your local development environment up and running for contributing to AstraCollab.
+
+## Prerequisites
+
+Before you begin, make sure you have the following installed:
+
+- **Node.js** 18+ ([Download](https://nodejs.org/))
+- **pnpm** ([Install](https://pnpm.io/installation))
+- **Git** ([Download](https://git-scm.com/))
+- **PostgreSQL** 14+ ([Download](https://www.postgresql.org/download/))
+
+## Getting Started
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/astracollab/astracollab.git
+cd astracollab
+```
+
+### 2. Install Dependencies
+
+```bash
+# Install root dependencies
+pnpm install
+
+# Install workspace dependencies
+pnpm install --recursive
+```
+
+### 3. Environment Setup
+
+Create a `.env.local` file in the `client` directory:
+
+```env
+# Database
+DATABASE_URL="postgresql://username:password@localhost:5432/astracollab"
+
+# Clerk Authentication
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+CLERK_SECRET_KEY=sk_test_...
+
+# AWS S3
+AWS_ACCESS_KEY_ID=your-access-key
+AWS_SECRET_ACCESS_KEY=your-secret-key
+AWS_REGION=us-east-1
+S3_BUCKET_NAME=your-bucket-name
+
+# Unkey API Management
+UNKEY_API_ID=your-unkey-api-id
+UNKEY_ROOT_KEY=your-unkey-root-key
+
+# Polar Payments
+POLAR_WEBHOOK_SECRET=your-polar-webhook-secret
+POLAR_API_KEY=your-polar-api-key
+
+# Application
+NEXTAUTH_SECRET=your-nextauth-secret
+NEXTAUTH_URL=http://localhost:3000
+```
+
+### 4. Database Setup
+
+```bash
+# Navigate to client directory
+cd client
+
+# Run database migrations
+npx prisma migrate dev
+
+# Generate Prisma client
+npx prisma generate
+
+# Seed the database (optional)
+npx prisma db seed
+```
+
+### 5. Start Development Servers
+
+```bash
+# Start the main application
+pnpm dev
+
+# Start the docs site (in another terminal)
+cd astracollab-packages/apps/docs
+pnpm dev
+```
+
+The application will be available at:
+- **Main App**: http://localhost:3000
+- **Documentation**: http://localhost:3001
+
+## Project Structure
+
+```
+astracollab/
+├── client/                          # Main Next.js application
+│   ├── app/                         # App Router pages
+│   ├── components/                  # Shared components
+│   ├── lib/                         # Utility functions
+│   ├── prisma/                      # Database schema
+│   └── trigger/                     # Background jobs
+├── astracollab-packages/            # Monorepo packages
+│   ├── apps/
+│   │   ├── docs/                    # Documentation site
+│   │   └── web/                     # Web application
+│   └── packages/
+│       ├── nextjs/                  # Next.js SDK
+│       ├── js/                      # JavaScript SDK
+│       └── ui/                      # Shared UI components
+└── packages/                        # Legacy packages
+```
+
+## Development Workflow
+
+### Running Tests
+
+```bash
+# Run all tests
+pnpm test
+
+# Run tests in watch mode
+pnpm test:watch
+
+# Run specific test suite
+pnpm test:unit
+pnpm test:integration
+pnpm test:e2e
+```
+
+### Code Quality
+
+```bash
+# Run linting
+pnpm lint
+
+# Fix linting issues
+pnpm lint:fix
+
+# Type checking
+pnpm type-check
+
+# Format code
+pnpm format
+```
+
+### Database Management
+
+```bash
+# Create a new migration
+npx prisma migrate dev --name migration-name
+
+# Reset database
+npx prisma migrate reset
+
+# Open Prisma Studio
+npx prisma studio
+
+# Push schema changes (development only)
+npx prisma db push
+```
+
+## Contributing
+
+### 1. Create a Feature Branch
+
+```bash
+git checkout -b feature/your-feature-name
+```
+
+### 2. Make Your Changes
+
+Follow the coding standards:
+- Use TypeScript for all new code
+- Follow the existing code style
+- Add tests for new functionality
+- Update documentation as needed
+
+### 3. Commit Your Changes
+
+```bash
+git add .
+git commit -m "feat: add new feature description"
+```
+
+### 4. Push and Create PR
+
+```bash
+git push origin feature/your-feature-name
+```
+
+Then create a pull request on GitHub.
+
+## API Development
+
+### Local API Testing
+
+The API is available at `http://localhost:3000/api/v1/`:
+
+```bash
+# Test file listing
+curl -H "Authorization: Bearer your-api-key" \
+  http://localhost:3000/api/v1/files
+
+# Test file upload
+curl -X POST \
+  -H "Authorization: Bearer your-api-key" \
+  -F "file=@example.jpg" \
+  http://localhost:3000/api/v1/files/upload
+```
+
+### API Documentation
+
+Generate OpenAPI documentation:
+
+```bash
+# The API docs are automatically generated from the route handlers
+# Visit: http://localhost:3000/api/docs
+```
+
+## SDK Development
+
+### Building SDKs
+
+```bash
+# Build Next.js SDK
+cd astracollab-packages/packages/nextjs
+pnpm build
+
+# Build JavaScript SDK
+cd astracollab-packages/packages/js
+pnpm build
+```
+
+### Testing SDKs
+
+```bash
+# Test Next.js SDK
+cd astracollab-packages/packages/nextjs
+pnpm test
+
+# Test JavaScript SDK
+cd astracollab-packages/packages/js
+pnpm test
+```
+
+### Publishing SDKs
+
+```bash
+# Publish to npm (requires authentication)
+cd astracollab-packages/packages/nextjs
+pnpm publish
+
+cd astracollab-packages/packages/js
+pnpm publish
+```
+
+## Environment Variables
+
+### Required for Development
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@localhost:5432/db` |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk public key | `pk_test_...` |
+| `CLERK_SECRET_KEY` | Clerk secret key | `sk_test_...` |
+| `AWS_ACCESS_KEY_ID` | AWS access key | `AKIA...` |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key | `...` |
+| `AWS_REGION` | AWS region | `us-east-1` |
+| `S3_BUCKET_NAME` | S3 bucket name | `my-bucket` |
+
+### Optional
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `NODE_ENV` | Environment | `development` |
+| `PORT` | Server port | `3000` |
+| `LOG_LEVEL` | Logging level | `info` |
+
+## Debugging
+
+### Database Debugging
+
+```bash
+# Open Prisma Studio
+npx prisma studio
+
+# View database logs
+npx prisma migrate status
+
+# Reset database
+npx prisma migrate reset
+```
+
+### API Debugging
+
+```bash
+# Enable debug logging
+DEBUG=* npm run dev
+
+# Test specific endpoint
+curl -v http://localhost:3000/api/v1/files
+```
+
+### Frontend Debugging
+
+```bash
+# Enable React DevTools
+# Install browser extension and enable it
+
+# Debug with console
+console.log('Debug info:', data);
+```
+
+## Common Issues
+
+### Database Connection
+
+If you're having database connection issues:
+
+```bash
+# Check if PostgreSQL is running
+brew services list | grep postgresql
+
+# Start PostgreSQL
+brew services start postgresql
+
+# Create database
+createdb astracollab
+```
+
+### Port Conflicts
+
+If port 3000 is already in use:
+
+```bash
+# Find process using port
+lsof -i :3000
+
+# Kill process
+kill -9 <PID>
+
+# Or use different port
+PORT=3001 npm run dev
+```
+
+### Dependencies
+
+If you're having dependency issues:
+
+```bash
+# Clear cache
+pnpm store prune
+
+# Reinstall dependencies
+rm -rf node_modules
+pnpm install
+```
+
+## Deployment
+
+### Staging Deployment
+
+```bash
+# Deploy to staging
+pnpm deploy:staging
+```
+
+### Production Deployment
+
+```bash
+# Deploy to production
+pnpm deploy:production
+```
+
+## Support
+
+Need help with development?
+
+- **Documentation**: Check our [API docs](/api-reference/introduction)
+- **Issues**: Report bugs on [GitHub](https://github.com/astracollab/astracollab/issues)
+- **Discussions**: Join our [Discord](https://discord.gg/astracollab)
+- **Email**: Contact us at dev@astracollab.app

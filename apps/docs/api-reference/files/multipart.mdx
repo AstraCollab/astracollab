@@ -1,0 +1,315 @@
+---
+title: 'Multipart Upload'
+description: 'Upload large files using multipart upload for better reliability'
+---
+
+## Multipart Upload
+
+Upload large files using multipart upload for better reliability, resumability, and performance. This is recommended for files larger than 100MB.
+
+### Overview
+
+Multipart upload breaks large files into smaller chunks that are uploaded separately and then combined. This approach provides:
+
+- **Resumability**: Resume interrupted uploads
+- **Parallel uploads**: Upload multiple parts simultaneously
+- **Better reliability**: Retry individual parts on failure
+- **Progress tracking**: Monitor upload progress per part
+
+### Process
+
+1. **Initialize**: Start multipart upload and get upload ID
+2. **Upload Parts**: Upload file parts in parallel
+3. **Complete**: Combine all parts into final file
+
+### Initialize Multipart Upload
+
+#### Endpoint
+
+```
+POST /files/multipart-upload-start
+```
+
+#### Request Body
+
+```json
+{
+  "fileName": "large-video.mp4",
+  "fileSize": 1073741824,
+  "folderId": "folder_123",
+  "metadata": {
+    "description": "Large video file",
+    "tags": ["video", "large"]
+  }
+}
+```
+
+#### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "uploadId": "upload_1234567890abcdef",
+    "fileId": "file_1234567890abcdef",
+    "parts": [
+      {
+        "partNumber": 1,
+        "uploadUrl": "https://storage.astracollab.app/upload/part1?token=...",
+        "size": 52428800
+      },
+      {
+        "partNumber": 2,
+        "uploadUrl": "https://storage.astracollab.app/upload/part2?token=...",
+        "size": 52428800
+      }
+    ],
+    "totalParts": 20,
+    "partSize": 52428800
+  }
+}
+```
+
+### Upload Part
+
+#### Endpoint
+
+```
+PUT /files/multipart-upload-part
+```
+
+#### Request Body
+
+Send the file part directly to the provided upload URL:
+
+```bash
+curl -X PUT "https://storage.astracollab.app/upload/part1?token=..." \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @part1.bin
+```
+
+#### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "partNumber": 1,
+    "etag": "etag1234567890abcdef",
+    "size": 52428800
+  }
+}
+```
+
+### Complete Multipart Upload
+
+#### Endpoint
+
+```
+POST /files/multipart-upload-complete
+```
+
+#### Request Body
+
+```json
+{
+  "uploadId": "upload_1234567890abcdef",
+  "fileId": "file_1234567890abcdef",
+  "parts": [
+    {
+      "partNumber": 1,
+      "etag": "etag1234567890abcdef"
+    },
+    {
+      "partNumber": 2,
+      "etag": "etag0987654321fedcba"
+    }
+  ]
+}
+```
+
+#### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "file": {
+      "id": "file_1234567890abcdef",
+      "name": "large-video.mp4",
+      "size": 1073741824,
+      "type": "video/mp4",
+      "url": "https://storage.astracollab.app/files/file_1234567890abcdef",
+      "folderId": "folder_123",
+      "uploadedAt": "2024-01-15T10:30:00Z",
+      "updatedAt": "2024-01-15T10:30:00Z",
+      "metadata": {
+        "description": "Large video file",
+        "tags": ["video", "large"]
+      }
+    }
+  }
+}
+```
+
+### Abort Multipart Upload
+
+#### Endpoint
+
+```
+DELETE /files/multipart-upload-abort
+```
+
+#### Request Body
+
+```json
+{
+  "uploadId": "upload_1234567890abcdef",
+  "fileId": "file_1234567890abcdef"
+}
+```
+
+### Complete Example
+
+```javascript
+const multipartUpload = async (file) => {
+  // 1. Initialize upload
+  const initResponse = await fetch('/api/files/multipart-upload-start', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer your-api-key-here',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      fileName: file.name,
+      fileSize: file.size,
+      folderId: 'folder_123'
+    })
+  });
+  
+  const { uploadId, fileId, parts } = await initResponse.json();
+  
+  // 2. Upload parts in parallel
+  const uploadPromises = parts.map(async (part, index) => {
+    const start = index * part.size;
+    const end = Math.min(start + part.size, file.size);
+    const chunk = file.slice(start, end);
+    
+    const response = await fetch(part.uploadUrl, {
+      method: 'PUT',
+      body: chunk
+    });
+    
+    return response.json();
+  });
+  
+  const uploadedParts = await Promise.all(uploadPromises);
+  
+  // 3. Complete upload
+  const completeResponse = await fetch('/api/files/multipart-upload-complete', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer your-api-key-here',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      uploadId,
+      fileId,
+      parts: uploadedParts.map(part => ({
+        partNumber: part.partNumber,
+        etag: part.etag
+      }))
+    })
+  });
+  
+  return completeResponse.json();
+};
+```
+
+### Error Handling
+
+#### Part Upload Failed
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "PART_UPLOAD_FAILED",
+    "message": "Failed to upload part 3",
+    "details": {
+      "partNumber": 3,
+      "reason": "Network timeout"
+    }
+  }
+}
+```
+
+#### Upload Expired
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "UPLOAD_EXPIRED",
+    "message": "Multipart upload has expired",
+    "details": {
+      "uploadId": "upload_1234567890abcdef",
+      "expiredAt": "2024-01-15T11:30:00Z"
+    }
+  }
+}
+```
+
+### SDK Examples
+
+<CodeGroup>
+
+```javascript JavaScript SDK
+import { AstraCollab } from '@astracollab/sdk';
+
+const client = new AstraCollab('your-api-key');
+
+const file = await client.files.multipartUpload({
+  file: largeFile,
+  folderId: 'folder_123',
+  onProgress: (progress) => {
+    console.log(`Upload progress: ${progress}%`);
+  }
+});
+```
+
+```typescript Next.js SDK
+import { useMultipartUpload } from '@astracollab/nextjs';
+
+function LargeFileUpload() {
+  const { upload, isUploading, progress } = useMultipartUpload();
+
+  const handleUpload = async (file) => {
+    const result = await upload({
+      file,
+      folderId: 'folder_123',
+      onProgress: (progress) => {
+        console.log(`Upload progress: ${progress}%`);
+      }
+    });
+  };
+
+  return (
+    <div>
+      <input type="file" onChange={(e) => handleUpload(e.target.files[0])} />
+      {isUploading && <div>Uploading... {progress}%</div>}
+    </div>
+  );
+}
+```
+
+</CodeGroup>
+
+### Best Practices
+
+- **Part Size**: Use 50MB parts for optimal performance
+- **Parallel Uploads**: Upload multiple parts simultaneously
+- **Retry Logic**: Implement retry logic for failed parts
+- **Progress Tracking**: Track progress per part and overall
+- **Cleanup**: Abort uploads that are no longer needed
+- **Validation**: Verify file integrity after completion
