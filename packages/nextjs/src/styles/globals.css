@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+    --radius: 0.5rem;
+    --main: 222.2 47.4% 11.2%;
+    --main-accent: 210 40% 98%;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+    --main: 210 40% 98%;
+    --main-accent: 222.2 47.4% 11.2%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Custom styles for file upload components */
+.file-upload-dropzone {
+  @apply flex h-52 flex-col items-center justify-center rounded-lg border-2 border-dashed bg-background p-4 text-center transition-colors duration-200;
+}
+
+.file-upload-dropzone:hover {
+  @apply border-primary/50 bg-muted/50;
+}
+
+.file-upload-list {
+  @apply mt-4 flex flex-col gap-3;
+}
+
+.file-upload-item {
+  @apply flex items-center justify-between rounded-md border p-4 bg-card hover:bg-muted/50 transition-colors duration-200;
+}
+
+.file-upload-item-preview {
+  @apply size-10 rounded-full bg-muted p-2 text-primary;
+}
+
+.file-upload-item-metadata {
+  @apply flex-1 px-4;
+}
+
+.file-upload-item-delete {
+  @apply size-7;
+}
+
+.progress-bar {
+  @apply relative h-2 w-full overflow-hidden rounded-full bg-muted;
+}
+
+.progress-bar-fill {
+  @apply h-full rounded-full transition-all duration-300 ease-in-out bg-primary;
+}
+
+.upload-button {
+  @apply bg-primary text-primary-foreground hover:bg-primary/90 font-semibold py-3 px-6 rounded-lg transition-colors duration-200;
+}
+
+.upload-button:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+

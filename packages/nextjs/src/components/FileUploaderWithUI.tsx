@@ -3,6 +3,39 @@ import { v4 as uuidv4 } from 'uuid';
 import type { FileUploadProgress, FileToUpload, FileUploaderProps } from '../types';
 import { useUploadService } from '../hooks/useUploadService';
 import { useUpload } from '../hooks/useUpload';
+import { 
+  Button, 
+  FileUpload, 
+  FileUploadDropzone, 
+  FileUploadItem, 
+  FileUploadItemMetadata, 
+  FileUploadItemPreview, 
+  FileUploadList, 
+  FileUploadTrigger, 
+  FileUploadItemDelete 
+} from './mock-ui';
+
+// Utility function to format file size
+const formatFileSize = (sizeInBytes: number): string => {
+	if (!sizeInBytes) return "0 B";
+	
+	const bytes = sizeInBytes;
+	
+	if (bytes === 0) return "0 B";
+	
+	const k = 1024;
+	const sizes = ["B", "KB", "MB", "GB", "TB"];
+	const i = Math.floor(Math.log(bytes) / Math.log(k));
+	
+	const size = bytes / Math.pow(k, i);
+	
+	// Format to 1 decimal place for MB and GB, no decimals for B and KB
+	if (i >= 2) {
+		return `${size.toFixed(1)} ${sizes[i]}`;
+	}
+	
+	return `${Math.round(size)} ${sizes[i]}`;
+};
 
 interface FileUploaderWithUIProps extends Omit<FileUploaderProps, 'children'> {
     className?: string;
@@ -99,83 +132,57 @@ export const FileUploaderWithUI: React.FC<FileUploaderWithUIProps> = ({
 
         setIsUploading(true);
 
-        // Reset status for files that might be re-attempted
-        setUploadProgressMap((prevMap) => {
-            const newMap = new Map(prevMap);
-            filesToUpload.forEach((f) => {
-                const currentProgress = newMap.get(f.id);
-                if (
-                    currentProgress &&
-                    (currentProgress.status === "failed" ||
-                        currentProgress.status === "completed" ||
-                        currentProgress.status === "canceled")
-                ) {
-                    newMap.set(f.id, {
-                        ...currentProgress,
-                        uploadedBytes: 0,
-                        progressPercentage: 0,
-                        status: "pending",
-                        error: undefined,
-                    });
-                } else if (!currentProgress) {
-                    newMap.set(f.id, {
-                        fileId: f.id,
-                        fileName: f.name,
-                        totalBytes: f.size,
-                        uploadedBytes: 0,
-                        status: "pending",
-                        progressPercentage: 0,
+        try {
+            await uploadFiles({
+                files: filesToUpload,
+                folderId,
+                orgId,
+                onError: (errorMsg, fileId) => {
+                    if (onUploadError) {
+                        onUploadError(new Error(errorMsg), fileId);
+                    }
+                },
+                onSuccess: (results) => {
+                    if (onUploadComplete) {
+                        onUploadComplete(results.map(r => r.fileId));
+                    }
+                    
+                    // Clear completed files
+                    setFilesToUpload(prev => 
+                        prev.filter(f => !results.some(r => r.fileName === f.name))
+                    );
+                    
+                    // Clear progress for completed files
+                    setUploadProgressMap(prev => {
+                        const newMap = new Map(prev);
+                        results.forEach(res => {
+                            for (const [key, value] of newMap.entries()) {
+                                if (value.fileName === res.fileName && value.status === "completed") {
+                                    newMap.delete(key);
+                                    break;
+                                }
+                            }
+                        });
+                        return newMap;
                     });
                 }
             });
-            return newMap;
-        });
-
-        try {
-            await uploadFiles(filesToUpload.map(f => f.file));
-            
-            // Clear files from the list that successfully completed
-            setFilesToUpload((prevFiles) =>
-                prevFiles.filter(
-                    (f) =>
-                        !Array.from(uploadProgressMap.values()).some(
-                            (p) => p.fileName === f.name && p.status === "completed"
-                        )
-                )
-            );
-
-            // Clear progress map for completed files
-            setUploadProgressMap((prevMap) => {
-                const newMap = new Map(prevMap);
-                Array.from(newMap.entries()).forEach(([key, value]) => {
-                    if (value.status === "completed") {
-                        newMap.delete(key);
-                    }
-                });
-                return newMap;
-            });
-
-            onUploadComplete?.(Array.from(uploadProgressMap.values())
-                .filter(p => p.status === "completed")
-                .map(p => ({ fileId: p.fileId, fileName: p.fileName })));
         } catch (error) {
-            console.error("Overall upload process failed:", error);
-            onUploadError?.("An error occurred during the batch upload process.", "");
+            console.error("Upload failed:", error);
+            if (onUploadError) {
+                onUploadError(error instanceof Error ? error : new Error("Upload failed"), "");
+            }
         } finally {
             setIsUploading(false);
         }
-    }, [filesToUpload, uploadProgressMap, uploadFiles, onUploadComplete, onUploadError]);
+    }, [filesToUpload, folderId, orgId, uploadFiles, onUploadComplete, onUploadError]);
 
     const removeFile = useCallback((id: string) => {
-        setFilesToUpload((prevFiles) => prevFiles.filter((f) => f.id !== id));
-        setUploadProgressMap((prevMap) => {
-            const newMap = new Map(prevMap);
+        setFilesToUpload(prev => prev.filter(f => f.id !== id));
+        setUploadProgressMap(prev => {
+            const newMap = new Map(prev);
             const progress = newMap.get(id);
-            if (
-                progress &&
-                progress.status !== "completed" &&
-                progress.status !== "failed"
-            ) {
+            if (progress && progress.status !== "completed" && progress.status !== "failed") {
                 newMap.delete(id);
             }
             return newMap;
@@ -197,176 +204,147 @@ export const FileUploaderWithUI: React.FC<FileUploaderWithUIProps> = ({
         e.preventDefault();
         setIsDragOver(false);
         
-        const files = Array.from(e.dataTransfer.files);
-        if (files.length > maxFiles) {
-            alert(`You can only upload up to ${maxFiles} files at once.`);
-            return;
+        const droppedFiles = Array.from(e.dataTransfer.files);
+        if (droppedFiles.length > 0) {
+            handleFileValueChange(droppedFiles);
         }
-        
-        handleFileValueChange(files);
-    }, [handleFileValueChange, maxFiles]);
-
-    const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-        const files = Array.from(e.target.files || []);
-        if (files.length > maxFiles) {
-            alert(`You can only upload up to ${maxFiles} files at once.`);
-            return;
-        }
-        handleFileValueChange(files);
-    }, [handleFileValueChange, maxFiles]);
+    }, [handleFileValueChange]);
 
     const hasFilesToUpload = filesToUpload.length > 0;
 
     return (
-        <div className={className}>
-            {/* Dropzone */}
-            <div
-                className={`flex h-52 flex-col items-center justify-center rounded-lg border-2 border-dashed bg-background p-4 text-center ${
-                    isDragOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300'
-                } ${dropzoneClassName}`}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
+        <div className={`file-upload ${className}`}>
+            <FileUpload
+                value={filesToUpload.map(f => f.file)}
+                onValueChange={handleFileValueChange}
+                maxFiles={maxFiles}
             >
-                <svg className="mb-2 h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-                <p className="text-sm text-gray-500">
-                    Drag and drop files here, or click to browse.
-                </p>
-                <input
-                    type="file"
-                    multiple
-                    onChange={handleFileInput}
-                    className="mt-4 hidden"
-                    id="file-upload-input"
-                    accept="*/*"
-                />
-                <label
-                    htmlFor="file-upload-input"
-                    className={`mt-4 cursor-pointer rounded-md bg-blue-500 px-4 py-2 text-white hover:bg-blue-600 ${buttonClassName}`}
+                <FileUploadDropzone 
+                    className={`${dropzoneClassName} ${isDragOver ? 'border-primary bg-muted/50' : ''}`}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
                 >
-                    Select Files
-                </label>
-            </div>
+                    <div className="flex flex-col items-center justify-center text-center">
+                        <div className="mb-2 size-12 text-muted-foreground">
+                            <svg className="size-full" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                            </svg>
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-2">
+                            Drag and drop files here, or click to browse
+                        </p>
+                        <FileUploadTrigger asChild>
+                            <Button className={buttonClassName || "upload-button"}>
+                                Select Files
+                            </Button>
+                        </FileUploadTrigger>
+                    </div>
+                </FileUploadDropzone>
 
-            {/* File List */}
-            {hasFilesToUpload && (
-                <div className={`mt-4 flex flex-col gap-3 ${listClassName}`}>
-                    {filesToUpload.map((fileWithId) => {
-                        const progressState =
-                            uploadProgressMap.get(fileWithId.id) ||
-                            Array.from(uploadProgressMap.values()).find(
-                                (p) =>
-                                    p.fileName === fileWithId.name &&
-                                    p.totalBytes === fileWithId.size &&
-                                    p.status !== "pending",
-                            ) ||
-                            ({
+                {hasFilesToUpload && (
+                    <FileUploadList className={listClassName}>
+                        {filesToUpload.map((fileWithId) => {
+                            const progressState = uploadProgressMap.get(fileWithId.id) || {
                                 fileId: fileWithId.id,
                                 fileName: fileWithId.name,
                                 totalBytes: fileWithId.size,
                                 uploadedBytes: 0,
-                                status: "pending",
+                                status: "pending" as const,
                                 progressPercentage: 0,
-                            } as FileUploadProgress);
+                            };
 
-                        let statusMessage: string;
-                        switch (progressState.status) {
-                            case "pending":
-                                statusMessage = "Waiting to upload";
-                                break;
-                            case "uploading":
-                                statusMessage = `Uploading: ${progressState.progressPercentage}% (${(
-                                    progressState.uploadedBytes / (1024 * 1024)
-                                ).toFixed(2)}MB / ${(
-                                    progressState.totalBytes / (1024 * 1024)
-                                ).toFixed(2)}MB)`;
-                                break;
-                            case "completed":
-                                statusMessage = "Upload complete!";
-                                break;
-                            case "canceled":
-                                statusMessage = "Upload canceled.";
-                                break;
-                            case "failed":
-                                statusMessage = `Error: ${progressState.error || "Unknown error"}`;
-                                break;
-                            default:
-                                statusMessage = "Ready";
-                        }
+                            let statusMessage: string;
+                            switch (progressState.status) {
+                                case "pending":
+                                    statusMessage = "Waiting to upload";
+                                    break;
+                                case "uploading":
+                                    statusMessage = `Uploading: ${progressState.progressPercentage}%`;
+                                    break;
+                                case "completed":
+                                    statusMessage = "Upload complete!";
+                                    break;
+                                case "canceled":
+                                    statusMessage = "Upload canceled";
+                                    break;
+                                case "failed":
+                                    statusMessage = `Error: ${progressState.error || "Unknown error"}`;
+                                    break;
+                                default:
+                                    statusMessage = "Ready";
+                            }
 
-                        const isDeleteDisabled =
-                            isUploading &&
-                            (progressState.status === "uploading" ||
-                                progressState.status === "pending");
+                            const isDeleteDisabled = isUploading && 
+                                (progressState.status === "uploading" || progressState.status === "pending");
 
-                        return (
-                            <div
-                                key={fileWithId.id}
-                                className={`flex items-center justify-between rounded-md border p-4 ${itemClassName}`}
-                            >
-                                <div className="flex items-center space-x-4">
-                                    <div className="h-10 w-10 rounded-full bg-gray-100 p-2">
-                                        <svg className="h-6 w-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            return (
+                                <FileUploadItem
+                                    key={fileWithId.id}
+                                    value={fileWithId.file}
+                                    className={`${itemClassName}`}
+                                    data-file-id={fileWithId.id}
+                                >
+                                    <FileUploadItemPreview className="size-10 rounded-full bg-muted p-2 text-primary">
+                                        <svg className="size-full" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                                         </svg>
-                                    </div>
-                                    <div>
-                                        <p className="text-sm font-medium">{fileWithId.name}</p>
-                                        <p className="text-xs text-gray-500">
-                                            {(fileWithId.size / (1024 * 1024)).toFixed(2)} MB
-                                        </p>
-                                    </div>
-                                </div>
+                                    </FileUploadItemPreview>
 
-                                {/* Progress bar and status message */}
-                                <div className="flex w-40 flex-col items-end">
-                                    {progressState.status !== "completed" &&
-                                        progressState.status !== "failed" && (
-                                            <div className={`relative h-2 w-full overflow-hidden rounded-full bg-gray-200 ${progressBarClassName}`}>
+                                    <FileUploadItemMetadata className="flex-1 px-4">
+                                        <p className="text-sm font-medium text-foreground">{fileWithId.name}</p>
+                                        <p className="text-xs text-muted-foreground">
+                                            {formatFileSize(fileWithId.size)}
+                                        </p>
+                                    </FileUploadItemMetadata>
+
+                                    <div className="flex w-40 flex-col items-end">
+                                        {progressState.status !== "completed" && progressState.status !== "failed" && (
+                                            <div className={`progress-bar ${progressBarClassName}`}>
                                                 <div
-                                                    className="h-full rounded-full bg-blue-500 transition-all duration-300 ease-in-out"
+                                                    className={`progress-bar-fill ${progressBarClassName}`}
                                                     style={{
                                                         width: `${progressState.progressPercentage}%`,
                                                     }}
                                                 />
                                             </div>
                                         )}
-                                    <span
-                                        className={`text-xs min-w-[5rem] text-right ${
-                                            progressState.status === "failed" ? "text-red-500" : "text-gray-500"
-                                        } ${statusClassName}`}
-                                    >
-                                        {statusMessage}
-                                    </span>
-                                </div>
+                                        <span className={`text-xs min-w-[5rem] text-right ${statusClassName} ${
+                                            progressState.status === "failed" ? "text-destructive" : "text-muted-foreground"
+                                        }`}>
+                                            {statusMessage}
+                                        </span>
+                                    </div>
 
-                                <button
-                                    type="button"
-                                    className="h-7 w-7 rounded-md p-1 hover:bg-gray-100 disabled:opacity-50"
-                                    onClick={() => removeFile(fileWithId.id)}
-                                    disabled={isDeleteDisabled}
-                                >
-                                    <svg className="h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                    </svg>
-                                </button>
-                            </div>
-                        );
-                    })}
-                    
-                    <button
-                        className={`bg-blue-500 text-white font-bold w-full mt-4 rounded-md py-2 hover:bg-blue-600 disabled:opacity-50 ${buttonClassName}`}
-                        onClick={handleUpload}
-                        disabled={filesToUpload.length === 0 || isUploading}
-                    >
-                        {isUploading
-                            ? "Uploading..."
-                            : `Upload ${filesToUpload.length} File(s)`}
-                    </button>
-                </div>
-            )}
+                                    <FileUploadItemDelete asChild>
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className={`file-upload-item-delete ${isDeleteDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                            onClick={() => removeFile(fileWithId.id)}
+                                            disabled={isDeleteDisabled}
+                                        >
+                                            <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                            </svg>
+                                        </Button>
+                                    </FileUploadItemDelete>
+                                </FileUploadItem>
+                            );
+                        })}
+
+                        <Button
+                            className={`upload-button w-full mt-4 ${buttonClassName}`}
+                            onClick={handleUpload}
+                            disabled={filesToUpload.length === 0 || isUploading}
+                        >
+                            {isUploading
+                                ? "Uploading..."
+                                : `Upload ${filesToUpload.length} File(s)`}
+                        </Button>
+                    </FileUploadList>
+                )}
+            </FileUpload>
         </div>
     );
 };

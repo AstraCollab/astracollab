@@ -1,13 +1,19 @@
 {
     "name": "@astracollab/js",
     "description": "Official AstraCollab JavaScript SDK for Node.js and browser environments",
-    "version": "0.1.0",
+    "version": "0.0.1",
+    "private": false,
     "author": "AstraCollab",
     "license": "MIT",
-    "keywords": ["astracollab", "storage", "file-upload", "api", "sdk"],
+    "keywords": ["astracollab", "storage", "api", "sdk", "nodejs", "browser"],
+    "publishConfig": {
+        "access": "public",
+        "registry": "https://registry.npmjs.org/"
+    },
     "repository": {
         "type": "git",
-        "url": "https://github.com/astracollab/astracollab.git"
+        "url": "https://github.com/astracollab/astracollab.git",
+        "directory": "packages/js"
     },
     "scripts": {
         "dev": "tsup --watch",

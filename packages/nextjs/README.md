@@ -316,6 +316,17 @@ This package includes the following dependencies:
 
 You don't need to install these separately - they're automatically included when you install `@astracollab/nextjs`.
 
+### Peer Dependencies
+
+The following packages are required but not included:
+
+- `react` (>=18.0.0) - React library
+- `react-dom` (>=18.0.0) - React DOM rendering
+- `next` (>=14.0.0) - Next.js framework
+- `tailwindcss` (>=3.0.0) - CSS framework for styling
+
+Make sure you have these installed in your project for the components to work properly.
+
 ## License
 
 MIT
