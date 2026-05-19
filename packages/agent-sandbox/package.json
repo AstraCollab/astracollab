@@ -1,6 +1,6 @@
 {
-  "name": "agent-sandbox-sdk",
-  "version": "0.0.0",
+  "name": "@astracollab/agent-sandbox",
+  "version": "0.0.1-beta",
   "private": true,
   "description": "AstraCollab agent sandbox SDK monorepo.",
   "packageManager": "pnpm@9.12.3",

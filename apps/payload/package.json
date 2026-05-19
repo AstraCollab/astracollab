@@ -1,6 +1,6 @@
 {
-  "name": "payload",
-  "version": "1.0.0",
+  "name": "@astracollab/payload",
+  "version": "0.0.1-beta",
   "description": "A blank template to get started with Payload 3.0",
   "license": "MIT",
   "type": "module",
