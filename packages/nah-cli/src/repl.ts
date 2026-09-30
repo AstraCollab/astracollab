@@ -11,7 +11,7 @@ import { getModelOptions } from "./model-catalog.js";
 import { pickModel } from "./model-picker.js";
 import { removeProviderKey, storeProviderKey, type BuiltinProvider } from "./credentials.js";
 import { createApprover, parsePermissionMode, type PermissionMode } from "./permissions.js";
-import { c, formatFileChange, renderWelcome, toolLabel, usageLine, type RenderableFileChange } from "./render.js";
+import { c, formatFileChange, formatWorkspaceDiff, renderWelcome, toolLabel, usageLine, type RenderableFileChange } from "./render.js";
 import { runTurn, type SessionState, type StepRecovery } from "./session.js";
 import { createTaskLedgerTool, formatTaskLedger } from "./task-ledger.js";
 import { createDelegationTool } from "./delegation.js";
@@ -23,6 +23,7 @@ const REPL_HELP = `Slash commands:
   /model <spec>         Switch directly (e.g. /model openai:gpt-5.2)
   /provider [name]      Add or switch provider credentials securely
   /provider remove <name>  Remove a saved provider key
+  /mode [mode]         Set ask, yolo, or readonly permissions
   /permissions [mode]   ask | yolo | readonly (gate edit/write/bash)
   /stats                Tokens used this session
   /task                 Show the saved plan and progress
@@ -42,6 +43,28 @@ Everything else is sent to the agent. Prefix files with @ to include them.`;
 
 const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
 
+const centeredOutput = (out: NodeJS.WriteStream): NodeJS.WriteStream => {
+  if (!out.isTTY) return out;
+  const width = out.columns ?? 80;
+  const contentWidth = Math.min(100, Math.max(40, width - 8));
+  const indent = " ".repeat(Math.max(0, Math.floor((width - contentWidth) / 2)));
+  return new Proxy(out, {
+    get(target, property) {
+      if (property === "write") {
+        return (...args: unknown[]) => {
+          const chunk = args[0];
+          if (typeof chunk === "string") {
+            args[0] = chunk.replace(/[^\n]+/g, (line) => `${indent}${line}`);
+          }
+          return Reflect.apply(target.write, target, args);
+        };
+      }
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as NodeJS.WriteStream;
+};
+
 /** Render one turn to stdout: streamed text + one line per tool call. */
 export const renderTurn = async (
   events: AsyncIterable<HarnessEvent>,
@@ -50,23 +73,49 @@ export const renderTurn = async (
   getFileChanges: () => RenderableFileChange[] = () => [],
 ): Promise<void> => {
   let textOpen = false;
-  let textLineStart = true;
   const terminalWidth = out.columns ?? 80;
   const contentWidth = Math.min(100, Math.max(40, terminalWidth - 8));
   const indentWidth = out.isTTY ? Math.max(0, Math.floor((terminalWidth - contentWidth) / 2)) : 0;
   const indent = " ".repeat(indentWidth);
   const writeIndented = (value: string) => out.write(`${indent}${value}`);
-  const writeStreamText = (value: string) => {
-    const lines = value.split("\n");
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index]!;
-      if (textLineStart && line.length > 0) writeIndented("");
-      if (line) out.write(line);
-      textLineStart = false;
-      if (index < lines.length - 1) {
-        out.write("\n");
-        textLineStart = true;
+  let responseBuffer = "";
+  const writeResponseLine = (value: string) => {
+    if (value.length === 0) {
+      out.write("\n");
+      return;
+    }
+    const chars = Array.from(value);
+    let remaining = chars;
+    while (remaining.length > contentWidth) {
+      let splitAt = contentWidth;
+      for (let index = contentWidth; index > 0; index -= 1) {
+        if (/\s/.test(remaining[index - 1]!)) { splitAt = index - 1; break; }
       }
+      if (splitAt === 0) splitAt = contentWidth;
+      out.write(`${indent}${remaining.slice(0, splitAt).join("")}\n`);
+      remaining = remaining.slice(splitAt);
+      while (remaining.length > 0 && remaining[0] === " ") remaining = remaining.slice(1);
+    }
+    out.write(`${indent}${remaining.join("")}\n`);
+  };
+  const writeStreamText = (value: string) => {
+    responseBuffer += value;
+    while (true) {
+      const newline = responseBuffer.indexOf("\n");
+      if (newline >= 0) {
+        writeResponseLine(responseBuffer.slice(0, newline).replace(/\r$/, ""));
+        responseBuffer = responseBuffer.slice(newline + 1);
+        continue;
+      }
+      const chars = Array.from(responseBuffer);
+      if (chars.length <= contentWidth) break;
+      let splitAt = contentWidth;
+      for (let index = contentWidth; index > 0; index -= 1) {
+        if (/\s/.test(chars[index - 1]!)) { splitAt = index - 1; break; }
+      }
+      if (splitAt === 0) splitAt = contentWidth;
+      writeResponseLine(chars.slice(0, splitAt).join(""));
+      responseBuffer = chars.slice(splitAt).join("").replace(/^ +/, "");
     }
   };
   let spinnerLabel = "";
@@ -95,9 +144,9 @@ export const renderTurn = async (
   const nl = () => {
     clearSpinner();
     if (textOpen) {
-      out.write("\n");
+      writeResponseLine(responseBuffer);
+      responseBuffer = "";
       textOpen = false;
-      textLineStart = true;
     }
   };
   const renderNewChanges = () => {
@@ -278,6 +327,7 @@ export const handleSlashCommand = async (
   cwd: string,
   out: NodeJS.WriteStream = process.stdout,
 ): Promise<SlashResult> => {
+  out = centeredOutput(out);
   const [cmd, ...rest] = input.slice(1).split(/\s+/);
   const arg = rest.join(" ").trim();
 
@@ -323,7 +373,7 @@ export const handleSlashCommand = async (
       return "handled";
     case "diff": {
       const status = await state.workspace.exec("git status --porcelain=v1 -z", { timeoutSeconds: 15 });
-      const diff = await state.workspace.exec("git diff --no-ext-diff --no-color HEAD --", { timeoutSeconds: 15 });
+      const diff = await state.workspace.exec("git diff --no-ext-diff --no-color --unified=3 HEAD --", { timeoutSeconds: 15 });
       const statusItems = status.stdout.split("\0").filter(Boolean);
       const untracked = statusItems.filter((item) => item.startsWith("?? ")).slice(0, 20);
       const untrackedDiffs: string[] = [];
@@ -333,8 +383,9 @@ export const handleSlashCommand = async (
         if (result.stdout.trim()) untrackedDiffs.push(result.stdout);
       }
       const summary = statusItems.map((item) => item.slice(0, 2) + " " + item.slice(3)).join("\n");
-      const combined = [summary, diff.stdout.trim(), ...untrackedDiffs].filter(Boolean).join("\n\n");
-      out.write(combined ? `${combined.slice(0, 24_000)}${combined.length > 24_000 ? "\n[diff truncated at 24 KB]" : ""}\n` : c.dim("(no Git changes found)\n"));
+      const patch = [diff.stdout.trim(), ...untrackedDiffs].filter(Boolean).join("\n\n");
+      const formatted = summary || patch ? formatWorkspaceDiff(summary, patch).join("\n") : "";
+      out.write(formatted ? `${formatted.slice(0, 24_000)}${formatted.length > 24_000 ? "\n[diff truncated at 24 KB]" : ""}\n` : c.dim("(no Git changes found)\n"));
       if (status.exitCode !== 0 && diff.exitCode !== 0) out.write(c.red("Git diff unavailable in this workspace.\n"));
       return "handled";
     }
@@ -478,18 +529,19 @@ export const handleSlashCommand = async (
       }
       return "handled";
     }
+    case "mode":
     case "permissions": {
       if (!arg) {
-        out.write(c.dim(`permissions: ${state.permissions}\n`));
+        out.write(c.dim(`mode: ${state.permissions}\n`));
         return "handled";
       }
       const mode = parsePermissionMode(arg);
       if (!mode) {
-        out.write(c.red("usage: /permissions ask|yolo|readonly") + "\n");
+        out.write(c.red("usage: /mode ask|yolo|readonly (or /permissions ask|yolo|readonly)") + "\n");
         return "handled";
       }
       state.permissions = mode;
-      out.write(c.dim(`permissions → ${mode}\n`));
+      out.write(c.dim(`mode → ${mode}\n`));
       return "handled";
     }
     case "session": {

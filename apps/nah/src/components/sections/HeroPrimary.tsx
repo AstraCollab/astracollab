@@ -25,7 +25,7 @@ export function HeroPrimary() {
         <nav className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 sm:px-8" aria-label="Main navigation">
           <Link href="#top" className="flex items-center gap-2.5 text-sm font-semibold tracking-tight text-zinc-100">
             <span className="grid size-7 place-items-center rounded-lg border border-white/10 bg-white/[0.06] font-mono text-xs">n.</span>
-            not another harness
+            nah (not another harness)
           </Link>
           <div className="hidden items-center gap-7 text-xs text-zinc-400 md:flex">
             <Link className="transition hover:text-white" href="/docs">Docs</Link>
