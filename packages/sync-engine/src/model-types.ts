@@ -1,0 +1,26 @@
+import type { PullRow } from "@rocicorp/zero";
+import type { Schema } from "./schema";
+
+export type File = PullRow<"file", Schema>;
+export type Folder = PullRow<"folder", Schema>;
+export type Bucket = PullRow<"bucket", Schema>;
+export type Team = PullRow<"team", Schema>;
+export type TeamMember = PullRow<"teamMember", Schema>;
+export type Project = PullRow<"project", Schema>;
+export type ProjectMember = PullRow<"projectMember", Schema>;
+export type ProjectMilestone = PullRow<"projectMilestone", Schema>;
+export type ProjectUpdate = PullRow<"projectUpdate", Schema>;
+export type Ticket = PullRow<"ticket", Schema>;
+export type TicketUpdate = PullRow<"ticketUpdate", Schema>;
+export type TicketSubscriber = PullRow<"ticketSubscriber", Schema>;
+export type AgentTicketRun = PullRow<"agentTicketRun", Schema>;
+export type ActivityItem = PullRow<"activityItem", Schema>;
+export type Notification = PullRow<"notification", Schema>;
+export type Lead = PullRow<"lead", Schema>;
+export type LeadField = PullRow<"leadField", Schema>;
+export type LeadFieldValue = PullRow<"leadFieldValue", Schema>;
+export type FileComment = PullRow<"fileComment", Schema>;
+export type FileCommentReaction = PullRow<"fileCommentReaction", Schema>;
+export type FileReaction = PullRow<"fileReaction", Schema>;
+export type FileApproval = PullRow<"fileApproval", Schema>;
+export type FileVersion = PullRow<"fileVersion", Schema>;

@@ -1,69 +1,170 @@
-# agent-sandbox-sdk
+# @astracollab/agent-sandbox
 
-Open-source SDK for orchestrating Mastra `Workspace` coding sandboxes.
+Mastra-aware, vendor-agnostic helpers for orchestrating coding sandboxes.
 
-This monorepo houses small, type-first, ESM-first packages built for Mastra
-users who want to drive a `WorkspaceSandbox` (Blaxel, E2B, Modal, Daytona,
-local, or a self-hosted runtime) without hand-rolling the lifecycle, git,
-or snapshot plumbing.
+This package gives you a small set of building blocks for treating any
+`WorkspaceSandbox` (from `@mastra/core/workspace`) as a coding workspace:
+clone a repo, commit and push, snapshot the working tree to S3-compatible
+storage, restore it on the next run, and clean up.
 
-## Packages
+It is **provider-agnostic** — it never imports `@mastra/blaxel`,
+`@cloudflare/sandbox`, or any vendor SDK. Callers pass the sandbox in.
 
-| Package | Description |
-| --- | --- |
-| [`@astracollab/agent-sandbox`](./packages/agent-sandbox) | Core SDK: `createCodingWorkspace`, `cloneRepo`, `commitAndPush`, `snapshotToS3`, `restoreFromS3`, `withSandbox`, retry/pagination helpers. Mastra-aware, vendor-agnostic. |
-
-Future packages (deferred) will add concrete sandbox providers (e.g. a
-self-hosted Hetzner/Fly/Cloudflare runtime) that implement Mastra's
-`WorkspaceSandbox` interface.
-
-## Design rules
-
-- **ofetch over axios** for any HTTP work (smaller bundle, Workers-friendly).
-- **Factory functions over constructors** (`createCodingWorkspace`,
-  `createHttpClient`).
-- **Custom errors with semantic predicates** (`SandboxApiError` with
-  `isQuotaError`, `isProvisioningError`, …).
-- **Helpers as separate exports** so consumers can compose differently.
-- **Types-first** with literal unions instead of enums.
-- **Vite library mode** with `formats: ["es", "cjs"]`, ESM-first, sourcemaps
-  on, `vite-plugin-dts` for declarations.
-- **No vendor SDK imports** in `@astracollab/agent-sandbox`. Callers pass in
-  the `WorkspaceSandbox` instance themselves.
-- **No Astra-specific defaults** baked in. `skills`, `runId` formatting, git
-  identity, and image choices are caller-provided.
-
-## Development
-
-This monorepo is **pnpm-first** (`packageManager` in the root `package.json`, `pnpm-workspace.yaml`). Use pnpm from the repository root:
+## Install
 
 ```bash
-corepack enable
-pnpm install
-pnpm -r build
+npm install @astracollab/agent-sandbox @mastra/core
+# pick a sandbox provider too, e.g.
+npm install @mastra/blaxel
 ```
 
-### `npm install` and `Unsupported URL Type "link:"`
+## Quick start
 
-Do **not** run `npm install` at the **monorepo root** while the tree still has a **`pnpm`-style `node_modules`** (the `.pnpm/` layout). npm can walk into packages such as Vite whose `package.json` lists pnpm-only `link:` devDependency specifiers, which triggers `npm ERR! code EUNSUPPORTEDPROTOCOL` / `Unsupported URL Type "link:"`.
+```ts
+import { Workspace } from "@mastra/core/workspace";
+import { BlaxelSandbox } from "@mastra/blaxel";
+import {
+  createCodingWorkspace,
+  cloneRepo,
+  commitAndPush,
+  snapshotToS3,
+  restoreFromS3,
+  withSandbox,
+} from "@astracollab/agent-sandbox";
 
-**Fix:** from the repo root, either use pnpm as above, or reset and stay on npm only:
+const workspace = createCodingWorkspace({
+  sandbox: new BlaxelSandbox({ image: "blaxel/ts-app:latest", timeout: "30m" }),
+  runId: "run_123",
+});
 
-```bash
-rm -rf node_modules
-npm install
+await workspace.init();
+
+await cloneRepo({
+  sandbox: workspace.sandbox!,
+  url: "https://github.com/myorg/myrepo.git",
+  token: process.env.GITHUB_TOKEN!,
+  branch: "main",
+  targetDir: "/workspace/repo",
+});
+
+// …agent does work…
+
+await commitAndPush({
+  sandbox: workspace.sandbox!,
+  cwd: "/workspace/repo",
+  message: "agent: implement feature",
+  branch: "agent/feature-xyz",
+});
+
+await snapshotToS3({
+  sandbox: workspace.sandbox!,
+  cwd: "/workspace/repo",
+  key: "orgs/org_123/tickets/tic_456/runs/run_789.tar.gz",
+  config: {
+    endpoint: "https://t3.storage.dev",
+    bucket: "astracollab-sandbox-snapshots",
+    accessKeyId: process.env.S3_KEY!,
+    secretAccessKey: process.env.S3_SECRET!,
+  },
+});
 ```
 
-To install **only** `@astracollab/agent-sandbox` with npm (no workspace), use the package folder:
+## Blaxel sandbox codegen (HTTP)
 
-```bash
-cd packages/agent-sandbox
-rm -rf node_modules
-npm install
+Optional helpers for Blaxel’s **Sandbox API** [codegen routes](https://docs.blaxel.ai/Sandboxes/Codegen-tools.md) — **no `@blaxel/core` dependency**. Pass the sandbox API `baseUrl` and a Bearer token (same JWT the control plane uses for that sandbox).
+
+```ts
+import {
+  createBlaxelSandboxCodegenClient,
+  pickBlaxelSandboxApiBaseUrl,
+} from "@astracollab/agent-sandbox";
+
+const baseUrl =
+  pickBlaxelSandboxApiBaseUrl(await workspace.sandbox?.getInfo?.()) ??
+  process.env.BLAXEL_SANDBOX_API_URL!;
+
+const codegen = createBlaxelSandboxCodegenClient({
+  baseUrl,
+  token: process.env.BLAXEL_SANDBOX_JWT!,
+});
+
+await codegen.contentSearch({
+  rootPath: "app",
+  query: "AppSidebar",
+  filePattern: "*.tsx",
+});
+
+await codegen.fastApply({
+  filePath: "app/src/foo.ts",
+  codeEdit:
+    "// ... existing code ...\nexport const bar = 1;\n// ... existing code ...",
+});
 ```
 
-## Release
+Use this from your Mastra agent as **custom tools** (or a thin wrapper) so the model never shells out to missing `rg` / fragile `git grep`.
 
-Releases are managed by [Changesets](https://github.com/changesets/changesets).
-Open a PR with a `pnpm changeset` entry. The release workflow publishes to
-public npm with provenance when the changeset is merged.
+## API
+
+### `createCodingWorkspace(options)`
+
+Wraps a `WorkspaceSandbox` in a `Workspace` with sensible defaults
+(approval-free read tools, write/edit tools that require a prior read).
+You provide `skills`, `runId`, and any per-tool overrides; nothing
+Astra-specific is baked in.
+
+### Helpers
+
+- `withSandbox(sandbox, fn)` — RAII lifecycle: starts the sandbox, runs your
+  function, then destroys it.
+- `cloneRepo({ sandbox, url, token, branch, depth?, targetDir })` — git clone
+  using `https://x-access-token:$TOKEN@…` so any provider works.
+- `commitAndPush({ sandbox, cwd, message, branch })` — stage all, commit,
+  push.
+- `gitConfig({ sandbox, cwd, userName, userEmail })` — set git identity.
+- `snapshotToS3({ sandbox, cwd, key, config, exclude?, background? })` —
+  `tar` the working tree (excluding caches by default), pipe to `s5cmd`
+  for fast multipart upload. Returns the spawned process PID when run in
+  the background.
+- `restoreFromS3({ sandbox, key, config, targetDir })` — pull the tarball
+  with `s5cmd`, untar into `targetDir`.
+- `rotateSnapshotsForTicket({ sandbox, prefix, config })` — list snapshots
+  under a `orgs/{orgId}/tickets/{ticketId}/runs/` prefix and delete every
+  object except the newest one.
+- `paginateAll(fetcher)` — async iterator wrapper around any cursor-based
+  list endpoint.
+- `withRetry(fn, opts)` — generic retry with exponential backoff.
+
+### Errors
+
+`SandboxApiError` carries `status`, `code`, and `details`. It has predicate
+methods (`isQuotaError()`, `isProvisioningError()`, `isAuthError()`,
+`isTimeoutError()`, `isNotFoundError()`) so consumers don't have to sniff
+magic status codes.
+
+### Tigris example
+
+Tigris is a great default S3-compatible store for sandbox snapshots. The
+sandbox image just needs `s5cmd` installed — the helpers do the rest:
+
+```ts
+await snapshotToS3({
+  sandbox,
+  cwd: "/workspace/repo",
+  key: `orgs/${orgId}/tickets/${ticketId}/runs/${runId}.tar.gz`,
+  config: {
+    endpoint: "https://t3.storage.dev",
+    bucket: "astracollab-sandbox-snapshots",
+    accessKeyId: process.env.SANDBOX_SNAPSHOT_S3_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.SANDBOX_SNAPSHOT_S3_SECRET_ACCESS_KEY!,
+  },
+});
+```
+
+## Bundle size
+
+Target ceiling: ~10 KB minified. The package re-exports only what is needed
+and externalizes `ofetch` + `@mastra/core` so they aren't duplicated.
+
+## License
+
+MIT — see [`LICENSE`](../../LICENSE).

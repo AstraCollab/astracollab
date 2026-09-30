@@ -1,6 +1,7 @@
 {
-  "name": "@astracollab",
-  "description": "",
+  "name": "astracollab",
+  "private":true, 
+"description": "",
   "version": "0.0.0",
   "author": "",
   "license": "",
