@@ -15,10 +15,23 @@ export const createApprover = (
   out: NodeJS.WriteStream = process.stdout,
 ) => {
   const alwaysAllow = new Set<string>();
+  const scopeKey = (toolName: string, input: unknown): string => {
+    const args = (input ?? {}) as Record<string, unknown>;
+    if (toolName === "edit" && typeof args.path === "string") {
+      return `${toolName}:${args.path}:${String(args.old_string)}:${String(args.new_string)}:${String(args.replace_all)}`;
+    }
+    if (toolName === "write" && typeof args.path === "string") {
+      return `${toolName}:${args.path}:${String(args.content)}`;
+    }
+    if (toolName === "bash" && typeof args.command === "string") {
+      return `${toolName}:${args.command}`;
+    }
+    return toolName;
+  };
   // Queued: two parallel tool calls in one step must not fight over stdin.
   let pending: Promise<void> = Promise.resolve();
 
-  const ask = async (toolName: string, input: unknown, isTTY: boolean): Promise<boolean> => {
+  const ask = async (toolName: string, input: unknown, permissionScope: string, isTTY: boolean): Promise<boolean> => {
     let release!: () => void;
     const prev = pending;
     pending = new Promise<void>((r) => {
@@ -41,8 +54,8 @@ export const createApprover = (
           .trim()
           .toLowerCase();
         if (answer === "a") {
-          alwaysAllow.add(toolName);
-          out.write(c.dim(`(always allowing "${toolName}" this session)`));
+          alwaysAllow.add(permissionScope);
+          out.write(c.dim(`(always allowing ${label} this session)`));
           return true;
         }
         return answer === "y" || answer === "yes";
@@ -60,10 +73,11 @@ export const createApprover = (
       out.write(c.dim(`  ✕ blocked (readonly mode): ${toolLabel(toolName, input)}\n`));
       return false;
     }
-    if (mode === "yolo" || alwaysAllow.has(toolName)) {
+    const permissionScope = scopeKey(toolName, input);
+    if (mode === "yolo" || alwaysAllow.has(permissionScope)) {
       return true;
     }
-    return ask(toolName, input, process.stdout.isTTY === true);
+    return ask(toolName, input, permissionScope, process.stdout.isTTY === true);
   };
 };
 

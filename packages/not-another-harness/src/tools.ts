@@ -225,6 +225,9 @@ export const createCodingTools = (
       if (occurrences === 0) {
         return `Error: old_string not found in ${path}. Re-read the file for current contents.`;
       }
+      if (replace_all === true && old_string.trim().length <= 3) {
+        return `Error: replace_all is blocked for strings of three characters or fewer (${occurrences} matches in ${path}). Use a longer exact phrase with context to avoid changing common words throughout the file.`;
+      }
       if (occurrences > 1 && replace_all !== true) {
         return `Error: old_string appears ${occurrences} times in ${path}. Add surrounding context or set replace_all.`;
       }

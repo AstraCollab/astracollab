@@ -29,6 +29,8 @@ Tools:
 Guidelines:
 - Be concise. Name the paths you change.
 - Prefer grep+read over list when hunting for code; prefer edit over write for existing files.
+- For exact rename/replacement requests, identify the literal old string, literal new string, and requested path scope before editing. Treat wording like "replace A to B" as A → B; never use the connective word itself as a replacement. Search the exact old literal in scope, change only those matches, then search again to verify it is gone.
+- Keep inspection proportional to the task. For a scoped text replacement, search only that path and read only files with matches; do not explore unrelated directories or reread docs that are outside scope.
 - Make the smallest change that satisfies the task.
 - Verify with a build or test command before finishing when one is cheap to run.
 - When done, reply with a short plain-text summary and no more tool calls.`;

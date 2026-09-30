@@ -68,7 +68,7 @@ export const toolLabel = (toolName: string, input: unknown): string => {
     case "grep":
       return `grep ${typeof args.pattern === "string" ? clip(args.pattern) : ""}`.trimEnd();
     case "edit":
-      return `edit ${path}`;
+      return `edit ${path} · ${args.replace_all === true ? "replace all" : "replace"} ${clip(JSON.stringify(args.old_string ?? ""), 26)} → ${clip(JSON.stringify(args.new_string ?? ""), 26)}`;
     case "write":
       return `write ${path}`;
     case "bash":
@@ -78,6 +78,95 @@ export const toolLabel = (toolName: string, input: unknown): string => {
     default:
       return toolName;
   }
+};
+
+export type RenderableFileChange = {
+  path: string;
+  existed: boolean;
+  content?: string;
+  after: string;
+};
+
+type DiffLine = { kind: "context" | "added" | "removed"; text: string };
+
+const buildDiffLines = (before: string, after: string): DiffLine[] => {
+  const oldLines = before.split("\n");
+  const newLines = after.split("\n");
+  const columns = newLines.length + 1;
+  if (oldLines.length * newLines.length > 120_000) {
+    let prefix = 0;
+    while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix += 1;
+    let suffix = 0;
+    while (
+      suffix < oldLines.length - prefix &&
+      suffix < newLines.length - prefix &&
+      oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
+    ) suffix += 1;
+    return [
+      ...oldLines.slice(Math.max(0, prefix - 3), prefix).map((text) => ({ kind: "context" as const, text })),
+      ...oldLines.slice(prefix, oldLines.length - suffix).map((text) => ({ kind: "removed" as const, text })),
+      ...newLines.slice(prefix, newLines.length - suffix).map((text) => ({ kind: "added" as const, text })),
+      ...oldLines.slice(oldLines.length - suffix, oldLines.length - suffix + 3).map((text) => ({ kind: "context" as const, text })),
+    ];
+  }
+
+  const table = new Uint32Array((oldLines.length + 1) * columns);
+  for (let i = oldLines.length - 1; i >= 0; i -= 1) {
+    for (let j = newLines.length - 1; j >= 0; j -= 1) {
+      const index = i * columns + j;
+      table[index] = oldLines[i] === newLines[j]
+        ? table[(i + 1) * columns + j + 1]! + 1
+        : Math.max(table[(i + 1) * columns + j]!, table[index + 1]!);
+    }
+  }
+  const lines: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < oldLines.length || j < newLines.length) {
+    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
+      lines.push({ kind: "context", text: oldLines[i]! });
+      i += 1;
+      j += 1;
+    } else if (
+      i < oldLines.length &&
+      (j >= newLines.length || table[(i + 1) * columns + j]! >= table[i * columns + j + 1]!)
+    ) {
+      lines.push({ kind: "removed", text: oldLines[i]! });
+      i += 1;
+    } else {
+      lines.push({ kind: "added", text: newLines[j]! });
+      j += 1;
+    }
+  }
+  return lines;
+};
+
+export const formatFileChange = (change: RenderableFileChange): string[] => {
+  const before = change.existed ? change.content ?? "" : "";
+  const diff = buildDiffLines(before, change.after);
+  const added = diff.filter((line) => line.kind === "added").length;
+  const removed = diff.filter((line) => line.kind === "removed").length;
+  const visibleIndexes = new Set<number>();
+  const changedIndexes = diff.flatMap((line, index) => line.kind === "context" ? [] : [index]);
+  for (const index of changedIndexes) {
+    for (let i = Math.max(0, index - 3); i <= Math.min(diff.length - 1, index + 3); i += 1) visibleIndexes.add(i);
+  }
+  const lines = [
+    `${c.cyan("✳")} ${c.bold(change.path)}  ${c.green(`+${added}`)} ${c.red(`−${removed}`)}`,
+  ];
+  let previous = -1;
+  for (const index of [...visibleIndexes].sort((a, b) => a - b)) {
+    if (previous >= 0 && index > previous + 1) lines.push(c.dim("  │ …"));
+    const line = diff[index]!;
+    const prefix = line.kind === "added" ? c.green("+ ") : line.kind === "removed" ? c.red("− ") : c.dim("  ");
+    lines.push(`${prefix}${line.text.slice(0, 220)}`);
+    previous = index;
+  }
+  if (changedIndexes.length === 0) lines.push(c.dim("  │ no textual changes"));
+  if (lines.length > 124) {
+    return [...lines.slice(0, 120), c.dim(`  │ … ${lines.length - 120} more diff lines`)];
+  }
+  return lines;
 };
 
 export const usageLine = (u: {

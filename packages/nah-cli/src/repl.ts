@@ -11,7 +11,7 @@ import { getModelOptions } from "./model-catalog.js";
 import { pickModel } from "./model-picker.js";
 import { removeProviderKey, storeProviderKey, type BuiltinProvider } from "./credentials.js";
 import { createApprover, parsePermissionMode, type PermissionMode } from "./permissions.js";
-import { c, renderWelcome, toolLabel, usageLine } from "./render.js";
+import { c, formatFileChange, renderWelcome, toolLabel, usageLine, type RenderableFileChange } from "./render.js";
 import { runTurn, type SessionState, type StepRecovery } from "./session.js";
 import { createTaskLedgerTool, formatTaskLedger } from "./task-ledger.js";
 import { createDelegationTool } from "./delegation.js";
@@ -47,6 +47,7 @@ export const renderTurn = async (
   events: AsyncIterable<HarnessEvent>,
   out: NodeJS.WriteStream = process.stdout,
   getProviderStatus: () => string | null = () => null,
+  getFileChanges: () => RenderableFileChange[] = () => [],
 ): Promise<void> => {
   let textOpen = false;
   let textLineStart = true;
@@ -69,6 +70,7 @@ export const renderTurn = async (
     }
   };
   let spinnerLabel = "";
+  let renderedChanges = 0;
   let spinnerFrame = 0;
   let spinnerVisible = false;
   const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -98,6 +100,16 @@ export const renderTurn = async (
       textLineStart = true;
     }
   };
+  const renderNewChanges = () => {
+    const changes = getFileChanges();
+    while (renderedChanges < changes.length) {
+      const change = changes[renderedChanges++]!;
+      nl();
+      spinnerLabel = "";
+      for (const line of formatFileChange(change)) writeIndented(`${line}\n`);
+      out.write("\n");
+    }
+  };
 
   const iterator = events[Symbol.asyncIterator]();
   let nextEvent = iterator.next();
@@ -113,6 +125,7 @@ export const renderTurn = async (
     if (outcome.result.done) break;
     const e = outcome.result.value;
     nextEvent = iterator.next();
+    renderNewChanges();
     switch (e.type) {
       case "step-start":
         clearSpinner();
@@ -666,8 +679,14 @@ export const startRepl = async (state: SessionState): Promise<void> => {
             continue;
           }
           const turn = runTurn(state, prompt, { signal: abort.signal });
+          const turnFileChanges = state.activeFileChanges ?? [];
           try {
-            await renderTurn(withStatusUpdates(turn.events, state), out, () => state.providerStatus);
+            await renderTurn(
+              withStatusUpdates(turn.events, state),
+              out,
+              () => state.providerStatus,
+              () => turnFileChanges,
+            );
             await turn.done;
           } catch (e) {
             out.write(c.red(e instanceof Error ? e.message : String(e)) + "\n");

@@ -69,6 +69,7 @@ const latestTaskLedgerOutput = (messages: ModelMessage[]): string | null => {
 };
 
 const SUMMARIZE_INSTRUCTION = `Summarize this coding-agent transcript prefix for a future model that will continue the task.
+Preserve the user's original request verbatim, including exact strings to find/replace, replacement text, and path scope. The original user request is authoritative; assistant plans and prior summaries are fallible and must never change or override it.
 Keep: the task, decisions made, files read/edited (with paths), commands run and their outcomes, anything still unresolved.
 If a durable task plan or task_ledger output appears, preserve its goal, ordered step IDs and statuses, exact acceptance check commands, latest attempt exit codes, outputs, and results precisely.
 Be terse — bullet points, no prose.`;
