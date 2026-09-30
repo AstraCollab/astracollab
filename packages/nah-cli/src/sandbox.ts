@@ -27,8 +27,12 @@ type BlaxelSandboxInstance = {
     exec(opts: {
       command: string;
       workingDir?: string;
-      timeoutMs?: number;
-    }): Promise<{ stdout?: string; stderr?: string; exitCode?: number } | string>;
+      timeout?: number;
+      waitForCompletion?: boolean;
+    }): Promise<
+      | { stdout?: string; stderr?: string; exitCode?: number; status?: string }
+      | string
+    >;
   };
 };
 
@@ -52,10 +56,13 @@ export const createBlaxelEnvironment = async (
   opts: BlaxelEnvironmentOptions = {},
 ): Promise<BlaxelEnvironment> => {
   const apiKey = (process.env.BL_API_KEY ?? process.env.BLAXEL_API_KEY ?? "").trim();
-  if (!apiKey || !BLAXEL_WORKSPACE) {
+  if (!apiKey) {
     throw new Error(
-      "--sandbox needs Blaxel credentials: set BL_API_KEY and BL_WORKSPACE (or run `bl login`).",
+      "--sandbox needs a Blaxel API key: set BL_API_KEY (workspace is inferred from the key, or set BL_WORKSPACE).",
     );
+  }
+  if (BLAXEL_WORKSPACE) {
+    process.env.BL_WORKSPACE = BLAXEL_WORKSPACE;
   }
   let bl: { SandboxInstance: { create: (cfg: unknown) => Promise<BlaxelSandboxInstance>; get: (name: string) => Promise<BlaxelSandboxInstance>; delete?: (name: string) => Promise<void> } };
   try {
@@ -73,23 +80,31 @@ export const createBlaxelEnvironment = async (
         name,
         image: opts.image ?? "blaxel/ts-app:latest",
         memory: 4096,
+        region: (process.env.BL_REGION ?? "us-pdx-1").trim(),
       });
 
-  const exec = async (command: string, timeoutSeconds?: number) => {
+  const rawExec = async (command: string, workingDir?: string, timeoutSeconds?: number) => {
     const res = await sandbox.process.exec({
       command,
-      workingDir: repoDir,
-      timeoutMs: (timeoutSeconds ?? 120) * 1000,
+      ...(workingDir ? { workingDir } : {}),
+      timeout: timeoutSeconds ?? 120,
+      waitForCompletion: true,
     });
     if (typeof res === "string") {
       return { stdout: res, stderr: "", exitCode: 0 };
     }
     return {
-      stdout: res.stdout ?? "",
-      stderr: res.stderr ?? "",
+      stdout: typeof res.stdout === "string" ? res.stdout : "",
+      stderr: typeof res.stderr === "string" ? res.stderr : "",
       exitCode: typeof res.exitCode === "number" ? res.exitCode : 0,
     };
   };
+
+  // Fresh sandboxes have no repo dir — create it so tools can cwd into it.
+  await rawExec(`mkdir -p ${shellQuote(repoDir)}`, "/").catch(() => undefined);
+
+  const exec = (command: string, timeoutSeconds?: number) =>
+    rawExec(command, repoDir, timeoutSeconds);
 
   const resolveInRepo = (path: string): string => {
     const cleaned = path.replace(/\\/g, "/").replace(/^\/+/, "");
