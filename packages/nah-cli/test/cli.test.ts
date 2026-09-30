@@ -1,12 +1,15 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
+import { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { parseCliArgs } from "../src/args.js";
 import { resolveModel } from "../src/model.js";
 import { parsePermissionMode } from "../src/permissions.js";
 import { withFileInclusions } from "../src/context.js";
+import { handleSlashCommand } from "../src/repl.js";
+import type { SessionState } from "../src/session.js";
 
 describe("parseCliArgs", () => {
   it("defaults to interactive with no args (when TTY)", () => {
@@ -95,5 +98,61 @@ describe("withFileInclusions", () => {
 
   it("passes prompt through with no files", async () => {
     expect(await withFileInclusions(dir, [], "plain")).toBe("plain");
+  });
+});
+
+describe("undo command", () => {
+  const createState = (current: string) => {
+    let file = current;
+    let persisted: unknown[] = [];
+    const state = {
+      messages: [{ role: "user", content: "new prompt" }],
+      system: "",
+      cwd: ".",
+      tools: {},
+      workspace: {
+        readFile: async () => file,
+        writeFile: async (_path: string, content: string) => { file = content; },
+        deleteFile: async () => { file = ""; },
+        exists: async () => true,
+        readdir: async () => [],
+        grep: async () => "",
+        exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      },
+      activeFileChanges: null,
+      undoHistory: [{
+        changes: [
+          { path: "file.ts", existed: true, content: "before", after: "middle" },
+          { path: "file.ts", existed: true, content: "middle", after: "after" },
+        ],
+        messages: [{ role: "user", content: "old prompt" }],
+      }],
+      sessionBasePath: null,
+      store: { append: async () => {}, replace: async (messages: unknown[]) => { persisted = messages; }, reset: async () => {}, load: async () => [], fork: async () => ({} as never), path: "" },
+      model: {} as SessionState["model"],
+      totalUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      turns: 1,
+      permissions: "yolo" as const,
+    } as unknown as SessionState;
+    const output: string[] = [];
+    const stream = new Writable({ write(chunk, _encoding, done) { output.push(String(chunk)); done(); } });
+    return { state, output, stream, file: () => file, persisted: () => persisted };
+  };
+
+  it("restores file preimages and the prior transcript", async () => {
+    const fixture = createState("after");
+    await handleSlashCommand("/undo", fixture.state, ".", fixture.stream);
+    expect(fixture.file()).toBe("before");
+    expect(fixture.state.messages).toEqual([{ role: "user", content: "old prompt" }]);
+    expect(fixture.persisted()).toEqual(fixture.state.messages);
+    expect(fixture.state.undoHistory).toHaveLength(0);
+  });
+
+  it("refuses to overwrite a file changed since the agent turn", async () => {
+    const fixture = createState("external edit");
+    await handleSlashCommand("/undo", fixture.state, ".", fixture.stream);
+    expect(fixture.file()).toBe("external edit");
+    expect(fixture.state.undoHistory).toHaveLength(1);
+    expect(fixture.output.join("")).toContain("changed since NAH edited it");
   });
 });

@@ -62,22 +62,26 @@ const main = async (): Promise<number> => {
       noSession: args.noSession,
       permissions,
       sandbox: args.sandbox,
+      allowUnconfiguredModel: true,
     });
-    if (args.continueSession || args.sessionPath) {
-      const resumed = await resumeSession(state);
-      if (resumed) {
-        process.stdout.write(`(resumed ${state.messages.length} messages)\n`);
+    try {
+      if (args.continueSession || args.sessionPath) {
+        const resumed = await resumeSession(state);
+        if (resumed) {
+          process.stdout.write(`(resumed ${state.messages.length} messages)\n`);
+        }
       }
+      if (prompt) {
+        const turn = runTurn(state, prompt);
+        await renderTurn(turn.events);
+        await turn.done;
+        process.stdout.write("\n");
+      }
+      await startRepl(state);
+      return 0;
+    } finally {
+      await state.destroySandbox?.().catch(() => undefined);
     }
-    if (prompt) {
-      const turn = runTurn(state, prompt);
-      await renderTurn(turn.events);
-      await turn.done;
-      process.stdout.write("\n");
-    }
-    await startRepl(state);
-    await state.destroySandbox?.().catch(() => undefined);
-    return 0;
   }
 
   // print / json: single shot
@@ -94,26 +98,29 @@ const main = async (): Promise<number> => {
     permissions,
     sandbox: args.sandbox,
   });
-  if (args.continueSession || args.sessionPath) {
-    await resumeSession(state);
-  }
+  try {
+    if (args.continueSession || args.sessionPath) {
+      await resumeSession(state);
+    }
 
-  const turn = runTurn(state, prompt);
-  if (args.mode === "json") {
-    for await (const event of turn.events) {
-      process.stdout.write(`${JSON.stringify(event)}\n`);
-    }
-  } else {
-    for await (const event of turn.events) {
-      if (event.type === "text-delta") {
-        process.stdout.write(event.text);
+    const turn = runTurn(state, prompt);
+    if (args.mode === "json") {
+      for await (const event of turn.events) {
+        process.stdout.write(`${JSON.stringify(event)}\n`);
       }
+    } else {
+      for await (const event of turn.events) {
+        if (event.type === "text-delta") {
+          process.stdout.write(event.text);
+        }
+      }
+      process.stdout.write("\n");
     }
-    process.stdout.write("\n");
+    const result = await turn.done;
+    return result.reason === "error" ? 1 : 0;
+  } finally {
+    await state.destroySandbox?.().catch(() => undefined);
   }
-  const result = await turn.done;
-  await state.destroySandbox?.().catch(() => undefined);
-  return result.reason === "error" ? 1 : 0;
 };
 
 main()

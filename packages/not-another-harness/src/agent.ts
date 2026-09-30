@@ -12,24 +12,21 @@ import type {
 
 const DEFAULT_MAX_STEPS = 32;
 const DEFAULT_MAX_TOKENS = 400_000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
 const DEFAULT_COMPACT_AT_TOKENS = 120_000;
 const DEFAULT_KEEP_RECENT = 6;
 
-/** Rough chars/4 estimate when the provider reports no usage for a step. */
-const estimateTokens = (messages: ModelMessage[]): number => {
-  let chars = 0;
-  for (const m of messages) {
-    chars += typeof m.content === "string" ? m.content.length : JSON.stringify(m.content).length;
-  }
-  return Math.ceil(chars / 4);
-};
+/** Rough estimate used only when the provider omits usage. */
+const estimateTokens = (value: unknown, charsPerToken = 4): number =>
+  Math.ceil((typeof value === "string" ? value.length : JSON.stringify(value ?? "").length) / charsPerToken);
 
-const emptyUsage = (): HarnessUsage => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+const emptyUsage = (): HarnessUsage => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0, estimated: false });
 
 const addUsage = (acc: HarnessUsage, step: Partial<HarnessUsage> | undefined): HarnessUsage => {
   acc.inputTokens += step?.inputTokens ?? 0;
   acc.outputTokens += step?.outputTokens ?? 0;
   acc.totalTokens += step?.totalTokens ?? (step?.inputTokens ?? 0) + (step?.outputTokens ?? 0);
+  acc.estimated ||= step?.estimated === true;
   return acc;
 };
 
@@ -112,6 +109,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
   const resultPromise = (async (): Promise<HarnessRunResult> => {
     const maxSteps = Math.max(1, Math.floor(options.maxSteps ?? DEFAULT_MAX_STEPS));
     const maxTokens = Math.max(0, Math.floor(options.maxTokens ?? DEFAULT_MAX_TOKENS));
+    const maxOutputTokens = Math.max(1, Math.floor(options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS));
     const compactAt = Math.max(
       10_000,
       Math.floor(options.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS),
@@ -124,6 +122,8 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 
     const usage = emptyUsage();
     let compactions = 0;
+    let steps = 0;
+    let streamedText = "";
     let reason: HarnessStopReason = "completed";
 
     events.push({ type: "run-start", stepBudget: maxSteps, tokenBudget: maxTokens });
@@ -134,14 +134,30 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           reason = "aborted";
           break;
         }
+
+        const remainingTokens = maxTokens > 0 ? maxTokens - usage.totalTokens : Number.POSITIVE_INFINITY;
+        const requestMessages = messages;
+        const estimatedInputTokens = estimateTokens({ system: options.system, messages: requestMessages }, 3);
+        if (maxTokens > 0 && remainingTokens <= estimatedInputTokens) {
+          reason = "max-tokens";
+          break;
+        }
+
+        const stepOutputLimit = Math.min(
+          maxOutputTokens,
+          maxTokens > 0 ? Math.max(1, remainingTokens - estimatedInputTokens) : maxOutputTokens,
+        );
+        steps = step;
+        await options.onStepStart?.(step, [...messages]);
         events.push({ type: "step-start", step });
 
         const stepResult = streamText({
           model: options.model,
           system: options.system,
-          messages,
+          messages: requestMessages,
           tools: options.tools as ToolSet,
           abortSignal: options.abortSignal,
+          maxOutputTokens: stepOutputLimit,
           // One model round-trip (+ its tool executions) per loop iteration —
           // stop conditions, compaction, and events live in *this* loop.
           stopWhen: stepCountIs(1),
@@ -149,6 +165,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 
         for await (const part of stepResult.fullStream) {
           if (part.type === "text-delta") {
+            streamedText += part.text;
             events.push({ type: "text-delta", step, text: part.text });
           } else if (part.type === "tool-call") {
             events.push({
@@ -178,28 +195,38 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           }
         }
 
-        const [response, stepUsage] = await Promise.all([
+        const [response, stepUsage, finishReason] = await Promise.all([
           stepResult.response,
           stepResult.usage,
+          stepResult.finishReason,
         ]);
         messages.push(...response.messages);
-        addUsage(usage, {
-          inputTokens: stepUsage.inputTokens ?? 0,
-          outputTokens: stepUsage.outputTokens ?? 0,
-          totalTokens: stepUsage.totalTokens,
-        });
-        if (usage.totalTokens === 0) {
-          // Provider reported nothing — anchor budgets on an estimate.
-          usage.totalTokens = estimateTokens(messages);
+        await options.onStepFinish?.(step, [...messages]);
+        const inputTokens = stepUsage.inputTokens ?? 0;
+        const outputTokens = stepUsage.outputTokens ?? 0;
+        const totalTokens = stepUsage.totalTokens ?? inputTokens + outputTokens;
+        if (totalTokens > 0 || inputTokens > 0 || outputTokens > 0) {
+          addUsage(usage, { inputTokens, outputTokens, totalTokens });
+        } else {
+          const estimatedInput = estimateTokens({ system: options.system, messages: requestMessages });
+          const estimatedOutput = estimateTokens(response.messages.filter((message) => message.role === "assistant"));
+          usage.inputTokens += estimatedInput;
+          usage.outputTokens += estimatedOutput;
+          usage.totalTokens += estimatedInput + estimatedOutput;
+          usage.estimated = true;
         }
         events.push({ type: "step-finish", step, usage: { ...usage } });
 
-        if (!stepHadToolCalls(response.messages)) {
-          reason = "completed";
-          break;
-        }
         if (maxTokens > 0 && usage.totalTokens >= maxTokens) {
           reason = "max-tokens";
+          break;
+        }
+        if (finishReason === "length") {
+          reason = "max-tokens";
+          break;
+        }
+        if (!stepHadToolCalls(response.messages)) {
+          reason = "completed";
           break;
         }
         if (step === maxSteps) {
@@ -214,8 +241,10 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
             messages,
             keepRecent,
             mode: compactionMode,
+            maxTokensRemaining: maxTokens > 0 ? maxTokens - usage.totalTokens : undefined,
           });
           if (compacted) {
+            addUsage(usage, compacted.usage);
             events.push({
               type: "compacted",
               droppedMessages: compacted.droppedMessages,
@@ -224,19 +253,21 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
             });
             messages = compacted.messages;
             compactions += 1;
-            // Re-anchor the budget on the smaller transcript.
-            usage.totalTokens = estimateTokens(messages);
+            if (maxTokens > 0 && usage.totalTokens >= maxTokens) {
+              reason = "max-tokens";
+              break;
+            }
           }
         }
       }
     } catch (e) {
       if (isAbortError(e) || options.abortSignal?.aborted) {
-        events.push({ type: "finish", reason: "aborted", text: "", usage: { ...usage } });
+        events.push({ type: "finish", reason: "aborted", text: streamedText, usage: { ...usage } });
         events.close();
         return {
-          text: "",
+          text: streamedText,
           reason: "aborted",
-          steps: messages.length,
+          steps,
           usage,
           messages,
           compactions,
@@ -248,13 +279,13 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
       throw e;
     }
 
-    const text = lastAssistantText(messages);
+    const text = reason === "aborted" ? streamedText : lastAssistantText(messages);
     events.push({ type: "finish", reason, text, usage: { ...usage } });
     events.close();
     return {
       text,
       reason,
-      steps: messages.length,
+      steps,
       usage,
       messages,
       compactions,

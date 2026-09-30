@@ -19,6 +19,10 @@ export type CodingToolsOptions = {
    * everything is allowed (Pi-style trust).
    */
   approveToolCall?: (toolName: string, input: unknown) => Promise<boolean>;
+  /** Called with the preimage immediately before each built-in file mutation. */
+  onFileWrite?: (change: { path: string; existed: boolean; content?: string; after: string }) => void;
+  /** Called after an approved shell command completes, for recovery/audit records. */
+  onShellCommand?: (command: string) => void;
 };
 
 /** Default gate scope: read/list/grep are always auto-allowed. */
@@ -229,6 +233,7 @@ export const createCodingTools = (
           ? content.split(old_string).join(new_string)
           : content.replace(old_string, new_string);
       await env.writeFile(path, next);
+      options.onFileWrite?.({ path, existed: true, content, after: next });
       readPaths.add(path);
       return `Replaced ${replace_all === true ? occurrences : 1} occurrence${occurrences === 1 ? "" : "s"} in ${path}`;
     },
@@ -245,7 +250,10 @@ export const createCodingTools = (
       if (requireRead && !readPaths.has(path) && (await env.exists(path))) {
         return `Error: read "${path}" with the read tool before overwriting.`;
       }
+      const existed = await env.exists(path);
+      const previous = existed ? await env.readFile(path) : undefined;
       await env.writeFile(path, content);
+      options.onFileWrite?.({ path, existed, ...(previous === undefined ? {} : { content: previous }), after: content });
       readPaths.add(path);
       return `Wrote ${content.length} characters to ${path}`;
     },
@@ -261,6 +269,7 @@ export const createCodingTools = (
     execute: async ({ command, timeoutSeconds }) => {
       try {
         const res = await env.exec(command, { timeoutSeconds: timeoutSeconds ?? 120 });
+        options.onShellCommand?.(`${command} [exit ${res.exitCode}]`);
         const hint = "Re-run with a narrower command or `| tail -n N`.";
         const out = [
           res.stdout.trim().length > 0 ? capTail(res.stdout, DEFAULT_CAPS.bash.maxLines, DEFAULT_CAPS.bash.maxChars, hint) : "",
@@ -271,6 +280,7 @@ export const createCodingTools = (
           .join("\n");
         return out;
       } catch (e) {
+        options.onShellCommand?.(`${command} [error: ${e instanceof Error ? e.message : String(e)}]`);
         return `Error: ${e instanceof Error ? e.message : String(e)}`;
       }
     },

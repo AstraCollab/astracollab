@@ -214,6 +214,7 @@ describe("runAgent", () => {
     expect(result.compactions).toBe(1);
     expect(result.text).toBe("post-compaction");
   });
+
 });
 
 describe("jsonl session store", () => {
@@ -229,6 +230,37 @@ describe("jsonl session store", () => {
         { role: "user", content: "task one" },
         { role: "assistant", content: "done" },
       ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("forks the loaded transcript into an independent session file", async () => {
+    const dir = await mkdtemp(nodePath.join(tmpdir(), "nah-session-fork-"));
+    try {
+      const parent = createJsonlSessionStore(nodePath.join(dir, "main.jsonl"));
+      await parent.append([{ role: "user", content: "original task" }]);
+      const ledger = {
+        version: 2 as const,
+        goal: "ship a focused change",
+        status: "in_progress" as const,
+        steps: [{ id: "1", title: "inspect", status: "completed" as const }],
+        checks: [{ id: "1", description: "tests pass", command: "pnpm test", status: "pending" as const, attempts: [] }],
+        updatedAt: new Date().toISOString(),
+      };
+      await parent.saveTaskLedger(ledger);
+      const fork = await parent.fork(nodePath.join(dir, "experiment.jsonl"));
+      await fork.append([{ role: "user", content: "alternate direction" }]);
+      expect(await parent.load()).toEqual([{ role: "user", content: "original task" }]);
+      expect(await fork.load()).toEqual([
+        { role: "user", content: "original task" },
+        { role: "user", content: "alternate direction" },
+      ]);
+      expect(await fork.loadTaskLedger()).toEqual(ledger);
+      expect(await parent.loadTaskLedger()).toEqual(ledger);
+      await parent.reset();
+      expect(await parent.loadTaskLedger()).toBeNull();
+      expect(await fork.loadTaskLedger()).toEqual(ledger);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -5,6 +5,8 @@ export type HarnessUsage = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** True when one or more step totals had to be estimated from text length. */
+  estimated?: boolean;
 };
 
 /** Why an agent run ended. */
@@ -14,6 +16,20 @@ export type HarnessStopReason =
   | "max-tokens"
   | "aborted"
   | "error";
+
+export type WorkspaceSnapshotEntry =
+  | { kind: "directory"; mode: number }
+  | { kind: "file"; mode: number; contentBase64: string }
+  | { kind: "symlink"; mode: number; target: string };
+
+export type WorkspaceSnapshot = {
+  complete: boolean;
+  entries: Record<string, WorkspaceSnapshotEntry>;
+  excludedPaths: string[];
+  reason?: string;
+};
+
+export type WorkspaceRestoreResult = { restoredPaths: string[]; conflicts: string[] };
 
 /** Streaming events emitted while the agent loop runs. */
 export type HarnessEvent =
@@ -41,6 +57,8 @@ export interface ToolEnvironment {
   readFile(path: string): Promise<string>;
   /** Write a UTF-8 text file, creating parent directories as needed. */
   writeFile(path: string, content: string): Promise<void>;
+  /** Remove a file created in the workspace. */
+  deleteFile?(path: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   /** Single-level directory listing of `dir`. */
   readdir(dir: string): Promise<Array<{ name: string; type: "file" | "directory" }>>;
@@ -60,6 +78,10 @@ export interface ToolEnvironment {
     command: string,
     opts?: { timeoutSeconds?: number },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  /** Optional complete snapshot of workspace files for safe per-step recovery. */
+  snapshot?(): Promise<WorkspaceSnapshot>;
+  /** Restore paths only if current contents still match the expected post-step snapshot. */
+  restoreSnapshot?(before: WorkspaceSnapshot, after: WorkspaceSnapshot, paths: string[]): Promise<WorkspaceRestoreResult>;
 }
 
 export type HarnessCompactionMode = "model" | "truncate" | "off";
@@ -77,6 +99,8 @@ export type HarnessRunOptions = {
   maxSteps?: number;
   /** Hard cumulative token cap for the run. Default 400_000; 0 disables. */
   maxTokens?: number;
+  /** Maximum generated tokens for one model response. Default 8_192. */
+  maxOutputTokens?: number;
   /** Cancel the run. */
   abortSignal?: AbortSignal;
   /**
@@ -91,6 +115,9 @@ export type HarnessRunOptions = {
   compactKeepRecent?: number;
   /** Prior messages to continue from (e.g. restored session branch). */
   messages?: ModelMessage[];
+  /** Optional awaited callbacks at each model step boundary. */
+  onStepStart?: (step: number, messages: ModelMessage[]) => void | Promise<void>;
+  onStepFinish?: (step: number, messages: ModelMessage[]) => void | Promise<void>;
 };
 
 export type HarnessRunResult = {

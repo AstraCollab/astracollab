@@ -1,4 +1,5 @@
 import { DEFAULT_CAPS, type ToolEnvironment } from "@astracollab/not-another-harness";
+import { posix as posixPath } from "node:path";
 
 /**
  * Remote ToolEnvironment backed by a Blaxel code sandbox.
@@ -73,7 +74,8 @@ export const createBlaxelEnvironment = async (
 
   const name =
     opts.sandboxName ?? `nah-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-  const repoDir = opts.repoDir ?? "/workspace/repo";
+  const repoDir = posixPath.resolve(opts.repoDir ?? "/workspace/repo");
+  const ownsSandbox = opts.sandboxName == null;
   const sandbox: BlaxelSandboxInstance = opts.sandboxName
     ? await bl.SandboxInstance.get(name)
     : await bl.SandboxInstance.create({
@@ -107,17 +109,30 @@ export const createBlaxelEnvironment = async (
     rawExec(command, repoDir, timeoutSeconds);
 
   const resolveInRepo = (path: string): string => {
-    const cleaned = path.replace(/\\/g, "/").replace(/^\/+/, "");
-    if (path.startsWith("/")) {
-      return path.replace(/\.\.+/g, ""); // absolute sandbox path, best-effort guard
+    const normalizedInput = path.replace(/\\/g, "/");
+    if (normalizedInput.startsWith("/") || /^[A-Za-z]:/.test(normalizedInput)) {
+      throw new Error(`absolute paths are not allowed in the sandbox repo: ${path}`);
     }
-    return `${repoDir}/${cleaned}`.replace(/\/\.\.+/g, "");
+    const relative = posixPath.normalize(normalizedInput || ".");
+    if (relative === ".." || relative.startsWith("../")) {
+      throw new Error(`path escapes sandbox repo: ${path}`);
+    }
+    const resolved = posixPath.resolve(repoDir, relative);
+    if (resolved !== repoDir && !resolved.startsWith(`${repoDir}/`)) {
+      throw new Error(`path escapes sandbox repo: ${path}`);
+    }
+    return resolved;
   };
 
   const env: ToolEnvironment = {
     readFile: (path) => sandbox.fs.read(resolveInRepo(path)),
     writeFile: async (path, content) => {
       await sandbox.fs.write(resolveInRepo(path), content);
+    },
+    deleteFile: async (path: string) => {
+      const sandboxFs = sandbox.fs as typeof sandbox.fs & { rm?: (path: string) => Promise<void> };
+      if (!sandboxFs.rm) throw new Error("the configured sandbox SDK does not support file removal");
+      await sandboxFs.rm(resolveInRepo(path));
     },
     exists: async (path) => {
       try {
@@ -164,7 +179,7 @@ export const createBlaxelEnvironment = async (
     env,
     sandboxName: name,
     destroy: async () => {
-      if (process.env.NAH_KEEP_SANDBOX === "1") {
+      if (!ownsSandbox || process.env.NAH_KEEP_SANDBOX === "1") {
         return;
       }
       await bl.SandboxInstance.delete?.(name).catch(() => undefined);

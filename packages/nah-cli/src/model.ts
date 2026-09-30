@@ -1,4 +1,5 @@
 import type { LanguageModel } from "ai";
+import { getStoredProviderKey } from "./credentials.js";
 
 export const DEFAULT_MODEL_SPEC = "anthropic:claude-sonnet-4-5";
 
@@ -7,6 +8,55 @@ export type ResolvedModel = {
   provider: string;
   modelId: string;
   model: LanguageModel;
+  setStatusHandler: (handler?: (status: string | null) => void) => void;
+};
+
+const providerFetch = (provider: string) => {
+  let onStatus: ((status: string | null) => void) | undefined;
+  let failures = 0;
+  let statusVersion = 0;
+  const fetchWithStatus: typeof fetch = async (input, init) => {
+    const attempt = failures + 1;
+    const version = ++statusVersion;
+    onStatus?.(attempt > 1 ? `${provider} retry ${attempt}…` : `connecting to ${provider}…`);
+    const startedAt = Date.now();
+    const slowTimer = setTimeout(() => {
+      if (version === statusVersion) onStatus?.(`${provider} network slow · waiting for response`);
+    }, 4_000);
+    try {
+      const response = await fetch(input, init);
+      clearTimeout(slowTimer);
+      const elapsed = Date.now() - startedAt;
+      if (response.status === 429) {
+        failures += 1;
+        onStatus?.(`${provider} rate limited (429) · retrying`);
+      } else if (response.status === 502 || response.status === 503 || response.status === 504) {
+        failures += 1;
+        onStatus?.(`${provider} high traffic (${response.status}) · retrying`);
+      } else if (!response.ok) {
+        failures = 0;
+        onStatus?.(`${provider} returned ${response.status}`);
+      } else {
+        failures = 0;
+        const connectedStatus = `${provider} connected · ${elapsed}ms`;
+        onStatus?.(connectedStatus);
+        const clearTimer = setTimeout(() => {
+          if (version === statusVersion) onStatus?.(null);
+        }, 1_200);
+        clearTimer.unref?.();
+      }
+      return response;
+    } catch (error) {
+      clearTimeout(slowTimer);
+      failures += 1;
+      onStatus?.(`${provider} network error · retrying`);
+      throw error;
+    }
+  };
+  return {
+    fetch: fetchWithStatus,
+    setStatusHandler: (handler?: (status: string | null) => void) => { onStatus = handler; },
+  };
 };
 
 /**
@@ -33,31 +83,40 @@ export const resolveModel = async (
 
   switch (provider) {
     case "anthropic": {
-      if (!env.ANTHROPIC_API_KEY) {
-        throw new Error("ANTHROPIC_API_KEY is not set (or use --model openai:* / openrouter:*)");
+      const apiKey = env.ANTHROPIC_API_KEY ?? await getStoredProviderKey("anthropic");
+      if (!apiKey) {
+        throw new Error("Anthropic credentials are not set; use /provider anthropic or set ANTHROPIC_API_KEY");
       }
+      const transport = providerFetch("Anthropic");
       const { createAnthropic } = await import("@ai-sdk/anthropic");
-      return { spec: raw, provider, modelId, model: createAnthropic()(modelId) };
+      return { spec: raw, provider, modelId, model: createAnthropic({ apiKey, fetch: transport.fetch })(modelId), setStatusHandler: transport.setStatusHandler };
     }
     case "openai": {
-      if (!env.OPENAI_API_KEY) {
-        throw new Error("OPENAI_API_KEY is not set");
+      const apiKey = env.OPENAI_API_KEY ?? await getStoredProviderKey("openai");
+      if (!apiKey) {
+        throw new Error("OpenAI credentials are not set; use /provider openai or set OPENAI_API_KEY");
       }
+      const transport = providerFetch("OpenAI");
       const { createOpenAI } = await import("@ai-sdk/openai");
-      return { spec: raw, provider, modelId, model: createOpenAI()(modelId) };
+      return { spec: raw, provider, modelId, model: createOpenAI({ apiKey, fetch: transport.fetch })(modelId), setStatusHandler: transport.setStatusHandler };
     }
     case "openrouter": {
-      const apiKey = env.OPENROUTER_API_KEY ?? env.OPENAI_API_KEY;
+      const apiKey = env.OPENROUTER_API_KEY
+        ?? env.OPENAI_API_KEY
+        ?? await getStoredProviderKey("openrouter")
+        ?? await getStoredProviderKey("openai");
       if (!apiKey) {
-        throw new Error("OPENROUTER_API_KEY is not set");
+        throw new Error("OpenRouter credentials are not set; use /provider openrouter or set OPENROUTER_API_KEY");
       }
+      const transport = providerFetch("OpenRouter");
       const { createOpenAICompatible } = await import("@ai-sdk/openai-compatible");
       const oi = createOpenAICompatible({
         name: "openrouter",
         baseURL: env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
         apiKey,
+        fetch: transport.fetch,
       });
-      return { spec: raw, provider, modelId, model: oi(modelId) };
+      return { spec: raw, provider, modelId, model: oi(modelId), setStatusHandler: transport.setStatusHandler };
     }
     case "openai-compatible": {
       const apiKey = env.NAH_API_KEY ?? env.OPENAI_COMPATIBLE_API_KEY;
@@ -67,9 +126,10 @@ export const resolveModel = async (
           "openai-compatible needs NAH_API_KEY and NAH_BASE_URL (or OPENAI_COMPATIBLE_*)",
         );
       }
+      const transport = providerFetch("Provider");
       const { createOpenAICompatible } = await import("@ai-sdk/openai-compatible");
-      const oi = createOpenAICompatible({ name: "openai-compatible", baseURL, apiKey });
-      return { spec: raw, provider, modelId, model: oi(modelId) };
+      const oi = createOpenAICompatible({ name: "openai-compatible", baseURL, apiKey, fetch: transport.fetch });
+      return { spec: raw, provider, modelId, model: oi(modelId), setStatusHandler: transport.setStatusHandler };
     }
     default:
       throw new Error(

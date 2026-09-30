@@ -48,7 +48,7 @@ Options:
   -v, --version         Show version
 
 Slash commands (interactive):
-  /help /model /stats /compact /clear /session /quit
+  /help /model /stats /task /compact /clear /session /quit
 `;
 
 export const parseCliArgs = (
