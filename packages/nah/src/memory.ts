@@ -15,8 +15,7 @@ import { promises as fs } from "node:fs";
 import { createHash } from "node:crypto";
 import * as os from "node:os";
 import * as nodePath from "node:path";
-import { generateObject, generateText, type LanguageModel } from "ai";
-import { z } from "zod";
+import { generateText, type LanguageModel } from "ai";
 import { CognitiveMemory } from "@astracollab/not-another-harness";
 import type { MemoryReconciliation } from "@astracollab/not-another-harness";
 
@@ -52,6 +51,39 @@ type Extracted = {
 const IMPACTS = new Set(["low", "medium", "critical"]);
 
 /**
+ * Slice the first balanced `{...}` (or `[...]`) out of a model response.
+ *
+ * A response cannot go straight to `JSON.parse`: models wrap JSON in prose,
+ * prepend "Here you go:", or add a closing sentence. Brace counting has to
+ * respect string boundaries, or a `}` inside a remembered statement truncates
+ * the object and the whole reply is lost.
+ */
+const sliceBalancedJson = (text: string, opener: "{" | "["): string | null => {
+  const start = text.indexOf(opener);
+  if (start < 0) return null;
+  const close = opener === "{" ? "}" : "]";
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === opener) depth += 1;
+    else if (ch === close) {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+};
+
+/**
  * Tolerant JSON recovery.
  *
  * Models wrap JSON in prose or code fences, prepend "Here is the JSON:", or
@@ -60,59 +92,36 @@ const IMPACTS = new Set(["low", "medium", "critical"]);
  */
 export const parseExtraction = (text: string): Extracted => {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
-  const candidate = fenced?.[1] ?? text;
-  const start = candidate.indexOf("{");
-  if (start < 0) return { memories: [] };
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < candidate.length; i += 1) {
-    const ch = candidate[i]!;
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === "{") depth += 1;
-    else if (ch === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        try {
-          const parsed = JSON.parse(candidate.slice(start, i + 1)) as {
-            memories?: unknown;
-            tensions?: unknown;
-          };
-          const memories = Array.isArray(parsed.memories)
-            ? (parsed.memories as Array<Record<string, unknown>>)
-                .filter((m) => typeof m.content === "string")
-                .map((m) => ({
-                  content: m.content as string,
-                  domains: Array.isArray(m.domains) ? (m.domains as string[]) : [],
-                }))
-            : [];
-          const tensions = Array.isArray(parsed.tensions)
-            ? parsed.tensions
-                .filter((t): t is Record<string, unknown> => Boolean(t) && typeof t === "object")
-                .filter((t) => typeof t.claimA === "string" && typeof t.claimB === "string")
-                .map((t) => ({
-                  claimA: t.claimA as string,
-                  claimB: t.claimB as string,
-                  impact: (IMPACTS.has(t.impact as string)
-                    ? t.impact
-                    : "low") as "low" | "medium" | "critical",
-                  actionableQuestion: String(t.actionableQuestion ?? "Clarify before acting."),
-                }))
-            : [];
-          return { memories, tensions };
-        } catch {
-          return { memories: [] };
-        }
-      }
-    }
+  const slice = sliceBalancedJson(fenced?.[1] ?? text, "{");
+  if (!slice) return { memories: [] };
+  try {
+    const parsed = JSON.parse(slice) as { memories?: unknown; tensions?: unknown };
+    const memories = Array.isArray(parsed.memories)
+      ? (parsed.memories as Array<Record<string, unknown>>)
+          .filter((m) => typeof m.content === "string")
+          .map((m) => ({
+            content: m.content as string,
+            domains: Array.isArray(m.domains) ? (m.domains as string[]) : [],
+          }))
+      : [];
+    const tensions = Array.isArray(parsed.tensions)
+      ? parsed.tensions
+          .filter((t): t is Record<string, unknown> => Boolean(t) && typeof t === "object")
+          .filter((t) => typeof t.claimA === "string" && typeof t.claimB === "string")
+          .map((t) => ({
+            claimA: t.claimA as string,
+            claimB: t.claimB as string,
+            impact: (IMPACTS.has(t.impact as string) ? t.impact : "low") as
+              | "low"
+              | "medium"
+              | "critical",
+            actionableQuestion: String(t.actionableQuestion ?? "Clarify before acting."),
+          }))
+      : [];
+    return { memories, tensions };
+  } catch {
+    return { memories: [] };
   }
-  return { memories: [] };
 };
 
 const EXTRACT_INSTRUCTION = `You maintain durable memory for a coding agent.
@@ -173,16 +182,82 @@ export const createTurnExtractor = (model: LanguageModel): TurnExtractor => {
   };
 };
 
-const RECONCILE_SCHEMA = z.object({
-  verdicts: z.array(
-    z.object({
-      index: z.number().describe("Which candidate this verdict is for"),
-      action: z.enum(["add", "merge", "replace", "reject"]),
-      content: z.string().optional().describe("The fuller statement, when merging or replacing"),
-      reason: z.string().optional(),
-    }),
-  ),
-});
+const RECONCILE_SCHEMA_HINT = `Reply with a single JSON object and nothing else:
+{"verdicts":[{"index":0,"action":"add|merge|replace|reject","content":"the fuller statement, only for merge or replace","reason":"short why"}]}
+One verdict per numbered candidate, same order as the list. No prose, no code fences.`;
+
+const ACTIONS = new Set(["add", "merge", "replace", "reject"]);
+
+/**
+ * Tolerant verdict recovery, mirroring `parseExtraction`.
+ *
+ * Three shapes are accepted because models produce all three:
+ *   {"verdicts":[...]}  as asked for
+ *   [...]               a bare array, dropping the wrapper
+ *   {"index":0,...}     a single verdict answered on its own
+ *
+ * A missing, out-of-range or unrecognised verdict leaves that candidate as
+ * "add". Under-merging costs a duplicate entry; a wrong merge loses information
+ * permanently, so anything unparsed defaults to keeping both.
+ */
+export const parseReconciliation = (
+  text: string,
+  itemCount: number,
+): MemoryReconciliation[] => {
+  const addAll = Array.from({ length: itemCount }, () => ({ action: "add" as const }));
+  if (itemCount === 0) return addAll;
+
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  const body = fenced?.[1] ?? text;
+
+  const verdicts = ((): unknown[] | null => {
+    for (const opener of ["{", "["] as const) {
+      const slice = sliceBalancedJson(body, opener);
+      if (!slice) continue;
+      try {
+        const parsed = JSON.parse(slice) as unknown;
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && typeof parsed === "object") {
+          const wrapped = (parsed as { verdicts?: unknown }).verdicts;
+          if (Array.isArray(wrapped)) return wrapped;
+          if (typeof (parsed as { action?: unknown }).action === "string") return [parsed];
+        }
+      } catch {
+        // Not this shape. Try the next one rather than giving up.
+      }
+    }
+    return null;
+  })();
+  if (!verdicts) return addAll;
+
+  const usable = verdicts
+    .filter((v): v is Record<string, unknown> => Boolean(v) && typeof v === "object")
+    .filter((v) => ACTIONS.has(v.action as string));
+
+  const out: MemoryReconciliation[] = addAll.map((v) => ({ ...v }));
+  usable.forEach((verdict, position) => {
+    // `index` is what the prompt asks for, but models often omit it and rely on
+    // order instead, so fall back to the verdict's own position.
+    const hint = verdict.index;
+    const index =
+      typeof hint === "number" && Number.isInteger(hint)
+        ? hint
+        : typeof hint === "string" && /^\d+$/.test(hint.trim())
+          ? Number(hint.trim())
+          : position;
+    if (index < 0 || index >= itemCount) return;
+    out[index] = {
+      action: verdict.action as MemoryReconciliation["action"],
+      ...(typeof verdict.content === "string" && verdict.content.trim()
+        ? { content: verdict.content.trim() }
+        : {}),
+      ...(typeof verdict.reason === "string" && verdict.reason.trim()
+        ? { reason: verdict.reason.trim() }
+        : {}),
+    };
+  });
+  return out;
+};
 
 const RECONCILE_INSTRUCTION = `You maintain durable memory for a coding agent. A new candidate statement may restate something already remembered, add detail to it, or contradict it.
 
@@ -211,31 +286,25 @@ export const createMemoryReconciler = (model: LanguageModel) => {
     const addAll = items.map(() => ({ action: "add" as const }));
     if (items.length === 0) return addAll;
     try {
-      const result = await generateObject({
+      // `generateText` + JSON recovery, not `generateObject`. The previous
+      // version called `generateObject` here while the extractor 70 lines above
+      // documented exactly why not to: models without structured output throw
+      // `AI_NoObjectGeneratedError`, and the catch below turned that into
+      // "add" for every candidate. Deduplication was silently inert on those
+      // models — a no-op that looked like it was working.
+      const result = await generateText({
         model,
-        schema: RECONCILE_SCHEMA,
-        system: RECONCILE_INSTRUCTION,
+        system: `${RECONCILE_INSTRUCTION}\n\n${RECONCILE_SCHEMA_HINT}`,
         prompt: items
           .map(
             ({ candidate, remember }, index) =>
               `${index}. NEW: ${candidate}\n${remember.map((m) => `   remembered: ${m}`).join("\n")}`,
           )
           .join("\n\n"),
+        // Adjudication is a background concern; never let it stall a turn.
         maxOutputTokens: 600,
       });
-      const byIndex = new Map(
-        (result.object.verdicts ?? []).map((v) => [v.index, v] as const),
-      );
-      return items.map((_, index) => {
-        const v = byIndex.get(index);
-        // Missing or unparsable: keep both rather than risk a bad merge.
-        if (!v) return { action: "add" as const };
-        return {
-          action: v.action,
-          ...(v.content ? { content: v.content } : {}),
-          ...(v.reason ? { reason: v.reason } : {}),
-        };
-      });
+      return parseReconciliation(result.text, items.length);
     } catch {
       return addAll;
     }
