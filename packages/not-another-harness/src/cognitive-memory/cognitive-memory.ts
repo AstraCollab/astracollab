@@ -1,5 +1,8 @@
 import type {
   ArbiterEvaluationResult,
+  MemoryInclusionReason,
+  MemoryInjectionEntry,
+  MemoryInjectionReport,
   ArbiterFn,
   CognitiveMemoryOptions,
   CognitiveMemoryStateSnapshot,
@@ -19,6 +22,79 @@ import { runFastGate } from "./fast-gate.js";
  * - Proprioceptive self-model (guards weak domains)
  * - Zero added TTFT latency (runs asynchronously post-turn)
  */
+/**
+ * Relevance scoring, shared by automatic promotion and on-demand `search()`.
+ *
+ * It used to be a single domain string compared with `turn.includes(domain)`,
+ * which almost never matched: a memory tagged "naming-conventions" cannot match
+ * a question that says "naming". Overlap over content words works because the
+ * memory text and the question share the words that identify the fact.
+ */
+const STOP_WORDS = new Set([
+  "the", "and", "for", "this", "that", "with", "from", "you", "are", "was", "has", "have",
+  "what", "which", "when", "were", "will", "your", "our", "its", "not", "but", "all", "any",
+  "can", "did", "does", "how", "into", "out", "use", "used", "using", "one", "two", "get",
+  "new", "now", "then", "than", "them", "they", "his", "her", "she", "him", "been", "being",
+  "there", "here", "also", "just", "like", "make", "made", "need", "want", "about", "after",
+  "tell", "know", "give", "show", "please", "would", "could", "should", "will", "shall",
+]);
+
+export const relevanceTokens = (value: string): Set<string> =>
+  new Set(
+    value
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((word) => word.length >= 3 && !STOP_WORDS.has(word)),
+  );
+
+/** Jaccard-style overlap of two token sets, normalised by the smaller side. */
+export const overlapScore = (query: Set<string>, candidate: Set<string>): number => {
+  if (query.size === 0 || candidate.size === 0) return 0;
+  let shared = 0;
+  for (const word of query) if (candidate.has(word)) shared += 1;
+  return shared / Math.min(query.size, candidate.size);
+};
+
+/** Minimum overlap before a warm memory is worth pre-staging. */
+const PROMOTE_THRESHOLD = 0.12;
+
+/** L1 only starts evicting past this size. */
+const DEMOTE_ABOVE = 5;
+
+
+/** Rough token cost of a string. */
+const estimateTokens = (value: string): number => Math.ceil(value.length / 4);
+
+/**
+ * Identifiers worth matching a memory against: URLs, dotted paths, SCREAMING
+ * names and camelCase/kebab tokens.
+ *
+ * Aider's repo map calls these `mentioned_idents` and uses them to personalise
+ * PageRank; the point is that a user naming a concrete thing is a far stronger
+ * signal than the words around it.
+ */
+export const extractIdentifiers = (text: string): string[] => {
+  const found = new Set<string>();
+  for (const match of text.match(/\bhttps?:\/\/[^\s<>()[\]"'`]+/g) ?? []) found.add(match);
+  for (const match of text.match(/\b(?:\.{0,2}\/)?[\w-]+(?:\/[\w.-]+)+\/?/g) ?? []) {
+    if (match.length > 3) found.add(match);
+  }
+  for (const match of text.match(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g) ?? []) found.add(match);
+  for (const match of text.match(/\b[A-Z]{2,}[0-9][A-Z0-9-]*\b/g) ?? []) found.add(match);
+  for (const match of text.match(/\b[a-z]+(?:[A-Z][a-z0-9]+){1,}\b/g) ?? []) found.add(match);
+  for (const match of text.match(/\b[a-z]+(?:-[a-z0-9]+){2,}\b/g) ?? []) found.add(match);
+  for (const match of text.match(/\b[0-9a-f]{6,}\b/gi) ?? []) found.add(match);
+  return [...found];
+};
+
+/** Index line: short, scannable, no body. */
+const gistOf = (item: MemoryItem): string => {
+  if (item.gist && item.gist.trim().length > 0) return item.gist.trim();
+  const first = item.content.split(/(?<=[.!?])\s/)[0] ?? item.content;
+  const trimmed = first.trim();
+  return trimmed.length > 90 ? `${trimmed.slice(0, 90)}…` : trimmed;
+};
+
 export class CognitiveMemory {
   // L0: Pinned core state (identity, self-model, active tensions)
   private activeTensions: Map<string, KnowledgeTension> = new Map();
@@ -36,8 +112,20 @@ export class CognitiveMemory {
 
   private maxL0Tokens: number;
   private maxL1Tokens: number;
+  /** Ceiling on everything injected into one prompt, index and bodies together. */
+  private maxTotalTokens: number;
   private arbiter: ArbiterFn | null = null;
   private autoExtractMemories: boolean;
+  /** Model-backed turn extractor; the regex fallback runs when this is absent. */
+  private extract?: (turn: { userMessage: string; assistantResponse: string }) => Promise<{
+    memories: Array<{ content: string; domains?: string[] }>;
+    tensions?: Array<{
+      claimA: string;
+      claimB: string;
+      impact: "low" | "medium" | "critical";
+      actionableQuestion: string;
+    }>;
+  }>;
   private onPersist?: (state: CognitiveMemoryStateSnapshot) => Promise<void> | void;
 
   private stats = {
@@ -50,8 +138,10 @@ export class CognitiveMemory {
   constructor(options: CognitiveMemoryOptions = {}) {
     this.maxL0Tokens = options.maxL0Tokens ?? 2000;
     this.maxL1Tokens = options.maxL1Tokens ?? 8000;
+    this.maxTotalTokens = options.maxTotalTokens ?? 2000;
     this.arbiter = options.arbiter ?? null;
     this.autoExtractMemories = options.autoExtractMemories ?? true;
+    this.extract = options.extract;
     this.onPersist = options.onPersist;
 
     this.selfModel = {
@@ -66,84 +156,173 @@ export class CognitiveMemory {
    * Concatenates L0 (active tensions + self-model) and pre-staged L1.
    * Adds zero latency to TTFT.
    */
-  getPromptContext(currentUserMessage?: string): string {
+  /**
+   * Decide what goes into this turn's prompt, and record why.
+   *
+   * Follows the index/body split that Claude Code's `MEMORY.md` and Letta's
+   * progressive disclosure both converged on: a short index of every memory is
+   * always present, and a body is only spent where a deterministic signal earned
+   * it. Always injecting bodies costs an order of magnitude more tokens and, per
+   * Chroma's context-rot work, injects distractors by construction.
+   *
+   * @param forceFull memory ids whose body should be included regardless of tier.
+   */
+  planInjection(options: { userMessage?: string; forceFull?: Iterable<string> } = {}): MemoryInjectionReport {
+    const force = new Set(options.forceFull ?? []);
     const sections: string[] = [];
+    const entries: MemoryInjectionEntry[] = [];
+    let used = 0;
+    let truncated = false;
 
-    // Optional: check fast gate
-    if (currentUserMessage) {
-      const gateResult = runFastGate(currentUserMessage);
-      if (gateResult.action === "inject_caution" && gateResult.cautionNote) {
-        sections.push(`### ⚠️ Premise Correction Notice\n${gateResult.cautionNote}`);
+    const include = (
+      item: MemoryItem,
+      reason: MemoryInclusionReason,
+      withBody: boolean
+    ): void => {
+      const gist = gistOf(item);
+      const body = withBody ? item.content : undefined;
+      const tags = item.metadata.domains.slice(0, 3);
+      const suffix = tags.length > 0 ? ` (${tags.join(", ")})` : "";
+      const tokens = estimateTokens(`${gist}${suffix}${body ?? ""}`);
+      if (used + tokens > this.maxTotalTokens) {
+        truncated = true;
+        return;
+      }
+      used += tokens;
+      entries.push({ id: item.id, tier: item.tier, reason, gist, body, tokens });
+    };
+
+    // Fast gate: catch a contradiction in what the user just said.
+    if (options.userMessage) {
+      const gate = runFastGate(options.userMessage);
+      if (gate.action === "inject_caution" && gate.cautionNote) {
+        sections.push(`### ⚠️ Premise Correction Notice\n${gate.cautionNote}`);
       }
     }
 
-    // 1. Build L0 Section (Self-Model & Guardrails)
-    const activeDomains = this.selfModel.activeDomains;
-    const weakDomains = activeDomains
-      .map((d) => ({ domain: d, capability: this.selfModel.domains[d] }))
-      .filter((d) => d.capability && d.capability.reliabilityScore < 0.75);
-
-    const l0Parts: string[] = [];
-
+    // Proprioceptive guardrails: domains this agent is weak in.
+    const weakDomains = this.selfModel.activeDomains
+      .map((d) => ({ d, capability: this.selfModel.domains[d] }))
+      .filter((x) => x.capability && x.capability.reliabilityScore < 0.75);
     if (weakDomains.length > 0) {
-      l0Parts.push("#### Proprioceptive Guardrails (High Attention Required)");
-      for (const { domain, capability } of weakDomains) {
-        if (!capability) continue;
-        const reliability = Math.round(capability.reliabilityScore * 100);
-        l0Parts.push(
-          `- Domain **${domain}** (reliability: ${reliability}% over ${capability.sampleCount} tasks)`
+      const lines = weakDomains.map(({ d, capability }) => {
+        const cap = capability!;
+        include(
+          {
+            id: `guardrail-${d}`,
+            content: `${d}: reliability ${Math.round(cap.reliabilityScore * 100)}% over ${cap.sampleCount} tasks.${
+              cap.knownFailurePatterns.length > 0 ? ` Known pitfalls: ${cap.knownFailurePatterns.join("; ")}` : ""
+            }${cap.recommendedStrategies.length > 0 ? ` Approach: ${cap.recommendedStrategies.join("; ")}` : ""}`,
+            bookmark: `${d} weak domain`,
+            tier: "L0",
+            metadata: { domains: [d], createdAt: Date.now(), lastAccessedAt: Date.now(), accessCount: 0 },
+          },
+          "guardrail",
+          true,
         );
-        if (capability.knownFailurePatterns.length > 0) {
-          l0Parts.push(`  • Known pitfalls: ${capability.knownFailurePatterns.join("; ")}`);
-        }
-        if (capability.recommendedStrategies.length > 0) {
-          l0Parts.push(`  • Recommended approach: ${capability.recommendedStrategies.join("; ")}`);
-        }
-      }
+        return `- ${d} (${Math.round(cap.reliabilityScore * 100)}% reliable): ${
+          cap.knownFailurePatterns.join("; ") || "be careful"
+        }`;
+      });
+      sections.push(`### Proprioceptive Guardrails (High Attention Required)\n${lines.join("\n")}`);
     }
 
-    // 2. Build L0 Section (Active Tensions - PINNED)
-    const activeTensions = Array.from(this.activeTensions.values()).filter(
-      (t) => t.status === "active"
-    );
-    if (activeTensions.length > 0) {
-      l0Parts.push("#### 🔴 Active Knowledge Tensions (Contradictions)");
-      l0Parts.push(
-        "The following contradictions were detected between statements, code, or config. Clarify before assuming:"
+    // Index: one line per memory, bodies withheld unless a trigger earned them.
+    const indexLines: string[] = [];
+    for (const item of this.l1HotCache.values()) {
+      const tags = item.metadata.domains.slice(0, 3);
+      const suffix = tags.length > 0 ? ` (${tags.join(", ")})` : "";
+      if (force.has(item.id)) {
+        include(item, "trigger", true);
+        indexLines.push(`- ${item.content}${suffix}`);
+      } else {
+        include(item, "index", false);
+        indexLines.push(`- ${gistOf(item)}${suffix}`);
+      }
+    }
+    if (indexLines.length > 0) {
+      sections.push(
+        [
+          "### Memory index — established earlier in this project",
+          "One line per remembered item. Use `recall` to pull a full item, then treat it as true.",
+          ...indexLines,
+        ].join("\n"),
       );
-      for (const t of activeTensions) {
-        l0Parts.push(
-          `- **[${t.impact.toUpperCase()}]**: "${t.claimA.statement}" (from ${t.claimA.source}) vs. "${t.claimB.statement}" (from ${t.claimB.source})`
+    }
+
+    // Active tensions earn full bodies: they are prompts to clarify, not trivia.
+    const activeTensions = [...this.activeTensions.values()].filter((t) => t.status === "active");
+    if (activeTensions.length > 0) {
+      const lines = activeTensions.map((t) => {
+        include(
+          {
+            id: t.id,
+            content: `${t.claimA.statement} vs ${t.claimB.statement} — ${t.actionableQuestion}`,
+            bookmark: t.claimA.statement,
+            tier: "L0",
+            metadata: { domains: [], createdAt: t.claimA.timestamp, lastAccessedAt: Date.now(), accessCount: 0 },
+          },
+          "tension",
+          true,
         );
-        l0Parts.push(`  ➜ Question: ${t.actionableQuestion}`);
+        return `- [${t.impact.toUpperCase()}] "${t.claimA.statement}" conflicts with "${t.claimB.statement}". Ask: ${t.actionableQuestion}`;
+      });
+      sections.push(`### Active Knowledge Tensions (Contradictions)\n${lines.join("\n")}`);
+    }
+
+    return {
+      text: sections.length > 0 ? `\n## Cognitive Memory State\n${sections.join("\n\n")}\n` : "",
+      entries,
+      totalTokens: used,
+      truncated,
+    };
+  }
+
+  /** Prompt text only. Prefer `planInjection` when you want to log what went in. */
+  getPromptContext(currentUserMessage?: string): string {
+    return this.planInjection({ userMessage: currentUserMessage }).text;
+  }
+
+  /**
+   * Search every tier for memories relevant to `query`.
+   *
+   * This is the on-demand path, exposed to the agent as a tool. Pre-staging into
+   * the prompt is a best-effort optimisation; a model that does not read the
+   * block, or whose question shares no words with it, can still ask. Ranking is
+   * deterministic — no model involved — so recall does not depend on model
+   * quality.
+   */
+  search(query: string, limit = 8): Array<{ item: MemoryItem; score: number }> {
+    const q = relevanceTokens(query);
+    if (q.size === 0) return [];
+
+    const pool: MemoryItem[] = [
+      ...this.l1HotCache.values(),
+      ...this.l2WarmStore.values(),
+      ...this.l3ColdArchive.values(),
+    ];
+
+    const scored = pool
+      .map((item) => ({
+        item,
+        score: overlapScore(q, relevanceTokens(`${item.content} ${item.metadata.domains.join(" ")}`)),
+      }))
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score || a.item.content.length - b.item.content.length);
+
+    // Collapse paraphrases of the same fact to the best-scoring instance.
+    const seen: string[] = [];
+    const out: Array<{ item: MemoryItem; score: number }> = [];
+    for (const entry of scored) {
+      const key = entry.item.content.toLowerCase();
+      if (seen.some((existing) => overlapScore(relevanceTokens(existing), relevanceTokens(key)) >= 0.8)) {
+        continue;
       }
+      seen.push(key);
+      out.push(entry);
+      if (out.length >= Math.max(1, limit)) break;
     }
-
-    if (this.activeTaskTrace) {
-      l0Parts.push(`#### Active Task Trace\n${this.activeTaskTrace}`);
-    }
-
-    if (l0Parts.length > 0) {
-      sections.push(`### Memory L0: Core State\n${l0Parts.join("\n")}`);
-    }
-
-    // 3. Build L1 Section (Pre-staged Hot Cache)
-    const l1Items = Array.from(this.l1HotCache.values());
-    if (l1Items.length > 0) {
-      const l1Content = l1Items
-        .map((m) => {
-          const domainLabel = m.metadata.domains.length > 0 ? ` [${m.metadata.domains.join(", ")}]` : "";
-          return `• ${domainLabel}${m.content}`;
-        })
-        .join("\n\n");
-      sections.push(`### Memory L1: Pre-Staged Context\n${l1Content}`);
-    }
-
-    if (sections.length === 0) {
-      return "";
-    }
-
-    return `\n## Cognitive Memory State\n${sections.join("\n\n")}\n`;
+    return out;
   }
 
   /**
@@ -195,12 +374,29 @@ export class CognitiveMemory {
     // 4. Apply Arbiter Decision
     this.applyArbiterDecision(evaluation);
 
-    // 5. Auto-extract new insights if enabled
-    if (this.autoExtractMemories && params.assistantResponse.length > 50) {
-      this.autoExtractTurnMemory(params.userMessage, params.assistantResponse);
+    // 5. Learn from the turn. A model-backed extractor is preferred: the regex
+    //    fallback only catches "always/never/remember to", so plain project
+    //    facts ("the staging URL is X") were never learned at all.
+    if (this.autoExtractMemories) {
+      if (this.extract) {
+        try {
+          await this.applyExtraction(
+            await this.extract({ userMessage: params.userMessage, assistantResponse: params.assistantResponse }),
+          );
+        } catch {
+          // A failed extraction must not break the turn; the regex fallback below
+          // still gets a chance.
+          this.autoExtractTurnMemory(params.userMessage, params.assistantResponse);
+        }
+      } else if (params.assistantResponse.length > 50) {
+        this.autoExtractTurnMemory(params.userMessage, params.assistantResponse);
+      }
     }
 
-    // 6. Trigger persistence callback if registered
+    // 6. Enforce the L0/L1 budgets so the "cache" cannot grow without bound.
+    this.enforceBudgets();
+
+    // 7. Trigger persistence callback if registered
     if (this.onPersist) {
       try {
         await this.onPersist(this.getSnapshot());
@@ -208,6 +404,130 @@ export class CognitiveMemory {
         // Non-blocking
       }
     }
+  }
+
+  /**
+   * Fold extracted memories and tensions in, skipping anything already known.
+   *
+   * Extracted items land in L2 rather than L1: they are candidates, and the
+   * arbiter decides what is worth pre-staging. That is what gives the tiering
+   * something to actually do — previously nothing ever wrote to L2, so every
+   * arbiter run evaluated an empty candidate set.
+   */
+  private async applyExtraction(result: {
+    memories: Array<{ content: string; domains?: string[] }>;
+    tensions?: Array<{
+      claimA: string;
+      claimB: string;
+      impact: "low" | "medium" | "critical";
+      actionableQuestion: string;
+    }>;
+  }): Promise<void> {
+    for (const memory of result.memories) {
+      const content = memory.content.trim();
+      if (content.length < 8 || content.length > 600) continue;
+      if (this.hasContent(content)) continue;
+      const now = Date.now();
+      const id = `mem-${now}-${Math.random().toString(36).slice(2, 7)}`;
+      // File it in L1, not L2. The user stated this one turn ago, so it is
+      // relevant by definition: waiting for the arbiter to promote it added a
+      // one-turn lag, which meant a freshly-taught fact was still missing from
+      // the very next prompt.
+      this.addMemory(
+        {
+          id,
+          content,
+          bookmark: content.slice(0, 80),
+          tier: "L1",
+          metadata: {
+            domains: memory.domains ?? [],
+            createdAt: now,
+            lastAccessedAt: now,
+            accessCount: 1,
+          },
+        },
+        "L1",
+      );
+    }
+
+    for (const tension of result.tensions ?? []) {
+      const key = `${tension.claimA}::${tension.claimB}`.toLowerCase();
+      if (this.activeTensions.has(key)) continue;
+      this.addTension({
+        id: key,
+        status: "active",
+        claimA: { source: "user", statement: tension.claimA, timestamp: Date.now() },
+        claimB: { source: "conversation", statement: tension.claimB, timestamp: Date.now() },
+        impact: tension.impact,
+        taskRelevance: 1,
+        actionableQuestion: tension.actionableQuestion,
+      });
+    }
+  }
+
+  /**
+   * True when an equivalent statement is already stored in any tier.
+   *
+   * Matching on the normalised *string* missed paraphrases, so the tier filled
+   * with near-copies of itself ("The staging build ID is X" next to "The staging
+   * build ID X must be treated as user-provided"). Comparing the distinctive
+   * token *sets* catches those: if everything memorable about a statement is
+   * already present in a stored one, it is the same fact.
+   */
+  private hasContent(content: string): boolean {
+    const words = (value: string): string[] =>
+      value
+        .toLowerCase()
+        .replace(/['']/g, "")
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean);
+    // Identifiers, numbers and codes carry the identity of a fact; prose does not.
+    const distinctive = (value: string): Set<string> =>
+      new Set(words(value).filter((w) => /\d/.test(w) || w.length >= 4));
+
+    const needle = distinctive(content);
+    if (needle.size === 0) return false;
+    const all = [
+      ...this.l1HotCache.values(),
+      ...this.l2WarmStore.values(),
+      ...this.l3ColdArchive.values(),
+    ];
+    return all.some((item) => {
+      const have = distinctive(item.content);
+      if (have.size === 0) return false;
+      let shared = 0;
+      for (const word of needle) if (have.has(word)) shared += 1;
+      const smaller = Math.min(needle.size, have.size);
+      // One side's distinctive vocabulary is a subset of the other's.
+      return shared / smaller >= 0.8;
+    });
+  }
+
+  /**
+   * Keep the pinned tiers within budget.
+   *
+   * `maxL0Tokens`/`maxL1Tokens` were stored but never read, so L1 grew for the
+   * lifetime of the process. Evict least-recently-accessed first, and demote to
+   * L2 rather than dropping, so nothing is lost.
+   */
+  private enforceBudgets(): void {
+    const trim = (map: Map<string, MemoryItem>, budget: number): void => {
+      if (budget <= 0) return;
+      let total = 0;
+      for (const item of map.values()) total += item.content.length / 4;
+      if (total <= budget) return;
+      const ordered = [...map.values()].sort(
+        (a, b) => a.metadata.lastAccessedAt - b.metadata.lastAccessedAt,
+      );
+      for (const item of ordered) {
+        if (total <= budget) break;
+        map.delete(item.id);
+        total -= item.content.length / 4;
+        // Demote rather than discard: it can be promoted again later.
+        this.l2WarmStore.set(item.id, { ...item, tier: "L2" });
+      }
+    };
+    trim(this.l1HotCache, this.maxL1Tokens);
   }
 
   /**
@@ -370,41 +690,50 @@ export class CognitiveMemory {
     params: { userMessage: string; assistantResponse: string },
     candidates: Array<{ id: string; bookmark: string; domains: string[] }>
   ): ArbiterEvaluationResult {
-    const combined = `${params.userMessage} ${params.assistantResponse}`.toLowerCase();
     const promotions: ArbiterEvaluationResult["promotions"] = [];
     const demotions: ArbiterEvaluationResult["demotions"] = [];
 
-    // Find candidates whose domains match current active domains
-    for (const candidate of candidates) {
-      const matches = candidate.domains.some((d) => combined.includes(d.toLowerCase()));
-      if (matches) {
-        promotions.push({
-          memoryId: candidate.id,
-          targetTier: "L1",
-          signalType: "anticipatory",
-          urgency: 0.8,
-        });
-      }
+    const turn = relevanceTokens(`${params.userMessage} ${params.assistantResponse}`);
+    const scored = candidates
+      .map((candidate) => ({
+        candidate,
+        score: overlapScore(
+          turn,
+          relevanceTokens(`${candidate.bookmark} ${candidate.domains.join(" ")}`),
+        ),
+      }))
+      .filter((entry) => entry.score > PROMOTE_THRESHOLD)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+
+    for (const { candidate, score } of scored) {
+      promotions.push({
+        memoryId: candidate.id,
+        targetTier: "L1",
+        signalType: "anticipatory",
+        urgency: Math.min(1, score),
+      });
     }
 
-    // Demote L1 items that haven't been touched in over 3 turns
-    for (const [id, item] of this.l1HotCache.entries()) {
-      const isDomainRelevant = item.metadata.domains.some((d) => combined.includes(d.toLowerCase()));
-      if (!isDomainRelevant && this.l1HotCache.size > 5) {
+    for (const item of this.l1HotCache.values()) {
+      const relevant =
+        overlapScore(turn, relevanceTokens(`${item.bookmark} ${item.metadata.domains.join(" ")}`)) > 0;
+      if (!relevant && this.l1HotCache.size > DEMOTE_ABOVE) {
         demotions.push({
-          memoryId: id,
+          memoryId: item.id,
           targetTier: "L2",
-          reason: "Domain no longer active in recent turns",
+          reason: "Not referenced in recent turns",
         });
       }
     }
 
-    return {
-      promotions,
-      demotions,
-      pins: [],
-      detectedTensions: [],
-    };
+    if (process.env.NAH_MEMORY_DEBUG) {
+      console.log(
+        `    [arbiter] scored=${JSON.stringify(scored.map((e) => ({ id: e.candidate.id, score: Number(e.score.toFixed(2)) })))} promotions=${promotions.length} demotions=${demotions.length}`,
+      );
+    }
+
+    return { promotions, demotions, pins: [], detectedTensions: [] };
   }
 
   private autoExtractTurnMemory(userMsg: string, assistantReply: string): void {

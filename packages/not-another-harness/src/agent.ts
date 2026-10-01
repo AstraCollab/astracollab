@@ -306,9 +306,13 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
         if (!stepHadToolCalls(response.messages)) {
           // The model produced its final answer — but a human may already have
           // queued something while that was streaming. Dropping it here would
-          // silently discard the message, so deliver the follow-ups and keep
-          // going instead of finishing.
-          if (followUpQueue.length > 0 && promote("follow-up") > 0) {
+          // silently discard the message, so drain *both* queues and keep going.
+          // A steer belongs here too: it is easy to type one just as the model
+          // is wrapping up, and that is precisely when it must not be lost.
+          const promoted =
+            (steerQueue.length > 0 ? promote("steer") : 0) +
+            (followUpQueue.length > 0 ? promote("follow-up") : 0);
+          if (promoted > 0) {
             stepLimit = step + maxSteps;
             continue;
           }

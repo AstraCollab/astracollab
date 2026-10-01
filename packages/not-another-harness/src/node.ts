@@ -1,13 +1,10 @@
-import { exec as execCb } from "node:child_process";
+import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as nodePath from "node:path";
-import { promisify } from "node:util";
 
 import { DEFAULT_CAPS } from "./caps.js";
 import { globStaticPrefix, globToRegExp, hasGlobMagic } from "./glob.js";
 import type { ToolEnvironment, WorkspaceRestoreResult, WorkspaceSnapshot, WorkspaceSnapshotEntry } from "./types.js";
-
-const execAsync = promisify(execCb);
 
 const SKIP_DIRS = new Set([
   "node_modules",
@@ -308,6 +305,110 @@ const globFiles = async (
   return found.sort();
 };
 
+/** Hard ceiling on captured output so a runaway command cannot exhaust memory. */
+const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Run a shell command in the workspace root.
+ *
+ * Three failure modes this deliberately fixes, each of which showed up as an
+ * agent appearing to hang:
+ *
+ * 1. **stdin.** `exec` hands the child an open, never-written stdin pipe, so any
+ *    command that reads stdin (`sed` with no file, `cat`, `grep` with no args)
+ *    blocks until the timeout — two minutes at the default. Closing stdin gives
+ *    those commands an immediate EOF instead.
+ * 2. **Cancellation.** The AI SDK passes an abort signal to tool execution; a
+ *    command that ignored it kept running after the user pressed Ctrl-C, and the
+ *    run only stopped once it finished on its own.
+ * 3. **Orphans.** `sh -c "a && b"` leaves grandchildren behind when only the
+ *    shell is signalled, so a timed-out command kept burning CPU. Killing the
+ *    whole process group cleans up after it.
+ */
+const runCommand = async (
+  root: string,
+  command: string,
+  opts?: { timeoutSeconds?: number; signal?: AbortSignal },
+): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+  const timeoutMs = Math.max(1, opts?.timeoutSeconds ?? 120) * 1000;
+  const signal = opts?.signal;
+
+  if (signal?.aborted) {
+    return { stdout: "", stderr: "aborted before start", exitCode: 130 };
+  }
+
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    let aborted = false;
+
+    const child = spawn(command, {
+      cwd: root,
+      shell: true,
+      // "ignore" is the fix for #1: stdin is at EOF, never a blocking pipe.
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+      env: { ...process.env, CI: "true", PAGER: "cat" },
+    });
+
+    const kill = () => {
+      if (child.pid === undefined) return;
+      try {
+        // Negative pid targets the process group created by `detached`.
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    };
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    const finish = (exitCode: number) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      const note = aborted ? " (aborted)" : timedOut ? " (timed out)" : "";
+      resolve({ stdout, stderr: `${stderr}${note}`.trim(), exitCode });
+    };
+
+    const onAbort = () => {
+      aborted = true;
+      kill();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      kill();
+    }, timeoutMs);
+    // Do not hold the event loop open for a command we are waiting on anyway.
+    timer.unref?.();
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (stdout.length < MAX_OUTPUT_BYTES) stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (stderr.length < MAX_OUTPUT_BYTES) stderr += chunk.toString();
+    });
+    child.on("error", (error: Error) => {
+      stderr += `\n${error.message}`;
+      finish(1);
+    });
+    child.on("close", (code, sig) => {
+      finish(sig ? 130 : (code ?? 0));
+    });
+  });
+};
+
 /**
  * Local-filesystem ToolEnvironment rooted at `cwd` (paths may not escape it).
  * Grep and glob are portable in-process walks — no ripgrep/git dependency.
@@ -420,26 +521,7 @@ export const createNodeEnvironment = (cwd: string): ToolEnvironment => {
       return globFiles(root, combined, startDir, includeHidden ?? false, cap);
     },
 
-    exec: async (command, opts) => {
-      const timeoutMs = Math.max(1, opts?.timeoutSeconds ?? 120) * 1000;
-      try {
-        const { stdout, stderr } = await execAsync(command, {
-          cwd: root,
-          timeout: timeoutMs,
-          maxBuffer: 8 * 1024 * 1024,
-          env: { ...process.env, CI: "true", PAGER: "cat" },
-        });
-        return { stdout: stdout ?? "", stderr: stderr ?? "", exitCode: 0 };
-      } catch (e) {
-        const err = e as { stdout?: string; stderr?: string; code?: unknown; killed?: boolean };
-        const killed = err.killed === true ? " (timed out)" : "";
-        return {
-          stdout: err.stdout ?? "",
-          stderr: `${err.stderr ?? ""}${killed}`.trim(),
-          exitCode: typeof err.code === "number" ? err.code : 1,
-        };
-      }
-    },
+    exec: async (command, opts) => runCommand(root, command, opts),
     snapshot: () => captureWorkspaceSnapshot(root),
     restoreSnapshot: (before, after, paths) => restoreWorkspaceSnapshot(root, before, after, paths),
   };

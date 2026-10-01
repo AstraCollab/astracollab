@@ -14,6 +14,9 @@ export { globToRegExp, globStaticPrefix, hasGlobMagic } from "./glob.js";
 export { estimateMessageTokens, estimateRequestTokens, estimateTextTokens } from "./estimate.js";
 export {
   CognitiveMemory,
+  extractIdentifiers,
+  relevanceTokens,
+  overlapScore,
   runFastGate,
   extractDomains,
   createModelArbiter,
@@ -27,6 +30,9 @@ export {
   type ProprioceptiveSelfModel,
   type MemoryMetadata,
   type MemoryItem,
+  type MemoryInclusionReason,
+  type MemoryInjectionEntry,
+  type MemoryInjectionReport,
   type TrajectoryPrediction,
   type ArbiterEvaluationResult,
   type ArbiterFn,

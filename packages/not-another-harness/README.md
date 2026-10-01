@@ -107,6 +107,35 @@ Compaction keeps the original task message plus the most recent messages. The ve
 
 The result includes the final transcript, stop reason, step count, usage totals, and number of compactions. Usage is marked estimated if the provider does not return token counts.
 
+## Steering a running agent
+
+A run is steerable. You can send a new message while the agent is still working instead of waiting for it to finish:
+
+```ts
+const run = runAgent({ model, prompt, system, tools });
+
+// Fires on the next step boundary; the in-flight model call is never cut off.
+run.steer("actually use TypeScript, not JavaScript");
+
+// Delivered only if the run would otherwise finish — for "also, once you're done…".
+run.followUp("then update the changelog");
+
+run.interrupt();            // abort now: cuts off the model call AND running tools
+run.pending();              // { steer: [...], followUp: [...] } for a UI indicator
+```
+
+Semantics, matching Pi and opencode:
+
+- **Delivery is at step boundaries.** A steer lands after the current step's tool calls settle and before the next model request is assembled, so it is never injected into a request that is already streaming. This is deliberate — interrupting mid-token loses the partial answer.
+- **Steers do not abort.** `steer()` never cuts off the model call in flight. Use `interrupt()` for that.
+- **Steers reach the model as plain user messages**, indistinguishable from any other user turn. Nothing marks them, so the model simply sees them in history.
+- **Steers jump ahead of follow-ups**, and each keeps its order.
+- **A pending message prevents the run from ending.** If the model produces its final answer while a follow-up is queued, the run continues instead of discarding it.
+- **A delivered message grants a fresh step window**, so `maxSteps` cannot silently drop something a human deliberately sent.
+- **Queued messages survive `interrupt()`**, so the host can replay them. `steer()`/`followUp()` return `false` once the run has settled rather than accepting input that would be lost.
+
+Events: `user-message` fires twice per message — `phase: "queued"` when accepted and `phase: "delivered"` when it actually enters the transcript. Render a pending chip on the first and clear it on the second.
+
 ## Cognitive Memory Cache
 
 `@astracollab/not-another-harness` includes an intelligent 4-tier cache layer (`CognitiveMemory`):

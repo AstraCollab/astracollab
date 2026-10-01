@@ -329,9 +329,14 @@ export const createCodingTools = (
       command: z.string().min(1),
       timeoutSeconds: z.number().int().min(1).max(1800).optional().describe("Default 120s"),
     }),
-    execute: async ({ command, timeoutSeconds }) => {
+    execute: async ({ command, timeoutSeconds }, callOptions) => {
       try {
-        const res = await env.exec(command, { timeoutSeconds: timeoutSeconds ?? 120 });
+        // `callOptions.abortSignal` comes from the AI SDK and is what makes
+        // Ctrl-C stop a long command instead of merely looking like it did.
+        const res = await env.exec(command, {
+          timeoutSeconds: timeoutSeconds ?? 120,
+          signal: (callOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal,
+        });
         options.onShellCommand?.(`${command} [exit ${res.exitCode}]`);
         const hint = "Re-run with a narrower command or `| tail -n N`.";
         const out = [

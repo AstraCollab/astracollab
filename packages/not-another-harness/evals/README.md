@@ -26,3 +26,28 @@ NAH_EVAL_REPEATS=5 \
 NAH_EVAL_RESULTS=/tmp/nah-eval-baseline.jsonl \
 pnpm --filter @astracollab/nah exec vitest run test/live-evals.test.ts
 ```
+
+## Live memory evaluation
+
+`packages/nah/eval-memory.mts` proves whether memory actually carries information
+forward, or whether the conversation transcript is doing all the work.
+
+It teaches facts containing **unguessable tokens** (so the agent cannot confabulate
+a plausible-looking answer), then **wipes the conversation history** and asks again.
+With an empty transcript, anything recalled came out of memory.
+
+```sh
+cd packages/nah
+npx tsx eval-memory.mts                        # teach, wipe, recall
+NAH_EVAL_RECALL_ONLY=1 npx tsx eval-memory.mts # fresh process, memory from disk
+NAH_MEMORY_DEBUG=1 npx tsx eval-memory.mts     # per-turn extraction/promotion trace
+```
+
+Use real, non-guessable values. A recall test built from a plausible URL or path
+passes whether or not memory works, because the model will invent one — an early
+version of this eval reported 3/3 using values the agent had simply guessed.
+
+`eval-memory.mts` also proves the `recall` tool path: one recall question is
+deliberately worded unlike the stored memory ("Which opaque identifier was issued…"
+versus "The staging build ID is …") so pre-staging cannot rescue it, and the run
+reports how many times the agent invoked the tool.

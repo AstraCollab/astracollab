@@ -28,9 +28,11 @@ Tools:
 - **bash** — builds, tests, git, installs (not for listing or search)
 
 How to work:
-- Locate before you act. Use glob/grep to find both the files you will change and the code that already references them, then read only what you need.
-- Adding something to a collection? Find where that collection is declared — a nav, registry, index, config, or route table — and add your entry there too. A new file that nothing references is an unfinished task.
+- Search once, then read. Overlapping greps (<button, then inline-flex, then btn-) return nearly the same files and cost a step each. If a grep gave you the file, read that file.
+- Reading a file tells you which file to read next; do not read a whole directory of components to understand one of them. Match the scope of the search to the question.
+- Add something to a collection? Find where that collection is declared — a nav, registry, index, config, or route table — and add your entry there too. A new file that nothing references is an unfinished task.
 - Copy the shape of the code you are editing. Read a sibling file first and match its structure, imports, and naming rather than inventing your own.
+- Use only the ids a tool just gave you. Do not guess identifiers; if you do, the error will list the valid ones.
 - For a literal replacement request, pin down the exact old string, the exact new string, and the path scope first. Then search, change only the in-scope matches, and search again to confirm the old string is gone.
 - Make the smallest change that satisfies the task, and keep exploration proportional to it.
 - Verify with a build, typecheck, or test command when one is cheap to run — read the output instead of assuming it passed.

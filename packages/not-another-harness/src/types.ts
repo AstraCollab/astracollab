@@ -101,10 +101,14 @@ export interface ToolEnvironment {
     includeHidden?: boolean;
     limit?: number;
   }): Promise<string[]>;
-  /** Run a shell command in the workspace root. */
+  /**
+   * Run a shell command in the workspace root. Implementations must honour
+   * `signal` so an aborted run stops promptly, and must not leave the command
+   * reading from an open stdin (that blocks until the timeout).
+   */
   exec(
     command: string,
-    opts?: { timeoutSeconds?: number },
+    opts?: { timeoutSeconds?: number; signal?: AbortSignal },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** Optional complete snapshot of workspace files for safe per-step recovery. */
   snapshot?(): Promise<WorkspaceSnapshot>;
