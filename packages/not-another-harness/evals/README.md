@@ -2,6 +2,37 @@
 
 Run the deterministic harness regression tasks with `pnpm --filter @astracollab/not-another-harness exec vitest run test/evals.test.ts`.
 
+### Difficulty ladder
+
+Tasks carry a `level`, and results are reported per level. An aggregate score hides everything interesting: on Terminal-Bench 2.1 six models spanning 74.6-83.8% collapsed to a 12.7-point spread on harder tasks.
+
+| Level | Shape | Target | Purpose |
+| --- | --- | --- | --- |
+| `investigation` | Diagnose from a symptom, no method given | ~90% pass | Real usage spends ~19% of prompts understanding code |
+| `regression` | Single file, fully specified | ~100% pass | Detects breakage, not capability |
+| `underspecified` | Terse, symptom-only prompt | 40-80% pass | Where under-specification cost shows up |
+
+Prompts are written the way a person types: terse, informal, stating the goal and often only the symptom. They never state a method and never mention the tests. The grader may only check behaviour the prompt implies.
+
+### What the metrics are for
+
+`pass/fail` alone cannot see cost. A run that passes by thrashing looks identical to one that passes cleanly, so every record also carries:
+
+- `medianTokensPerPassedTask` — cost of a *passed* task, which is what "this took 292k tokens" is really asking about.
+- `medianActionsPerPrompt` — real sessions average ~10 actions per prompt; far above that is thrashing rather than working.
+- `failureKind` — `infra` (provider noise, retry), `budget` (hit a cap, not a capability signal), `task_bug` (the checker is unfair), or `capability`. Without this, "the agent failed" is unactionable.
+- `infraErrors` — reported as a headline number, not a footnote. Leaderboard differences below a few points deserve skepticism when the error rate is non-zero.
+
+A run that completes with zero output tokens and zero tool calls is classified `infra`: the provider returned an empty completion, and averaging that into a capability score is how a suite starts lying.
+
+### Calibration rules
+
+1. **Freeze prompts before seeing results.** Rewriting a prompt until the agent passes is invisible in the pass rate and is the most common way a suite rots.
+2. **A reference solution per task**, written to investigate rather than jump to the answer.
+3. **Two independent human verdicts** per task before it counts.
+4. **0% pass across every repetition means a broken task**, not an incapable agent.
+5. **Any task edit re-runs everything.** Grader changes invalidate prior results; prompt-only changes can reuse them.
+
 The deterministic suite covers a targeted bug fix, a new regression test, and a behavior-preserving refactor. Each task starts from a temporary workspace and checks the resulting files, completed stop reason, model-step count, and cumulative token accounting. It exercises the harness and built-in tools with scripted model responses.
 
 ## Live model evaluations
