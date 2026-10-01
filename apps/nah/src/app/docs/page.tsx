@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Blocks, Braces, Radio, Terminal } from "lucide-react";
+import { ArrowRight, Blocks, Braces, Brain, Radio, Terminal } from "lucide-react";
 import { Code, DocHeader, DocSection, DocsShell } from "@/components/docs/DocsShell";
 
 const cards = [
@@ -7,6 +7,7 @@ const cards = [
   { title: "Understand the loop", detail: "See exactly how each model step and tool call is handled.", href: "/docs/agent-loop", icon: Radio, label: "RUNTIME" },
   { title: "Use the tool set", detail: "Read, list, grep, edit, write, and optionally execute commands.", href: "/docs/tools", icon: Blocks, label: "TOOLS" },
   { title: "Build with the SDK", detail: "Run the harness from TypeScript and consume its event stream.", href: "/docs/sdk", icon: Braces, label: "SDK" },
+  { title: "Add cognitive memory", detail: "Tiered L0–L3 memory that pre-stages the next turn's context.", href: "/docs/memory", icon: Brain, label: "MEMORY" },
 ];
 
 export default function DocsHome() {

@@ -4,6 +4,7 @@ import * as nodePath from "node:path";
 import { promisify } from "node:util";
 
 import { DEFAULT_CAPS } from "./caps.js";
+import { globStaticPrefix, globToRegExp, hasGlobMagic } from "./glob.js";
 import type { ToolEnvironment, WorkspaceRestoreResult, WorkspaceSnapshot, WorkspaceSnapshotEntry } from "./types.js";
 
 const execAsync = promisify(execCb);
@@ -213,6 +214,7 @@ const grepDir = async (
   perFileCounts: Map<string, number>,
   out: string[],
   maxMatches: number,
+  includeHidden: boolean,
 ): Promise<void> => {
   if (out.length >= maxMatches) {
     return;
@@ -227,12 +229,12 @@ const grepDir = async (
     if (out.length >= maxMatches) {
       return;
     }
-    if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) {
+    if ((!includeHidden && entry.name.startsWith(".")) || SKIP_DIRS.has(entry.name)) {
       continue;
     }
     const rel = dir === "." ? entry.name : `${dir}/${entry.name}`;
     if (entry.isDirectory()) {
-      await grepDir(absRoot, rel, re, perFileCounts, out, maxMatches);
+      await grepDir(absRoot, rel, re, perFileCounts, out, maxMatches, includeHidden);
       continue;
     }
     if (!entry.isFile() || BINARY_EXT.test(entry.name)) {
@@ -267,8 +269,48 @@ const grepDir = async (
 };
 
 /**
+ * Walk the workspace collecting paths matching `pattern`.
+ *
+ * Skips straight to the pattern's literal prefix when it has one, so a pattern
+ * rooted at a directory never traverses the rest of the repository.
+ */
+const globFiles = async (
+  root: string,
+  pattern: string,
+  startDir: string,
+  includeHidden: boolean,
+  limit: number,
+): Promise<string[]> => {
+  const re = globToRegExp(pattern);
+  const found: string[] = [];
+
+  const walk = async (relDir: string): Promise<void> => {
+    if (found.length >= limit) return;
+    let entries;
+    try {
+      entries = await fs.readdir(nodePath.join(root, relDir), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (found.length >= limit) return;
+      if ((!includeHidden && entry.name.startsWith(".")) || SKIP_DIRS.has(entry.name)) continue;
+      const rel = relDir === "." ? entry.name : `${relDir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        await walk(rel);
+      } else if (entry.isFile() && re.test(rel)) {
+        found.push(rel);
+      }
+    }
+  };
+
+  await walk(startDir === "." ? "." : startDir);
+  return found.sort();
+};
+
+/**
  * Local-filesystem ToolEnvironment rooted at `cwd` (paths may not escape it).
- * Grep is a portable in-process walk — no ripgrep/git dependency.
+ * Grep and glob are portable in-process walks — no ripgrep/git dependency.
  */
 export const createNodeEnvironment = (cwd: string): ToolEnvironment => {
   const root = nodePath.resolve(cwd);
@@ -303,13 +345,34 @@ export const createNodeEnvironment = (cwd: string): ToolEnvironment => {
       }));
     },
 
-    grep: async ({ pattern, path, ignoreCase }) => {
+    grep: async ({ pattern, path, ignoreCase, includeHidden }) => {
       const re = toRegExp(pattern, ignoreCase ?? false);
       const out: string[] = [];
       const perFileCounts = new Map<string, number>();
       let startDir = ".";
+
       if (path?.trim()) {
-        const abs = await resolveSafe(root, path.trim());
+        const raw = path.trim();
+        // A glob in `path` is a file set, not a directory to walk blindly.
+        if (hasGlobMagic(raw)) {
+          const matches = await globFiles(root, raw, ".", includeHidden ?? false, DEFAULT_CAPS.grep.maxMatches);
+          for (const rel of matches) {
+            if (out.length >= DEFAULT_CAPS.grep.maxMatches) break;
+            let content: string;
+            try {
+              content = await fs.readFile(nodePath.join(root, rel), "utf8");
+            } catch {
+              continue;
+            }
+            content.split("\n").forEach((line, i) => {
+              if (out.length < DEFAULT_CAPS.grep.maxMatches && re.test(line)) {
+                out.push(`${rel}:${i + 1}: ${line}`);
+              }
+            });
+          }
+          return out.join("\n");
+        }
+        const abs = await resolveSafe(root, raw);
         const rel = nodePath.relative(root, abs).split(nodePath.sep).join("/");
         let stat;
         try {
@@ -328,8 +391,33 @@ export const createNodeEnvironment = (cwd: string): ToolEnvironment => {
         }
         startDir = rel || ".";
       }
-      await grepDir(root, startDir, re, perFileCounts, out, DEFAULT_CAPS.grep.maxMatches);
+      await grepDir(root, startDir, re, perFileCounts, out, DEFAULT_CAPS.grep.maxMatches, includeHidden ?? false);
       return out.join("\n");
+    },
+
+    glob: async ({ pattern, path, includeHidden, limit }) => {
+      const cap = Math.max(1, Math.min(limit ?? DEFAULT_CAPS.glob.maxMatches, DEFAULT_CAPS.glob.maxMatches));
+      const searchRoot = path?.trim() ? path.trim() : ".";
+      const combined = searchRoot === "." || searchRoot === "" ? pattern : `${searchRoot.replace(/\/$/, "")}/${pattern}`;
+
+      // Descend straight to the pattern's literal prefix when one exists.
+      let startDir = ".";
+      if (!hasGlobMagic(searchRoot) && searchRoot !== ".") {
+        const abs = await resolveSafe(root, searchRoot);
+        startDir = nodePath.relative(root, abs).split(nodePath.sep).join("/") || ".";
+      } else {
+        const prefix = globStaticPrefix(combined);
+        if (prefix.length > 0) {
+          const dir = prefix.join("/");
+          try {
+            await fs.stat(nodePath.join(root, dir));
+            startDir = dir;
+          } catch {
+            startDir = ".";
+          }
+        }
+      }
+      return globFiles(root, combined, startDir, includeHidden ?? false, cap);
     },
 
     exec: async (command, opts) => {

@@ -215,6 +215,86 @@ describe("runAgent", () => {
     expect(result.text).toBe("post-compaction");
   });
 
+  it("does not compact a small transcript just because cumulative usage is high", async () => {
+    // Every step re-sends the transcript, so *cumulative* usage climbs fast even
+    // when the real context is tiny. Triggering compaction off that number threw
+    // away the agent's working memory mid-task and left it unable to finish.
+    let call = 0;
+    const model = new MockLanguageModelV2({
+      doStream: async () => {
+        const index = call;
+        call += 1;
+        return {
+          stream:
+            index < 8
+              ? toolCallStream("read", { path: "x" }, `call-${index}`, undefined, {
+                  inputTokens: 20_000,
+                  outputTokens: 500,
+                  totalTokens: 20_500,
+                })
+              : textStream("done"),
+        };
+      },
+    });
+    const env = createNodeEnvironment(dir);
+    const run = runAgent({
+      model,
+      system: "you are a coding agent",
+      prompt: "do a small task",
+      tools: createCodingTools(env),
+      compaction: "truncate",
+    });
+    const eventsPromise = (async () => {
+      for await (const _ of run.events) {
+        // drain
+      }
+    })();
+    const result = await run.result;
+    await eventsPromise;
+    expect(result.steps).toBe(9);
+    // ~180k cumulative tokens, but each individual request was only ~20k.
+    expect(result.usage.totalTokens).toBeGreaterThan(120_000);
+    expect(result.compactions).toBe(0);
+  });
+
+  it("compacts once a single request genuinely approaches the threshold", async () => {
+    let call = 0;
+    const model = new MockLanguageModelV2({
+      doStream: async () => {
+        const index = call;
+        call += 1;
+        return {
+          stream:
+            index < 4
+              ? toolCallStream("read", { path: "x" }, `call-${index}`, undefined, {
+                  // each request really is ~40k tokens on its own
+                  inputTokens: 40_000,
+                  outputTokens: 500,
+                  totalTokens: 40_500,
+                })
+              : textStream("done"),
+        };
+      },
+    });
+    const env = createNodeEnvironment(dir);
+    const run = runAgent({
+      model,
+      system: "you are a coding agent",
+      prompt: "do a small task",
+      tools: createCodingTools(env),
+      compaction: "truncate",
+      compactAtTokens: 30_000,
+    });
+    const eventsPromise = (async () => {
+      for await (const _ of run.events) {
+        // drain
+      }
+    })();
+    const result = await run.result;
+    await eventsPromise;
+    expect(result.compactions).toBeGreaterThan(0);
+  });
+
 });
 
 describe("jsonl session store", () => {

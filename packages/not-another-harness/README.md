@@ -59,13 +59,26 @@ console.error(`\n${result.reason}; ${result.usage.totalTokens} tokens`);
 ## What the runtime provides
 
 - `runAgent` performs one model round trip per step and emits typed run, step, text, tool-call, tool-result, compaction, finish, and error events.
-- `createCodingTools` provides capped `read`, `list`, `grep`, `edit`, `write`, and optional `bash` tools. Existing files are read before `edit` or `write` by default.
+- `createCodingTools` provides capped `read`, `list`, `grep`, `glob`, `edit`, `write`, and optional `bash` tools. Existing files are read before `edit` or `write` by default.
 - `buildSystemPrompt` creates a concise coding-agent prompt and can include project context files and extra constraints.
 - `compactMessages` and the run options support model-based summarization, lossy truncation, or disabled compaction.
 - `createJsonlSessionStore` persists messages and branches as JSONL. The CLI uses this store for resumable sessions.
 - `createNodeEnvironment(root)` provides local filesystem and shell access rooted at a workspace directory, plus optional snapshots and restore operations.
 
 The Node environment is a workspace adapter, not an operating-system sandbox. In particular, shell commands can have effects beyond files the adapter can snapshot. Apply your own process, network, and approval restrictions where required.
+
+## Finding files
+
+`glob` is the discovery primitive — it answers "where does this kind of file live" without walking the tree level by level. It is registered automatically whenever the environment implements `ToolEnvironment.glob` (the Node environment does).
+
+```
+glob { pattern: "**/page.tsx" }                     # every page component
+glob { pattern: "apps/*/src/**/*.tsx" }             # one level of fan-out
+glob { pattern: "**/*.{test,spec}.ts" }             # brace alternation
+glob { pattern: "*.ts", path: "src", includeHidden: true }
+```
+
+`grep` accepts a glob in `path` as well (`grep { pattern: "DocsShell", path: "apps/nah/**/*.tsx" }`), which is usually the fastest way to find the code that references something. Both tools skip `node_modules`, `.git`, and build output; pass `includeHidden` to opt back into dotfiles.
 
 ## Budgets and compaction
 
@@ -78,13 +91,19 @@ const run = runAgent({
   maxSteps: 32,             // default: 32
   maxTokens: 400_000,       // default; 0 disables the cumulative cap
   maxOutputTokens: 8_192,   // per model response
-  compactAtTokens: 120_000, // default compaction threshold
+  compactAtTokens: 120_000, // compact when one request reaches this
   compactKeepRecent: 6,
   compaction: "model",     // "model" | "truncate" | "off"
   messages: previousMessages,
   abortSignal: controller.signal,
 });
 ```
+
+`maxTokens` is a spend budget: it accumulates across the whole run, so it stops a run that is over-consuming even when the context is small.
+
+`compactAtTokens` is a *context* budget, and the two are deliberately different. Because every step re-sends the whole transcript, cumulative usage roughly multiplies the real context size — triggering compaction off it would compact healthy runs. Compaction instead compares the size of the most recent request (the provider's own reported input count, or an estimate when usage is missing) against `compactAtTokens`. It runs only when a step requested tools, and only when there is a middle section to summarize.
+
+Compaction keeps the original task message plus the most recent messages. The verbatim tail is extended backwards when necessary so a `tool` result is never separated from the `tool_call` that produced it — an orphaned result makes the transcript unsendable and ends the run.
 
 The result includes the final transcript, stop reason, step count, usage totals, and number of compactions. Usage is marked estimated if the provider does not return token counts.
 

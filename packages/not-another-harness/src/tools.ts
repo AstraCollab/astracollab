@@ -11,6 +11,8 @@ export type CodingToolsOptions = {
   requireReadBeforeWrite?: boolean;
   /** Include the bash tool (default true). Disable for read-only agents. */
   withBash?: boolean;
+  /** Include the glob discovery tool when the environment supports it (default true). */
+  withGlob?: boolean;
   /** Working directory shown in tool descriptions (cosmetic). */
   cwdLabel?: string;
   /**
@@ -25,8 +27,27 @@ export type CodingToolsOptions = {
   onShellCommand?: (command: string) => void;
 };
 
-/** Default gate scope: read/list/grep are always auto-allowed. */
+/** Default gate scope: read/list/grep/glob are always auto-allowed. */
 export const APPROVAL_GATED_TOOLS = new Set(["edit", "write", "bash"]);
+
+/**
+ * Lexically normalize a workspace-relative path so that `./a/b`, `a//b`, and
+ * `a/b` are treated as the same file. Without this the read-before-write gate
+ * rejects an edit the model just performed a valid read for, purely because the
+ * two path spellings differ — which reads to the model like a broken tool.
+ */
+export const normalizeWorkspacePath = (path: string): string => {
+  const segments: string[] = [];
+  for (const segment of path.split(/[/\\]+/)) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return segments.join("/") || ".";
+};
 
 const refused = (toolName: string): string =>
   `DENIED: the user rejected this ${toolName} call. Do not retry the same change; ` +
@@ -88,7 +109,7 @@ export const createCodingTools = (
     execute: async ({ path, offset, limit }) => {
       try {
         const content = await env.readFile(path);
-        readPaths.add(path);
+        readPaths.add(normalizeWorkspacePath(path));
         const { body, totalLines } = sliceFileLines(content, offset, limit);
         const notice =
           totalLines > (offset ?? 1) - 1 + Math.min(limit ?? DEFAULT_CAPS.read.maxLines, DEFAULT_CAPS.read.maxLines)
@@ -162,11 +183,12 @@ export const createCodingTools = (
 
   const grep = tool({
     description:
-      "Search file contents — returns capped `path:line: text` matches. Prefer this over bash for finding symbols/strings; then read the specific files.",
+      "Search file contents — returns capped `path:line: text` matches. Prefer this over bash for finding symbols/strings; then read the specific files. `path` may be a file, a directory, or a glob.",
     inputSchema: z.object({
       pattern: z.string().min(1).describe("Text or regex to search for"),
       path: z.string().optional().describe("File/dir/glob filter (workspace-relative)"),
       ignoreCase: z.boolean().optional(),
+      includeHidden: z.boolean().optional().describe("Search dotfiles and dot-directories (default false)"),
       maxResults: z
         .number()
         .int()
@@ -175,7 +197,7 @@ export const createCodingTools = (
         .optional()
         .describe(`Max matching lines (default 50, max ${DEFAULT_CAPS.grep.maxMatches})`),
     }),
-    execute: async ({ pattern, path, ignoreCase, maxResults }) => {
+    execute: async ({ pattern, path, ignoreCase, includeHidden, maxResults }) => {
       const limit = Math.min(maxResults ?? 50, DEFAULT_CAPS.grep.maxMatches);
       let raw: string;
       try {
@@ -184,6 +206,7 @@ export const createCodingTools = (
           path,
           ignoreCase: ignoreCase ?? false,
           maxPerFile: DEFAULT_CAPS.grep.maxPerFile,
+          includeHidden: includeHidden ?? false,
         });
       } catch (e) {
         return `Error: ${e instanceof Error ? e.message : String(e)}`;
@@ -212,7 +235,8 @@ export const createCodingTools = (
       replace_all: z.boolean().optional(),
     }),
     execute: async ({ path, old_string, new_string, replace_all }) => {
-      if (requireRead && !readPaths.has(path)) {
+      const key = normalizeWorkspacePath(path);
+      if (requireRead && !readPaths.has(key)) {
         return `Error: read "${path}" with the read tool before editing.`;
       }
       let content: string;
@@ -225,9 +249,10 @@ export const createCodingTools = (
       if (occurrences === 0) {
         return `Error: old_string not found in ${path}. Re-read the file for current contents.`;
       }
-      if (replace_all === true && old_string.trim().length <= 3) {
-        return `Error: replace_all is blocked for strings of three characters or fewer (${occurrences} matches in ${path}). Use a longer exact phrase with context to avoid changing common words throughout the file.`;
+      if (replace_all === true && old_string.trim().length <= 3 && occurrences > 1) {
+        return `Error: replace_all is blocked for ambiguous strings of three characters or fewer (${occurrences} matches in ${path}). Use a longer exact phrase with context to avoid changing common words throughout the file.`;
       }
+
       if (occurrences > 1 && replace_all !== true) {
         return `Error: old_string appears ${occurrences} times in ${path}. Add surrounding context or set replace_all.`;
       }
@@ -237,7 +262,7 @@ export const createCodingTools = (
           : content.replace(old_string, new_string);
       await env.writeFile(path, next);
       options.onFileWrite?.({ path, existed: true, content, after: next });
-      readPaths.add(path);
+      readPaths.add(key);
       return `Replaced ${replace_all === true ? occurrences : 1} occurrence${occurrences === 1 ? "" : "s"} in ${path}`;
     },
   });
@@ -250,15 +275,50 @@ export const createCodingTools = (
       content: z.string(),
     }),
     execute: async ({ path, content }) => {
-      if (requireRead && !readPaths.has(path) && (await env.exists(path))) {
+      const key = normalizeWorkspacePath(path);
+      if (requireRead && !readPaths.has(key) && (await env.exists(path))) {
         return `Error: read "${path}" with the read tool before overwriting.`;
       }
       const existed = await env.exists(path);
       const previous = existed ? await env.readFile(path) : undefined;
       await env.writeFile(path, content);
       options.onFileWrite?.({ path, existed, ...(previous === undefined ? {} : { content: previous }), after: content });
-      readPaths.add(path);
+      readPaths.add(key);
       return `Wrote ${content.length} characters to ${path}`;
+    },
+  });
+
+  const glob = tool({
+    description:
+      "Find files by name/path pattern before reading them — supports `*` (within a segment), `**` (any depth), `?`, and `{a,b}`. " +
+      "Use this to locate a file or to enumerate a set of files (e.g. `**/page.tsx`, `apps/*/src/**/*.tsx`, `**/*.{test,spec}.ts`) " +
+      "instead of walking directories one level at a time. Returns workspace-relative paths.",
+    inputSchema: z.object({
+      pattern: z.string().min(1).describe("Glob pattern, e.g. **/page.tsx"),
+      path: z.string().optional().describe("Directory to search under (default .)"),
+      includeHidden: z.boolean().optional().describe("Include dotfiles (default false)"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(DEFAULT_CAPS.glob.maxMatches)
+        .optional()
+        .describe(`Max paths to return (default ${DEFAULT_CAPS.glob.maxMatches})`),
+    }),
+    execute: async ({ pattern, path, includeHidden, limit }) => {
+      if (typeof env.glob !== "function") {
+        return "Error: this environment does not support glob. Use list or bash find instead.";
+      }
+      const cap = Math.min(limit ?? DEFAULT_CAPS.glob.maxMatches, DEFAULT_CAPS.glob.maxMatches);
+      try {
+        const matches = await env.glob({ pattern, path, includeHidden: includeHidden ?? false, limit: cap });
+        if (matches.length === 0) {
+          return `No files match "${pattern}"${path ? ` under ${path}` : ""}.`;
+        }
+        return `${matches.length} match${matches.length === 1 ? "" : "es"} for "${pattern}":\n${matches.join("\n")}`;
+      } catch (e) {
+        return `Error: ${e instanceof Error ? e.message : String(e)}`;
+      }
     },
   });
 
@@ -292,6 +352,9 @@ export const createCodingTools = (
   const tools: Record<string, unknown> = { read, list, grep, edit, write };
   if (options.withBash !== false) {
     tools.bash = bash;
+  }
+  if (options.withGlob !== false && typeof env.glob === "function") {
+    tools.glob = glob;
   }
   if (options.approveToolCall) {
     const approve = options.approveToolCall;

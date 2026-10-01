@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { capHead, capTail, sliceFileLines } from "../src/caps.js";
+import { capHead, capTail, sliceFileLines, toLines } from "../src/caps.js";
 
 describe("caps", () => {
   it("passes through short content", () => {
     expect(capHead("a\nb", 10, 100, "hint")).toBe("a\nb");
     expect(capTail("a\nb", 10, 100, "hint")).toBe("a\nb");
+  });
+
+  it("does not count the phantom line after a trailing newline", () => {
+    expect(toLines("a\nb\n")).toEqual(["a", "b"]);
+    expect(toLines("a\nb")).toEqual(["a", "b"]);
+    expect(toLines("a\n\n")).toEqual(["a", ""]);
+    expect(toLines("")).toEqual([]);
+    // A five-line file says it has five lines, so the model does not page for a sixth.
+    expect(sliceFileLines("l1\nl2\nl3\nl4\nl5\n").totalLines).toBe(5);
   });
 
   it("capHead keeps the head and adds a paging notice", () => {

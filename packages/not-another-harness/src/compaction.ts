@@ -116,6 +116,26 @@ export type CompactionOutcome = {
 };
 
 /**
+ * Start index for the verbatim tail, grown backwards until it begins on a
+ * complete tool round.
+ *
+ * A `tool` message is only valid when the `tool-call` that produced it is also
+ * in the transcript. Slicing on a raw message count routinely lands between an
+ * assistant's tool calls and their results, which produces a transcript every
+ * provider rejects (`tool_result` with no matching `tool_call`) and which the
+ * AI SDK refuses to send at all. So we walk back until the first kept message is
+ * not an orphaned tool result, which also re-admits its owning assistant message.
+ */
+export const alignTailToToolBoundary = (messages: ModelMessage[], keepRecent: number): number => {
+  const wanted = Math.max(0, Math.min(keepRecent, messages.length));
+  let start = messages.length - wanted;
+  while (start > 0 && messages[start]?.role === "tool") {
+    start -= 1;
+  }
+  return start;
+};
+
+/**
  * Compact `messages`, keeping the first user message (the task) and the last
  * `keepRecent` verbatim; everything between becomes one summary message.
  */
@@ -128,13 +148,14 @@ export const compactMessages = async (opts: {
   maxTokensRemaining?: number;
 }): Promise<CompactionOutcome | null> => {
   const { messages, keepRecent } = opts;
+  const tailStart = alignTailToToolBoundary(messages, keepRecent);
   // [task, ...middle..., ...recent]
-  if (messages.length <= keepRecent + 2) {
+  if (messages.length <= tailStart + 2) {
     return null;
   }
   const head = messages.slice(0, 1);
-  const recent = messages.slice(-keepRecent);
-  const middle = messages.slice(1, messages.length - keepRecent);
+  const recent = messages.slice(tailStart);
+  const middle = messages.slice(1, tailStart);
   if (middle.length === 0) {
     return null;
   }

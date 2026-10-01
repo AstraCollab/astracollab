@@ -72,7 +72,20 @@ export interface ToolEnvironment {
     path?: string;
     ignoreCase?: boolean;
     maxPerFile?: number;
+    includeHidden?: boolean;
   }): Promise<string>;
+  /**
+   * Find files by glob pattern (`*`, `**`, `?`, `{a,b}`), workspace-relative.
+   * Returns matching paths sorted with directories shallowest-first. Optional:
+   * the built-in `glob` tool is only registered when the environment supports it.
+   */
+  glob?(opts: {
+    pattern: string;
+    /** Directory to search under (default the workspace root). */
+    path?: string;
+    includeHidden?: boolean;
+    limit?: number;
+  }): Promise<string[]>;
   /** Run a shell command in the workspace root. */
   exec(
     command: string,
@@ -109,7 +122,12 @@ export type HarnessRunOptions = {
    * lossily, "off" never compacts. Default: "model".
    */
   compaction?: HarnessCompactionMode;
-  /** Trigger compaction once cumulative tokens exceed this. Default 120_000. */
+  /**
+   * Trigger compaction when the *next request* would carry roughly this many
+   * input tokens. Measured from the last step's reported input count, so
+   * repeated re-sending of the transcript does not inflate the trigger. Default
+   * 120_000.
+   */
   compactAtTokens?: number;
   /** Messages to keep verbatim when compacting. Default 6. */
   compactKeepRecent?: number;

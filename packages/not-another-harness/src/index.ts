@@ -1,9 +1,17 @@
 export { runAgent } from "./agent.js";
-export { compactMessages } from "./compaction.js";
+export { compactMessages, alignTailToToolBoundary, type CompactionOutcome } from "./compaction.js";
 export { buildSystemPrompt } from "./prompt.js";
-export { createCodingTools, APPROVAL_GATED_TOOLS, type CodingToolsOptions, type ApprovalDecision } from "./tools.js";
+export {
+  createCodingTools,
+  normalizeWorkspacePath,
+  APPROVAL_GATED_TOOLS,
+  type CodingToolsOptions,
+  type ApprovalDecision,
+} from "./tools.js";
 export { createJsonlSessionStore, type JsonlSessionStore, type SessionTaskLedger } from "./session.js";
-export { DEFAULT_CAPS, capHead, capTail, sliceFileLines } from "./caps.js";
+export { DEFAULT_CAPS, capHead, capTail, sliceFileLines, toLines } from "./caps.js";
+export { globToRegExp, globStaticPrefix, hasGlobMagic } from "./glob.js";
+export { estimateMessageTokens, estimateRequestTokens, estimateTextTokens } from "./estimate.js";
 export {
   CognitiveMemory,
   runFastGate,

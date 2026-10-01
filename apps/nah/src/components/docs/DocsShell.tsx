@@ -6,6 +6,7 @@ const groups = [
   { label: "GET STARTED", links: [{ title: "Introduction", href: "/docs" }, { title: "Installation", href: "/docs/installation" }] },
   { label: "RUNTIME", links: [{ title: "SDK quickstart", href: "/docs/sdk" }, { title: "The agent loop", href: "/docs/agent-loop" }, { title: "Built-in tools", href: "/docs/tools" }, { title: "Streaming events", href: "/docs/events" }] },
   { label: "CLI", links: [{ title: "Command line", href: "/docs/cli" }] },
+  { label: "MEMORY", links: [{ title: "Cognitive memory", href: "/docs/memory" }] },
 ];
 
 export function DocsShell({ current, children }: { current: string; children: ReactNode }) {

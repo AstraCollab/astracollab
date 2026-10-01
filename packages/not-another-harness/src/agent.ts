@@ -1,6 +1,7 @@
 import { streamText, stepCountIs, type ModelMessage, type ToolSet } from "ai";
 
 import { compactMessages } from "./compaction.js";
+import { estimateMessageTokens, estimateRequestTokens } from "./estimate.js";
 import type {
   HarnessEvent,
   HarnessRun,
@@ -15,10 +16,6 @@ const DEFAULT_MAX_TOKENS = 400_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
 const DEFAULT_COMPACT_AT_TOKENS = 120_000;
 const DEFAULT_KEEP_RECENT = 6;
-
-/** Rough estimate used only when the provider omits usage. */
-const estimateTokens = (value: unknown, charsPerToken = 4): number =>
-  Math.ceil((typeof value === "string" ? value.length : JSON.stringify(value ?? "").length) / charsPerToken);
 
 const emptyUsage = (): HarnessUsage => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0, estimated: false });
 
@@ -125,6 +122,14 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
     let steps = 0;
     let streamedText = "";
     let reason: HarnessStopReason = "completed";
+    /**
+     * Size of the most recent request as the provider counted it. Every step
+     * re-sends the whole transcript, so *cumulative* usage is not a measure of
+     * context pressure — the same tokens are billed again on every step. The
+     * last step's real input count is the only honest signal for "is the next
+     * request about to overflow", so that is what drives compaction.
+     */
+    let lastRequestTokens = estimateRequestTokens(options.system, messages);
 
     events.push({ type: "run-start", stepBudget: maxSteps, tokenBudget: maxTokens });
 
@@ -137,7 +142,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 
         const remainingTokens = maxTokens > 0 ? maxTokens - usage.totalTokens : Number.POSITIVE_INFINITY;
         const requestMessages = messages;
-        const estimatedInputTokens = estimateTokens({ system: options.system, messages: requestMessages }, 3);
+        const estimatedInputTokens = estimateRequestTokens(options.system, requestMessages);
         if (maxTokens > 0 && remainingTokens <= estimatedInputTokens) {
           reason = "max-tokens";
           break;
@@ -207,13 +212,17 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
         const totalTokens = stepUsage.totalTokens ?? inputTokens + outputTokens;
         if (totalTokens > 0 || inputTokens > 0 || outputTokens > 0) {
           addUsage(usage, { inputTokens, outputTokens, totalTokens });
+          lastRequestTokens = inputTokens > 0 ? inputTokens : lastRequestTokens;
         } else {
-          const estimatedInput = estimateTokens({ system: options.system, messages: requestMessages });
-          const estimatedOutput = estimateTokens(response.messages.filter((message) => message.role === "assistant"));
+          const estimatedInput = estimatedInputTokens;
+          const estimatedOutput = response.messages
+            .filter((message) => message.role === "assistant")
+            .reduce((sum, message) => sum + estimateMessageTokens(message), 0);
           usage.inputTokens += estimatedInput;
           usage.outputTokens += estimatedOutput;
           usage.totalTokens += estimatedInput + estimatedOutput;
           usage.estimated = true;
+          lastRequestTokens = estimatedInput;
         }
         events.push({ type: "step-finish", step, usage: { ...usage } });
 
@@ -234,7 +243,10 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           break;
         }
 
-        if (compactionMode !== "off" && usage.totalTokens >= compactAt) {
+        // Context pressure, not spend: only compact when the next request is
+        // genuinely large. Compacting early destroys the working memory the
+        // agent needs to finish the task, which is far worse than a big prompt.
+        if (compactionMode !== "off" && lastRequestTokens >= compactAt) {
           const compacted = await compactMessages({
             model: options.model,
             system: options.system,
