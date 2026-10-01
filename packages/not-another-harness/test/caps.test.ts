@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { capHead, capTail, sliceFileLines, toLines } from "../src/caps.js";
+import { DEFAULT_CAPS, capHead, capTail, sliceFileLines, toLines } from "../src/caps.js";
 
 describe("caps", () => {
   it("passes through short content", () => {
@@ -41,6 +41,8 @@ describe("caps", () => {
     expect(body.split("\n")).toEqual(["10|l9", "11|l10", "12|l11", "13|l12", "14|l13"]);
     expect(totalLines).toBe(1000);
     const capped = sliceFileLines(file, 1, undefined);
-    expect(capped.body.split("\n").length).toBe(400);
+    // The hard cap is deliberately small: every step replays the transcript, so an
+    // oversized read is paid for again on each subsequent step.
+    expect(capped.body.split("\n").length).toBe(DEFAULT_CAPS.read.maxLines);
   });
 });

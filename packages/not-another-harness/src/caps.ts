@@ -1,18 +1,20 @@
 /**
  * Hard output caps for tool results.
  *
- * Every model step replays the transcript, so one unbounded tool result is paid
- * for on every subsequent step. Cloud coding agents (Cursor, Pi, Claude Code)
- * all truncate aggressively and tell the model how to page for more — that
- * discipline is built in here, not left to prompt luck.
+ * Every model step replays the whole transcript, so one oversized result is paid
+ * for again on every step after it. Measured on the live eval, a single
+ * maximum-size `read` (40 KB ≈ 10k tokens) cost roughly 160k tokens across a
+ * 16-step run — more than that entire run's total. These caps are sized so the
+ * worst case stays proportionate: roughly 5k tokens for the largest tool, which
+ * is a few screens of code and still enough to work from. Agents page with
+ * `read`'s `offset`/`limit` and narrow shell commands when they need more.
  */
-
 export const DEFAULT_CAPS = {
-  read: { maxLines: 400, maxChars: 40_000 },
-  list: { maxLines: 600, maxChars: 24_000 },
-  bash: { maxLines: 300, maxChars: 30_000 },
-  grep: { maxMatches: 100, maxPerFile: 50, lineMaxChars: 300 },
-  glob: { maxMatches: 300 },
+  read: { maxLines: 250, maxChars: 20_000 },
+  list: { maxLines: 350, maxChars: 14_000 },
+  bash: { maxLines: 120, maxChars: 12_000 },
+  grep: { maxMatches: 60, maxPerFile: 30, lineMaxChars: 200 },
+  glob: { maxMatches: 200 },
 } as const;
 
 export type OutputCaps = typeof DEFAULT_CAPS;
