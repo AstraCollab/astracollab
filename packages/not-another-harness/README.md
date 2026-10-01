@@ -1,6 +1,6 @@
 # Not Another Harness
 
-`@astracollab/not-another-harness` is a small, explicit coding-agent runtime built on the Vercel AI SDK. It owns the agent loop, streamed events, token and step budgets, and transcript compaction; you provide the model and decide how tools are approved and displayed.
+`@astracollab/not-another-harness` is a small, explicit coding-agent runtime built on the Vercel AI SDK. It owns the agent loop, streamed events, spend and context budgets, prompt caching, and transcript compaction; you provide the model and decide how tools are approved and displayed.
 
 ## Install
 
@@ -40,7 +40,8 @@ const run = runAgent({
   system: buildSystemPrompt({ cwdLabel: cwd }),
   tools,
   maxSteps: 24,
-  maxTokens: 120_000,
+  rates: { input: 3, output: 15 },
+  maxSpendUsd: 2,
 });
 
 for await (const event of run.events) {
@@ -95,15 +96,30 @@ glob { pattern: "*.ts", path: "src", includeHidden: true }
 
 ## Prompt caching
 
-Every step re-sends the transcript, so the system prompt, tool definitions and all earlier turns are re-billed on each call. Set `cacheProvider` and the runtime attaches Anthropic-style `cacheControl` breakpoints to the tool definitions and the system prompt, so the repeated prefix is read back at a fraction of the price.
+Every step re-sends the transcript, so the system prompt, tool definitions and all earlier turns are re-billed on each call. Set `cacheProvider` and the runtime marks the cacheable prefix, so the repeated part is read back at a fraction of the price.
 
 ```ts
-const run = runAgent({ model, prompt, system, tools, cacheProvider: "anthropic", cacheTtl: "5m" });
+const run = runAgent({ model, prompt, system, tools, cacheProvider: "anthropic", cacheTtl: "1h" });
 ```
 
 `cacheProvider` is opt-in rather than detected from the model, because a marker sent to a provider that ignores it is wasted work at best. It applies to `anthropic` and `openrouter`.
 
 This only *marks* the prefix. It never rewrites earlier content, which matters: editing a prior `tool_result` invalidates the thinking-block signatures Anthropic binds to that prefix, and hard-fails the request.
+
+### Breakpoints are scarce — spend them on the growing part
+
+Anthropic allows a small fixed number of cache breakpoints per request, and the AI SDK enforces the cap by **silently discarding** the excess. A discarded marker is not an error; it is a full-price re-bill on every step of every run.
+
+So the runtime spends them deliberately:
+
+- **One breakpoint on the last tool definition.** A breakpoint marks a *prefix*, not a block, so marking the final tool caches the entire tool block. Marking all eleven tools of a real session says the same thing eleven times, fits in four slots, and silently re-bills the other seven forever.
+- **One request-level breakpoint**, which Anthropic auto-places on the last cacheable block and moves forward as the conversation grows. This is the one that matters: the transcript is the only part that keeps growing, and it is where the compounding cost of a long run lives.
+
+The tail marker has to *move*. A cache read resolves by walking backward from a breakpoint looking for a prefix a previous request wrote, and it only looks back a fixed number of blocks — so a marker pinned to a fixed index in a growing conversation eventually falls out of range and stops matching, with no error to explain why.
+
+### Use `cacheTtl: "1h"` for agent loops
+
+The cache lifetime is measured from the **start** of the request that writes or reads it, not the end of its response. Time spent generating counts against it: a step that streams for four minutes burns four minutes of a five-minute window, so the next request starts cold. 1h writes cost 2x base instead of 1.25x and break even after two reads.
 
 ### Bounding the transcript on any provider
 
@@ -145,19 +161,39 @@ This runs server-side, so it is not treated as a client edit and thinking-block 
 
 ## Budgets, compaction, and not stopping half-way
 
-`maxTokens` is a **spend** budget. Exhausting it mid-task used to end the run immediately, which meant a long job simply stopped — even though the reason it could not afford the next step was transcript size, which compaction fixes.
+Two questions deserve two answers, and conflating them is what made the old
+budget stop healthy runs:
 
-It now triages instead: when the next step plus a reserve is no longer affordable, it spends a compaction to buy room and carries on. It only gives up when even a compacted request cannot be paid for.
+- **"Will the next request fit?"** — `maxContextTokens`, checked against the
+  model's window. The answer is *compact*, because a full window is fixable.
+- **"Has this run cost too much?"** — `maxSpendUsd`, checked against money.
+
+`maxTokens` used to serve both roles, which is why it behaved as a step counter:
+it accumulated across every step, and since each step re-sends the transcript,
+400k arrived after roughly thirty steps no matter how little the run had actually
+cost. It is now **deprecated and off by default**. See
+[docs/long-running-agents.md](docs/long-running-agents.md) for the full reasoning.
 
 ```ts
 const run = runAgent({
   model, prompt, system, tools,
-  maxTokens: 400_000,        // spend ceiling
-  compactAtTokens: 120_000,  // context size trigger
+  rates: { input: 3, output: 15 }, // per-million USD for the model in use
+  maxSpendUsd: 5,                // money ceiling — the real safety rail
+  maxContextTokens: 180_000,     // the model's window
+  compactAtTokens: 120_000,      // context size trigger
 });
 ```
 
-Measured on a 15-step task with a 150-message history and a deliberately tight budget: **without triage the run dies at step 6 with `max-tokens`; with it, all 15 steps complete.**
+Spend is computed from the **cache-aware** usage breakdown, so a run that reads
+its prefix back from cache costs roughly a tenth of the same run without a cache
+and is not charged as though it had not. A token budget cannot express that.
+
+When a ceiling is about to end a run, the harness spends one last request on a
+handoff — commit what works, update the ledger, state what remains — instead of
+cutting the agent off mid-task. It emits a `wrap-up` event first so a UI can show
+it as a handoff rather than a failure, and sets `wrappedUp` on the result. The
+step is skipped when it would not be affordable, so the harness never overspends
+to say goodbye.
 
 ## Budgets and compaction
 
@@ -167,24 +203,29 @@ const run = runAgent({
   prompt,
   system,
   tools,
-  maxSteps: 32,             // default: 32
-  maxTokens: 400_000,       // default; 0 disables the cumulative cap
-  maxOutputTokens: 8_192,   // per model response
-  compactAtTokens: 120_000, // compact when one request reaches this
+  maxSteps: 32,              // default: 32
+  maxSpendUsd: 5,            // cumulative $ ceiling; needs `rates`
+  rates: { input: 3, output: 15 },
+  maxContextTokens: 180_000, // per-request ceiling vs the model's window
+  maxOutputTokens: 8_192,    // per model response
+  compactAtTokens: 120_000,  // compact when one request reaches this
   compactKeepRecent: 6,
-  compaction: "model",     // "model" | "truncate" | "off"
+  compaction: "model",      // "model" | "truncate" | "off"
+  wrapUpOnLimit: true,      // default: hand off cleanly before a hard stop
   messages: previousMessages,
   abortSignal: controller.signal,
 });
 ```
 
-`maxTokens` is a spend budget: it accumulates across the whole run, so it stops a run that is over-consuming even when the context is small.
+`compactAtTokens` is a *context* budget, deliberately separate from spend. Because every step re-sends the whole transcript, cumulative usage roughly multiplies the real context size — triggering compaction off it would compact healthy runs. Compaction instead compares the size of the most recent request against `compactAtTokens`.
 
-`compactAtTokens` is a *context* budget, and the two are deliberately different. Because every step re-sends the whole transcript, cumulative usage roughly multiplies the real context size — triggering compaction off it would compact healthy runs. Compaction instead compares the size of the most recent request (the provider's own reported input count, or an estimate when usage is missing) against `compactAtTokens`. It runs only when a step requested tools, and only when there is a middle section to summarize.
+That size is the **whole** request: cached reads are added to fresh input. Providers report cache reads separately from `input_tokens`, so reading `inputTokens` alone made the figure collapse toward the newest few blocks once caching worked, and `compactAtTokens` silently stopped firing exactly when compaction mattered most.
 
 Compaction keeps the original task message plus the most recent messages. The verbatim tail is extended backwards when necessary so a `tool` result is never separated from the `tool_call` that produced it — an orphaned result makes the transcript unsendable and ends the run.
 
-The result includes the final transcript, stop reason, step count, usage totals, and number of compactions. Usage is marked estimated if the provider does not return token counts.
+Set `compactAtTokens` **high** relative to the window. Compaction is lossy, and measured work on constraint decay found violations rising from 0% to 30% after a single compaction; compact late, and keep cheap tool-output elision underneath it.
+
+The result includes the final transcript, stop reason, step count, usage totals, spend in USD, and number of compactions. Usage is marked estimated if the provider does not return token counts.
 
 ## Steering a running agent
 

@@ -110,4 +110,44 @@ describe("compaction transcript integrity", () => {
     });
     expect(outcome).toBeNull();
   });
+
+  it("compacts at the smallest keepRecent the agent loop allows", async () => {
+    // `runAgent` floors `compactKeepRecent` at 2, so 2 is the smallest value a
+    // caller can pass — and it has to work. It previously could not compact at
+    // *any* transcript length: the guard was written as `length <= tailStart + 2`,
+    // which with `tailStart === length - keepRecent` reduces to `keepRecent <= 2`
+    // and so was always true. Setting the minimum silently disabled compaction.
+    const messages: ModelMessage[] = Array.from({ length: 10 }, (_, i) => ({
+      role: i % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `m${i}`,
+    }));
+    const outcome = await compactMessages({
+      model: {} as never,
+      system: "s",
+      messages,
+      keepRecent: 2,
+      mode: "truncate",
+    });
+    expect(outcome).not.toBeNull();
+    // The head and the retained tail both survive.
+    expect(outcome!.messages[0]).toEqual(messages[0]);
+    expect(outcome!.messages.length).toBeLessThan(messages.length);
+  });
+
+  it("still declines when the tail leaves genuinely nothing to summarize", async () => {
+    // The fix must not over-compact: with only the task and a one-message tail
+    // there is no middle, so the correct answer is still null.
+    const messages: ModelMessage[] = [
+      { role: "user", content: "task" },
+      { role: "assistant", content: "done" },
+    ];
+    const outcome = await compactMessages({
+      model: {} as never,
+      system: "s",
+      messages,
+      keepRecent: 2,
+      mode: "truncate",
+    });
+    expect(outcome).toBeNull();
+  });
 });

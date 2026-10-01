@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { extractDeterministic } from "../src/memory-rules.js";
+// From the harness's public API: nah consumes the layer, it does not carry a copy.
+import { extractDeterministic } from "@astracollab/not-another-harness";
 
 const texts = (message: string) => extractDeterministic(message).map((m) => m.content);
 

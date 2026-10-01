@@ -8,6 +8,7 @@ import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
 import type { Terminal } from "@earendil-works/pi-tui";
 
 import { createApprover } from "../src/permissions.js";
+import { TurnOutput } from "../src/tui/output.js";
 import type { SessionState } from "../src/session.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -211,4 +212,55 @@ describe("TUI approval does not wedge the run", () => {
     terminal.onInput?.("\x03");
     await host;
   }, 20000);
+});
+
+describe("approval prompt surface", () => {
+  const FILL = "48;5;94";
+
+  it("covers every row of the panel and none after it", () => {
+    const out = new TurnOutput(60);
+    out.addApproval("  ! bash npm test — allow? [y / n / a=always this tool / A=always this exact call]");
+    out.addLine("after the prompt");
+    const lines = out.render(60);
+    const filled = lines.filter((l) => l.includes(FILL));
+    expect(filled.length).toBeGreaterThan(0);
+    // Every row that opens the fill must close it, or the fill bleeds downward.
+    for (const line of filled) expect(line.endsWith("\u001b[0m")).toBe(true);
+    // The block after the panel is untouched. This is the documented failure:
+    // the row is padded to the pane width and then clamped to the terminal width,
+    // so an escape applied to an ordinary line gets cut and the band runs on.
+    for (const line of lines.slice(lines.findIndex((l) => l.includes("after the prompt")))) {
+      expect(line).not.toContain(FILL);
+    }
+  });
+
+  it("terminates every escape at a narrow width with a long label", () => {
+    const out = new TurnOutput(24);
+    out.addApproval(`  ! bash ${"x".repeat(200)} — allow? [y / n / a=always this tool]`);
+    const lines = out.render(24);
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      if (line.includes(FILL)) expect(line.endsWith("\u001b[0m")).toBe(true);
+    }
+  });
+
+  it("carries no nested escape of its own", () => {
+    // A nested SGR inside a padded row is what makes the row longer in bytes than
+    // in columns, which is how the closing escape gets clipped. The fill must
+    // arrive only through the background function.
+    const out = new TurnOutput(60);
+    out.addApproval("  ! bash npm test — allow? [y / n]");
+    const row = out.render(60).find((l) => l.includes(FILL))!;
+    const inner = row.slice(row.indexOf("\u001b[") + 2, row.lastIndexOf("\u001b["));
+    expect(inner).not.toContain("\u001b[");
+  });
+
+  it("does not tint the marker glyph the same colour as the surface", () => {
+    // `c.yellow` on an amber fill is the one pairing guaranteed to be invisible,
+    // so the marker is dropped in favour of the surface carrying the emphasis.
+    const out = new TurnOutput(80);
+    out.addApproval("  ! bash rm -rf /tmp/x — allow? [y / n]");
+    const row = out.render(80).find((l) => l.includes(FILL))!;
+    expect(row).not.toContain("\u001b[33m");
+  });
 });

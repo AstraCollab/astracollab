@@ -16,6 +16,16 @@ import { createNodeEnvironment } from "@astracollab/not-another-harness/node";
 import type { ResolvedModel } from "./model.js";
 import type { PermissionMode } from "./permissions.js";
 import { formatTaskLedger } from "./task-ledger.js";
+import { ratesFor } from "./rates.js";
+import { resolveTurnSpendUsd } from "./budget.js";
+
+/**
+ * Per-request ceiling for one interactive turn, checked against the model's
+ * context window. Generous on purpose: exceeding the window is fixable, so this
+ * should compact rather than stop, and compaction is only worth doing when the
+ * request is genuinely large.
+ */
+const TURN_CONTEXT_LIMIT = 180_000;
 
 /** Asks the user to approve a tool call and resolves with their answer. */
 export type ApprovalPrompt = (question: string) => Promise<string>;
@@ -43,6 +53,26 @@ export type SessionState = {
   /** Output tokens from the latest completed model step. */
   lastOutputTokens: number;
   turns: number;
+  /** Cumulative prompt-cache read tokens across the session. */
+  cacheReadTokens: number;
+  /** Cumulative prompt-cache write tokens across the session. */
+  cacheWriteTokens: number;
+  /**
+   * Cache hit rate of the most recent request, 0..1.
+   *
+   * The one number that says whether caching is working. A run that reads its
+   * prefix back pays ~0.1x per token; one that rewrites it every step pays 1.25x.
+   * Above ~0.9 is healthy, and a persistent low value means something in the
+   * prefix is changing between steps.
+   */
+  cacheHitRate: number;
+  /** Cumulative spend this session in USD, or 0 when rates are unknown. */
+  spendUsd: number;
+  /**
+   * Explicit per-turn spend override in USD, or null to use the context-scaled
+   * default. Set by `/budget`.
+   */
+  turnSpendLimitUsd: number | null;
   /** Approval policy for mutating tools (edit/write/bash). */
   permissions: PermissionMode;
   /**
@@ -60,6 +90,11 @@ export type SessionState = {
   onSessionSwitch?: (messages: ModelMessage[]) => void;
   /** Display label for the working dir (e.g. remote sandbox name). */
   sandboxCwd?: string;
+  /**
+   * Directory the file tools are confined to. Normally the enclosing git
+   * repository rather than `cwd`, so a monorepo package is not a pen.
+   */
+  workspaceRoot?: string;
   /** Tear down a remote sandbox (no-op for local sessions). */
   destroySandbox?: () => Promise<void>;
   /** Cognitive Memory cache layer */
@@ -160,7 +195,12 @@ export const runTurn = (
     // because it only *marks* the prefix; nothing is rewritten, so thinking
     // signatures stay valid.
     cacheProvider: state.model.provider,
-    cacheTtl: "5m",
+    // 1h, not 5m. The cache lifetime runs from the *start* of the request that
+    // writes or reads it, so a step that spends four minutes streaming burns four
+    // minutes of a five-minute window and the next request starts cold. Long
+    // agent steps are exactly the case 5m is wrong for; 1h writes cost 2x
+    // instead of 1.25x and break even after two reads.
+    cacheTtl: "1h",
     // Let the API clear old tool results for us. Triggers well below our own
     // compaction threshold, because the cost is the repeated replay of a
     // transcript that never grows large enough to trip that threshold.
@@ -172,6 +212,17 @@ export const runTurn = (
       keepToolUses: 6,
       excludeTools: ["read", "edit", "write"],
     },
+    // Money, not tokens. A cached token costs a tenth of a fresh one, so a token
+    // count charges a well-cached run at ~10x its real cost and fires on harness
+    // efficiency rather than on money spent.
+    rates: ratesFor(state.model.modelId),
+    // Scaled to the transcript this turn is actually carrying, not a flat $5.
+    // A fresh session does not inherit a budget sized for a full window.
+    maxSpendUsd: resolveTurnSpendUsd(state.contextUsedTokens, state.turnSpendLimitUsd),
+    // The model's window. Exceeding it is fixable — compaction shrinks the
+    // request — so this triggers compaction, and only stops a run when even a
+    // compacted request cannot fit.
+    maxContextTokens: TURN_CONTEXT_LIMIT,
     system: `${state.system}\n\n${taskContext}`,
     prompt,
     messages: state.messages,
@@ -329,6 +380,9 @@ export const adoptUsage = async (state: SessionState): Promise<void> => {
   state.contextUsedTokens = usage.contextUsedTokens;
   state.contextUsageEstimated = usage.contextUsageEstimated;
   state.lastOutputTokens = usage.lastOutputTokens;
+  state.cacheReadTokens = usage.cacheReadTokens ?? 0;
+  state.cacheWriteTokens = usage.cacheWriteTokens ?? 0;
+  state.spendUsd = usage.spendUsd ?? 0;
 };
 
 /** Reset the cumulative counters and push the zeroed state to the store. */
@@ -338,6 +392,10 @@ export const resetUsage = async (state: SessionState): Promise<void> => {
   state.contextUsedTokens = 0;
   state.contextUsageEstimated = false;
   state.lastOutputTokens = 0;
+  state.cacheReadTokens = 0;
+  state.cacheWriteTokens = 0;
+  state.cacheHitRate = 0;
+  state.spendUsd = 0;
   await saveUsage(state);
 };
 
@@ -353,6 +411,9 @@ export const saveUsage = async (state: SessionState): Promise<void> => {
       contextUsedTokens: state.contextUsedTokens,
       contextUsageEstimated: state.contextUsageEstimated,
       lastOutputTokens: state.lastOutputTokens,
+      cacheReadTokens: state.cacheReadTokens,
+      cacheWriteTokens: state.cacheWriteTokens,
+      spendUsd: state.spendUsd,
     });
   } catch {
     // Stats are cosmetic next to the transcript, which is already saved. A
@@ -365,6 +426,9 @@ const foldTurnIntoState = (state: SessionState, result: HarnessRunResult): void 
   state.totalUsage.inputTokens += result.usage.inputTokens;
   state.totalUsage.outputTokens += result.usage.outputTokens;
   state.totalUsage.totalTokens += result.usage.totalTokens;
+  state.cacheReadTokens += result.usage.cachedInputTokens ?? 0;
+  state.cacheWriteTokens += result.usage.cacheCreationInputTokens ?? 0;
+  state.spendUsd += result.usage.spendUsd ?? 0;
 };
 
 const makeStepRecovery = (
@@ -435,5 +499,8 @@ export const resumeSession = async (state: SessionState): Promise<boolean> => {
   state.contextUsedTokens = usage.contextUsedTokens;
   state.contextUsageEstimated = usage.contextUsageEstimated;
   state.lastOutputTokens = usage.lastOutputTokens;
+  state.cacheReadTokens = usage.cacheReadTokens ?? 0;
+  state.cacheWriteTokens = usage.cacheWriteTokens ?? 0;
+  state.spendUsd = usage.spendUsd ?? 0;
   return state.messages.length > 0;
 };

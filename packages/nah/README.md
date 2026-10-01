@@ -167,7 +167,7 @@ survive into later sessions.
 - Facts, preferences and conventions are extracted from each turn with the same
   model that runs the turn, plus deterministic pattern matching so a plainly
   stated fact is captured even if the model refuses or hedges.
-- Memories live in `~/.nah/memory/<cwd-hash>.json` and reload on the next run.
+- Memories live in a SQLite database at `~/.nah/memory/<cwd-hash>.sqlite` and reload on the next run. A memory file from an earlier version is imported once and kept alongside as `.json.imported`. No native dependency: it uses `node:sqlite`, which Node has shipped since 22.5.
 - Each turn gets a one-line **index** of remembered items. A full body is only
   spent when a deterministic trigger earns it: you name an identifier (URL, path,
   code, camelCase token) that is not in the visible transcript and a memory

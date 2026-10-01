@@ -27,6 +27,7 @@ import { runTurn, type SessionState } from "../session.js";
 import { handleSlashCommand, setActiveModel, setupProvider } from "../repl.js";
 import { defaultSessionFile, withFileInclusions } from "../context.js";
 import { c } from "../render.js";
+import { resolveTurnSpendUsd } from "../budget.js";
 import { exclusiveCommands, renderCommandHelp, SLASH_COMMANDS } from "../commands.js";
 
 import { TurnOutput, userText } from "./output.js";
@@ -125,6 +126,7 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
       // key off it, so printing it is what makes a bug report actionable.
       sessionId: nodePath.basename(base, ".jsonl"),
       cwd: state.sandboxCwd ?? state.cwd,
+      workspaceRoot: state.workspaceRoot ?? null,
       modelProvider: state.model?.provider ?? "none",
       modelId: state.model?.modelId ?? "not configured",
       contextUsedTokens: state.contextUsedTokens,
@@ -132,6 +134,13 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
       inputTokens: state.totalUsage.inputTokens,
       outputTokens: state.totalUsage.outputTokens,
       totalTokens: state.totalUsage.totalTokens,
+      cacheReadTokens: state.cacheReadTokens,
+      cacheWriteTokens: state.cacheWriteTokens,
+      cacheHitRate: state.cacheHitRate,
+      spendUsd: state.spendUsd,
+      spendLimitUsd:
+        state.turnSpendLimitUsd ??
+        resolveTurnSpendUsd(state.contextUsedTokens, null),
       turns: state.turns,
       permissions: state.permissions,
       providerStatus: state.providerStatus,
@@ -231,7 +240,11 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
    */
   state.setApprovalPrompt?.((question) =>
     new Promise<string>((resolve) => {
-      output.addLine(`  ${c.yellow("!")} ${question}`);
+      // Plain text on an amber panel. The fill arrives through `addApproval`'s
+      // background function rather than as escapes in this string, because the
+      // layout clamps rows to the terminal width and would cut a trailing escape
+      // off mid-sequence.
+      output.addApproval(`  ! ${question}`);
       approval = { question, resolve };
       refreshPrompt();
       screen.requestRender(true);

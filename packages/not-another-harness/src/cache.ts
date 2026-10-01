@@ -9,13 +9,41 @@
  * that prefix.
  *
  * The cacheable prefix is therefore marked, never rewritten.
+ *
+ * ## Breakpoints are a scarce resource
+ *
+ * Anthropic allows a small fixed number of cache breakpoints per request, and
+ * the AI SDK enforces the cap by **silently discarding** any marker past it.
+ * A discarded marker is not an error — it is a full-price re-bill on every step
+ * of every run, forever.
+ *
+ * A breakpoint marks a *prefix*, not a block. Marking the last tool definition
+ * therefore caches the entire tool block, and marking every tool says the same
+ * thing N times while spending the budget that the transcript needed. The rules
+ * below follow from that:
+ *
+ * - One breakpoint on the **last** tool, never one per tool.
+ * - One request-level breakpoint, which Anthropic auto-places on the last
+ *   cacheable block and moves forward as the conversation grows. That is the
+ *   moving tail breakpoint, and it is the one that matters for a long run
+ *   because the transcript is the only part that keeps growing.
  */
 
 export type CacheControl = { type: "ephemeral"; ttl?: "5m" | "1h" };
 
 import type { SharedV2ProviderOptions } from "@ai-sdk/provider";
+import type { ModelMessage } from "ai";
 
 const ANTHROPIC_KEYS = new Set(["anthropic"]);
+
+/**
+ * Total cache breakpoints a single request may carry.
+ *
+ * The AI SDK caps explicit markers at this number and warns rather than failing,
+ * so exceeding it is silent. Kept here so the harness can reason about its own
+ * footprint instead of discovering it from a billing report.
+ */
+export const MAX_CACHE_BREAKPOINTS = 4;
 
 /**
  * Whether a provider honours Anthropic-style `cacheControl` breakpoints.
@@ -43,27 +71,93 @@ export const cacheOptions = (
 };
 
 /**
- * Wrap a tool map so every tool definition carries its own cache breakpoint.
+ * Mark the **last** tool definition with a cache breakpoint.
  *
- * Tool schemas are re-sent verbatim on each call and are large; caching them is
- * a straightforward saving and, being append-only, is safe.
+ * A breakpoint marks a prefix that ends at that block, so the final tool
+ * carries the whole tool schema block into the cache. Marking every tool
+ * individually spends the provider's breakpoint budget to express one fact N
+ * times — and because the cap is enforced by *silently discarding* the excess,
+ * the tools that lose their marker are re-billed at full price on every step
+ * with nothing in the logs to indicate it.
+ *
+ * An 11-tool session therefore marked 4 tools and silently re-billed the other
+ * 7 on every request. One marker on the last tool covers all of them.
  */
 export const withCachedToolSchemas = <T extends Record<string, unknown>>(
   tools: T,
   provider: string | undefined,
   ttl: "5m" | "1h" = "5m",
 ): T => {
-  if (!supportsCaching(provider) || Object.keys(tools).length === 0) return tools;
+  if (!supportsCaching(provider)) return tools;
+  const names = Object.keys(tools);
+  if (names.length === 0) return tools;
   const control: CacheControl = { type: "ephemeral", ttl };
-  const out: Record<string, unknown> = {};
-  for (const [name, tool] of Object.entries(tools)) {
-    if (typeof tool !== "object" || tool === null) {
-      out[name] = tool;
-      continue;
-    }
-    const existing = (tool as { providerOptions?: Record<string, unknown> }).providerOptions;
-    out[name] = {
-      ...(tool as object),
+  const out: Record<string, unknown> = { ...tools };
+  const lastName = names[names.length - 1]!;
+  const last = tools[lastName];
+  if (typeof last !== "object" || last === null) return tools;
+  const existing = (last as { providerOptions?: Record<string, unknown> }).providerOptions;
+  out[lastName] = {
+    ...(last as object),
+    providerOptions: {
+      ...(existing ?? {}),
+      anthropic: {
+        ...((existing?.anthropic as Record<string, unknown> | undefined) ?? {}),
+        cacheControl: control,
+      },
+    },
+  };
+  return out as T;
+};
+
+/**
+ * Breakpoints left for the transcript after the tools and system prompt.
+ *
+ * The tool block and the request-level breakpoint are committed first, so this
+ * is what remains for the one part of the request that actually grows.
+ */
+export const TAIL_CACHE_BREAKPOINTS = 2;
+
+/**
+ * Mark the growing end of the transcript so it is read back, not re-billed.
+ *
+ * Every step re-sends the entire conversation, so without a breakpoint here the
+ * dominant cost of a long run — replaying a transcript that grew by a few
+ * thousand tokens each step — is paid at full price every time. With one, each
+ * step reads back the prefix the previous step wrote.
+ *
+ * The marker has to *move*. Anthropic resolves a cache read by walking backward
+ * from a breakpoint looking for a prefix a previous request wrote, and it only
+ * looks back a fixed number of blocks. A breakpoint pinned to a fixed index in a
+ * growing conversation eventually falls outside that window and stops matching —
+ * no error, no warning, just a cache that silently stopped working.
+ *
+ * So the marker is placed on the message that was last present when the
+ * previous request was sent. Everything up to it is byte-identical to what that
+ * request wrote, which is exactly the condition a cache read requires.
+ *
+ * Only message-level options are touched. Content is never altered, so thinking
+ * signatures bound to the prefix stay valid.
+ */
+export const withCachedTail = (
+  messages: readonly ModelMessage[],
+  stableThrough: number,
+  provider: string | undefined,
+  ttl: "5m" | "1h" = "5m",
+): ModelMessage[] => {
+  if (!supportsCaching(provider)) return [...messages];
+  // Nothing new since the last request: the prefix is unchanged, so there is no
+  // new entry to write and nothing to gain from marking it again.
+  const index = Math.min(Math.max(0, Math.floor(stableThrough)), messages.length - 1);
+  if (index < 0) return [...messages];
+  const target = messages[index];
+  if (!target) return [...messages];
+  const control: CacheControl = { type: "ephemeral", ttl };
+  const existing = (target as { providerOptions?: Record<string, unknown> }).providerOptions;
+  return [
+    ...messages.slice(0, index),
+    {
+      ...target,
       providerOptions: {
         ...(existing ?? {}),
         anthropic: {
@@ -71,19 +165,40 @@ export const withCachedToolSchemas = <T extends Record<string, unknown>>(
           cacheControl: control,
         },
       },
-    };
-  }
-  return out as T;
+    } as ModelMessage,
+    ...messages.slice(index + 1),
+  ];
 };
 
 /**
- * Number of recent messages to leave breakpoint-free.
+ * Whether a provider's `inputTokens` already includes the cached portion.
  *
- * Anthropic allows a small number of cache breakpoints per request. Two are
- * spent on the system prompt and tool definitions, leaving the transcript to
- * grow its own at the tail.
+ * - `"split"` — Anthropic. `input_tokens` counts only what came *after* the last
+ *   cache breakpoint; the cached prefix is reported separately as
+ *   `cache_read_input_tokens`, so the two must be added to get the real size.
+ * - `"inclusive"` — OpenAI and OpenAI-compatible gateways, OpenRouter included.
+ *   `prompt_tokens` already contains `cached_tokens`, so adding them counts the
+ *   cached prefix twice.
+ *
+ * Getting this wrong is not a rounding error. On a run with a 90% hit rate the
+ * split formula reports roughly 10x the true context size, which then drives
+ * compaction and the spend rail off a number that was never real.
  */
-export const TAIL_CACHE_BREAKPOINTS = 2;
+export type CacheAccounting = "split" | "inclusive";
+
+const SPLIT_ACCOUNTING_PROVIDERS = new Set(["anthropic"]);
+
+/**
+ * Which accounting convention `provider` uses.
+ *
+ * Inferred from the provider id, and overridable per run, because a gateway can
+ * front either convention and a wrong guess silently corrupts every size figure
+ * the harness reports.
+ */
+export const cacheAccountingFor = (provider: string | undefined): CacheAccounting => {
+  if (!provider) return "inclusive";
+  return SPLIT_ACCOUNTING_PROVIDERS.has(provider.toLowerCase()) ? "split" : "inclusive";
+};
 
 /**
  * Tools whose results stay resident.
