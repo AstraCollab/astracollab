@@ -28,9 +28,37 @@ export const formatTaskLedger = (ledger: SessionTaskLedger): string => [
 
 type Approver = (toolName: string, input: unknown) => Promise<boolean>;
 
+/**
+ * Resolve a step/check by id, tolerating the shapes a model naturally guesses.
+ *
+ * Plans used to mint bare numeric ids ("1"), so the obvious guess of "step-1"
+ * failed with a dead end. Accept the prefixed form, the bare number, and a
+ * suffix match so older sessions keep working.
+ */
+const matchesId = (actual: string, requested: string, prefix: "step" | "check"): boolean => {
+  const want = requested.trim().toLowerCase();
+  const have = actual.trim().toLowerCase();
+  if (!want || want === have) return false;
+  if (have === `${prefix}-${want}`) return true;
+  if (have === want.replace(new RegExp(`^${prefix}-`), "")) return true;
+  return have.endsWith(`-${want}`);
+};
+
+const resolveStep = <T extends { id: string }>(steps: T[], id: string): T | undefined =>
+  steps.find((s) => s.id === id) ?? steps.find((s) => matchesId(s.id, id, "step"));
+
+const resolveCheck = <T extends { id: string }>(checks: T[], id: string): T | undefined =>
+  checks.find((c) => c.id === id) ?? checks.find((c) => matchesId(c.id, id, "check"));
+
+/** Always name the valid ids, so a wrong guess costs one call instead of a stall. */
+const unknownIdError = (kind: "step" | "check", requested: string, ids: string[]): string =>
+  ids.length > 0
+    ? `Error: no ${kind} with id "${requested}". Valid ${kind} ids: ${ids.join(", ")}.`
+    : `Error: the plan has no ${kind}s yet.`;
+
 export const createTaskLedgerTool = (state: SessionState, approve: Approver) => {
   let pending: Promise<unknown> = Promise.resolve();
-  const execute = async (input: z.infer<typeof taskInput>): Promise<string> => {
+  const execute = async (input: z.infer<typeof taskInput>, signal?: AbortSignal): Promise<string> => {
     if (input.action === "discover_checks") {
       const checks = await discoverChecks(state);
       state.discoveredChecks = checks;
@@ -44,8 +72,8 @@ export const createTaskLedgerTool = (state: SessionState, approve: Approver) => 
       if (invalid.length) return `Error: each check command must exactly match a discovered command. Invalid: ${invalid.map((check) => check.command).join(", ")}`;
       const ledger: SessionTaskLedger = {
         version: 2, goal: input.goal, status: "in_progress",
-        steps: input.steps.map((title, index) => ({ id: String(index + 1), title, status: "pending" })),
-        checks: input.checks.map((check, index) => ({ id: String(index + 1), ...check, status: "pending", attempts: [] })),
+        steps: input.steps.map((title, index) => ({ id: `step-${index + 1}`, title, status: "pending" })),
+        checks: input.checks.map((check, index) => ({ ...check, id: `check-${index + 1}`, status: "pending" as const, attempts: [] })),
         updatedAt: new Date().toISOString(),
       };
       await persist(state, ledger);
@@ -56,15 +84,15 @@ export const createTaskLedgerTool = (state: SessionState, approve: Approver) => 
     if (!current) return "Error: create a task plan before updating its progress.";
     const next: SessionTaskLedger = structuredClone(current);
     if (input.action === "step") {
-      const step = next.steps.find((item) => item.id === input.id);
-      if (!step) return `Error: no task step with id ${input.id}.`;
+      const step = resolveStep(next.steps, input.id);
+      if (!step) return unknownIdError("step", input.id, current.steps.map((s) => s.id));
       step.status = input.status;
       if (input.note !== undefined) step.note = input.note;
       if (input.status === "blocked") next.status = "blocked";
       else if (input.status === "in_progress" && next.status === "blocked") next.status = "in_progress";
     } else if (input.action === "run_check") {
-      const check = next.checks.find((item) => item.id === input.id);
-      if (!check) return `Error: no acceptance check with id ${input.id}.`;
+      const check = resolveCheck(next.checks, input.id);
+      if (!check) return unknownIdError("check", input.id, next.checks.map((c) => c.id));
       if (!check.command) return `Error: acceptance check ${input.id} has no executable command; replace the plan after discovering checks.`;
       const approved = await approve("bash", { command: check.command, timeoutSeconds: input.timeoutSeconds ?? 300, purpose: `Acceptance check ${check.id}: ${check.description}` });
       if (!approved) return `Check ${check.id} was not run because shell execution was denied.`;
@@ -73,7 +101,9 @@ export const createTaskLedgerTool = (state: SessionState, approve: Approver) => 
       const started = Date.now();
       let result: { stdout: string; stderr: string; exitCode: number };
       try {
-        result = await state.workspace.exec(check.command, { timeoutSeconds: input.timeoutSeconds ?? 300 });
+        // Acceptance checks can run for minutes; honour the run's abort signal so
+        // Ctrl-C stops the check instead of only being noticed afterwards.
+        result = await state.workspace.exec(check.command, { timeoutSeconds: input.timeoutSeconds ?? 300, signal });
       } catch (error) {
         result = { stdout: "", stderr: error instanceof Error ? error.message : String(error), exitCode: 1 };
       }
@@ -100,8 +130,9 @@ export const createTaskLedgerTool = (state: SessionState, approve: Approver) => 
   return tool({
     description: "Maintain durable task progress. For substantial multi-step tasks, call discover_checks before editing, plan observable steps and executable acceptance checks using exact discovered commands, update steps, then run each acceptance check. A check passes only when run_check executes it and returns exit code 0. Repair failures and rerun; only mark completed after every step and check passes.",
     inputSchema: taskInput,
-    execute: (input) => {
-      const result = pending.then(() => execute(input), () => execute(input));
+    execute: (input, options) => {
+      const signal = (options as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+      const result = pending.then(() => execute(input, signal), () => execute(input, signal));
       pending = result.then(() => undefined, () => undefined);
       return result;
     },

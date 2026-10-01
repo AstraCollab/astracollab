@@ -1,12 +1,27 @@
 import { HELP_TEXT, parseCliArgs } from "./args.js";
-import { defaultSessionFile, resolveSessionFile, withFileInclusions } from "./context.js";
+import {
+  allocateSessionFile,
+  latestSessionFile,
+  resolveSessionFile,
+  withFileInclusions,
+} from "./context.js";
 import { parsePermissionMode, type PermissionMode } from "./permissions.js";
 import { makeState, renderTurn, startRepl } from "./repl.js";
 import { runTurn, resumeSession } from "./session.js";
+import { startTuiHost } from "./tui/host.js";
+import { ProcessTerminal } from "@earendil-works/pi-tui";
 
 // Inlined at build time by vite define (keeps dist/cli.js self-contained).
 declare const __NAH_VERSION__: string;
 const pkg = { version: typeof __NAH_VERSION__ === "string" ? __NAH_VERSION__ : "0.0.0" };
+
+/**
+ * The alternate-screen TUI needs a real terminal and a writable frame buffer.
+ * Anything else (CI, pipes, dumb terminals, `NO_COLOR` runs) keeps the
+ * line-oriented renderer, which is also the escape hatch via --no-tui.
+ */
+const tuiAvailable = (noTui: boolean): boolean =>
+  !noTui && Boolean(process.stdin.isTTY) && process.stdout.isTTY === true && process.env.TERM !== "dumb";
 
 const readStdin = async (): Promise<string> => {
   if (process.stdin.isTTY) {
@@ -38,9 +53,18 @@ const main = async (): Promise<number> => {
   }
   prompt = await withFileInclusions(args.cwd, args.files, prompt);
 
-  const sessionPath = args.sessionPath
-    ? resolveSessionFile(args.cwd, args.sessionPath)
-    : defaultSessionFile(args.cwd);
+  // Session selection:
+  //   --session <id|path>  load exactly that session
+  //   -c / --continue     resume the most recent session for this cwd
+  //   (neither)            start a NEW session in its own file
+  const noSession = args.noSession;
+  const sessionPath = noSession
+    ? undefined
+    : args.sessionPath
+      ? resolveSessionFile(args.cwd, args.sessionPath)
+      : args.continueSession
+        ? await latestSessionFile(args.cwd)
+        : await allocateSessionFile(args.cwd);
 
   // Interactive sessions gate mutating tools by default; print/json is yolo
   // (there's no way to answer prompts non-interactively — pass --permissions readonly to lock down).
@@ -61,7 +85,7 @@ const main = async (): Promise<number> => {
       cwd: args.cwd,
       modelSpec: args.model,
       sessionPath,
-      noSession: args.noSession,
+      noSession,
       permissions,
       sandbox: args.sandbox,
       allowUnconfiguredModel: true,
@@ -78,6 +102,10 @@ const main = async (): Promise<number> => {
         await renderTurn(turn.events);
         await turn.done;
         process.stdout.write("\n");
+      }
+      if (tuiAvailable(args.noTui)) {
+        await startTuiHost({ state, terminal: new ProcessTerminal() });
+        return 0;
       }
       await startRepl(state);
       return 0;
@@ -96,7 +124,7 @@ const main = async (): Promise<number> => {
     cwd: args.cwd,
     modelSpec: args.model,
     sessionPath,
-    noSession: args.noSession,
+    noSession,
     permissions,
     sandbox: args.sandbox,
   });

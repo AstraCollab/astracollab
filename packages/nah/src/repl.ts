@@ -12,38 +12,16 @@ import { pickModel } from "./model-picker.js";
 import { removeProviderKey, storeProviderKey, type BuiltinProvider } from "./credentials.js";
 import { createApprover, parsePermissionMode, type PermissionMode } from "./permissions.js";
 import { c, formatFileChange, formatWorkspaceDiff, renderWelcome, toolLabel, usageLine, type RenderableFileChange } from "./render.js";
+import { renderCommandHelp } from "./commands.js";
+import { listSessionIds } from "./context.js";
+import { createTurnExtractor, prepareMemory } from "./memory.js";
+import { createRecallTool } from "./memory-tool.js";
 import { runTurn, type SessionState, type StepRecovery } from "./session.js";
 import { createTaskLedgerTool, formatTaskLedger } from "./task-ledger.js";
 import { createDelegationTool } from "./delegation.js";
 import { loadLastModel, saveLastModel } from "./model-preferences.js";
 
-const REPL_HELP = `Slash commands:
-  /help                 Show this help
-  /model                Search and select a model
-  /model <spec>         Switch directly (e.g. /model openai:gpt-5.2)
-  /provider [name]      Add or switch provider credentials securely
-  /provider remove <name>  Remove a saved provider key
-  /mode [mode]         Set ask, yolo, or readonly permissions
-  /permissions [mode]   ask | yolo | readonly (gate edit/write/bash)
-  /stats                Tokens used this session
-  /task                 Show the saved plan and progress
-  delegate_task         Run an independent subtask in a temporary Git worktree
-  /task clear           Clear the active plan
-  /diff                 Show current workspace changes
-  /undo                 Undo the last turn's workspace changes
-  /undo [step]          Restore the last turn or last agent step
-  /clear                Drop the transcript (start fresh)
-  /branches             List session branches
-  /branch <name>        Fork or switch to a named branch
-  /session list         List sessions for the current directory
-  /session new|off      New JSONL session file / stop persisting
-  /compact              Force transcript compaction (truncate mode)
-  /memory               Show Cognitive Memory state (L0-L3 cache, active tensions, guardrails)
-  /tensions             Show active knowledge tensions (contradictions)
-  /tensions resolve <id> Resolve a knowledge tension
-  /quit                 Exit and show how to resume (Ctrl-C also aborts the current turn)
-
-Everything else is sent to the agent. Prefix files with @ to include them.`;
+const REPL_HELP = renderCommandHelp();
 
 const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
 
@@ -69,23 +47,59 @@ const centeredOutput = (out: NodeJS.WriteStream): NodeJS.WriteStream => {
   }) as NodeJS.WriteStream;
 };
 
+/** A turn currently in flight that queued input can be steered into. */
+type ActiveTurn = {
+  steer(text: string): boolean;
+};
+
+/** Longest steer echo we print before truncating, so one paste cannot flood the TUI. */
+const STEER_ECHO_LIMIT = 120;
+
+const truncateForDisplay = (value: string): string =>
+  value.length > STEER_ECHO_LIMIT ? `${value.slice(0, STEER_ECHO_LIMIT)}…` : value;
+
+/**
+ * Keep a half-typed steer message alive while the renderer paints.
+ *
+ * The renderer redraws its spinner with a carriage return + erase-line, which
+ * would delete whatever the user had typed since the turn started. Every other
+ * chunk is allowed through: readline owns the current line, and appending model
+ * output to it is merely untidy, whereas erasing the input loses it entirely.
+ */
+export const protectTypedInput = (rl: readline.Interface) => (chunk: string): boolean => {
+  if (chunk.startsWith("\r\u001b[2K") && rl.line.length > 0) {
+    return false;
+  }
+  return true;
+};
+
 /** Render one turn to stdout: streamed text + one line per tool call. */
 export const renderTurn = async (
   events: AsyncIterable<HarnessEvent>,
   out: NodeJS.WriteStream = process.stdout,
   getProviderStatus: () => string | null = () => null,
   getFileChanges: () => RenderableFileChange[] = () => [],
+  /**
+   * Called before every write. Return false to drop the chunk — the host uses
+   * this to stop the renderer's spinner from erasing a steer message the user is
+   * part-way through typing.
+   */
+  beforeWrite?: (chunk: string) => boolean,
 ): Promise<void> => {
   let textOpen = false;
   const terminalWidth = out.columns ?? 80;
   const contentWidth = Math.min(100, Math.max(40, terminalWidth - 8));
   const indentWidth = out.isTTY ? Math.max(0, Math.floor((terminalWidth - contentWidth) / 2)) : 0;
   const indent = " ".repeat(indentWidth);
-  const writeIndented = (value: string) => out.write(`${indent}${value}`);
+  const write = (value: string): boolean => {
+    if (beforeWrite && beforeWrite(value) === false) return true;
+    return out.write(value);
+  };
+  const writeIndented = (value: string) => write(`${indent}${value}`);
   let responseBuffer = "";
   const writeResponseLine = (value: string) => {
     if (value.length === 0) {
-      out.write("\n");
+      write("\n");
       return;
     }
     const chars = Array.from(value);
@@ -96,11 +110,11 @@ export const renderTurn = async (
         if (/\s/.test(remaining[index - 1]!)) { splitAt = index - 1; break; }
       }
       if (splitAt === 0) splitAt = contentWidth;
-      out.write(`${indent}${remaining.slice(0, splitAt).join("")}\n`);
+      write(`${indent}${remaining.slice(0, splitAt).join("")}\n`);
       remaining = remaining.slice(splitAt);
       while (remaining.length > 0 && remaining[0] === " ") remaining = remaining.slice(1);
     }
-    out.write(`${indent}${remaining.join("")}\n`);
+    write(`${indent}${remaining.join("")}\n`);
   };
   const writeStreamText = (value: string) => {
     responseBuffer += value;
@@ -124,13 +138,23 @@ export const renderTurn = async (
   };
   let spinnerLabel = "";
   let renderedChanges = 0;
+  // Consecutive identical tool calls collapse into one line plus an ×N tally.
+  let repeatLabel: string | null = null;
+  let repeatCount = 0;
+  const flushRepeats = () => {
+    if (repeatCount > 1 && repeatLabel) {
+      writeIndented(`  ${c.dim(`└ ${repeatLabel} \u00d7${repeatCount}`)}\n`);
+    }
+    repeatLabel = null;
+    repeatCount = 0;
+  };
   let spinnerFrame = 0;
   let spinnerVisible = false;
   const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   const canAnimate = Boolean(out.isTTY);
   const clearSpinner = () => {
     if (!spinnerVisible) return;
-    out.write("\r\u001b[2K\n");
+    write("\r\u001b[2K\n");
     spinnerVisible = false;
   };
   const startSpinner = (label: string) => {
@@ -141,7 +165,7 @@ export const renderTurn = async (
   const drawSpinner = () => {
     const label = getProviderStatus() ?? spinnerLabel;
     if (!canAnimate || !label) return;
-    out.write(`\r\u001b[2K${indent}${c.cyan(spinnerFrames[spinnerFrame % spinnerFrames.length]!)} ${c.dim(label)}`);
+    write(`\r\u001b[2K${indent}${c.cyan(spinnerFrames[spinnerFrame % spinnerFrames.length]!)} ${c.dim(label)}`);
     spinnerFrame += 1;
     spinnerVisible = true;
   };
@@ -160,7 +184,7 @@ export const renderTurn = async (
       nl();
       spinnerLabel = "";
       for (const line of formatFileChange(change)) writeIndented(`${line}\n`);
-      out.write("\n");
+      write("\n");
     }
   };
 
@@ -190,14 +214,25 @@ export const renderTurn = async (
         writeStreamText(e.text);
         textOpen = true;
         break;
-      case "tool-call":
+      case "tool-call": {
+        const label = toolLabel(e.toolName, e.input);
+        if (label === repeatLabel) {
+          repeatCount += 1;
+          startSpinner(`running ${label}`);
+          break;
+        }
+        flushRepeats();
         nl();
-        writeIndented(`  ${c.cyan("◆")} ${c.bold(toolLabel(e.toolName, e.input))}\n`);
-        startSpinner(`running ${toolLabel(e.toolName, e.input)}`);
+        repeatLabel = label;
+        repeatCount = 1;
+        writeIndented(`  ${c.cyan("◆")} ${c.bold(label)}\n`);
+        startSpinner(`running ${label}`);
         break;
+      }
       case "tool-result": {
         clearSpinner();
         spinnerLabel = "";
+        flushRepeats();
         if (!e.isError) {
           break;
         }
@@ -214,6 +249,7 @@ export const renderTurn = async (
         break; // per-step usage stays quiet; /stats has the totals
       case "finish":
         nl();
+        flushRepeats();
         spinnerLabel = "";
         writeIndented(`${c.dim(`  ${usageLine(e.usage)}${e.reason === "completed" ? "" : ` · ${e.reason}`}`)}\n`);
         break;
@@ -228,7 +264,7 @@ export const renderTurn = async (
   }
 };
 
-const setActiveModel = (state: SessionState, model: SessionState["model"]): void => {
+export const setActiveModel = (state: SessionState, model: SessionState["model"]): void => {
   state.model?.setStatusHandler();
   state.model = model;
   state.providerStatus = null;
@@ -291,7 +327,7 @@ const renderStatusPrompt = (state: SessionState): string => {
 
 const providerIds: BuiltinProvider[] = ["anthropic", "openai", "openrouter"];
 
-const setupProvider = async (
+export const setupProvider = async (
   state: SessionState,
   requested: string,
   out: NodeJS.WriteStream,
@@ -571,30 +607,13 @@ export const handleSlashCommand = async (
     }
     case "session": {
       if (arg === "list") {
-        const defaultFile = defaultSessionFile(cwd);
-        const sessionPrefix = nodePath.basename(defaultFile, ".jsonl");
-        const directory = nodePath.dirname(defaultFile);
+        const directory = nodePath.dirname(defaultSessionFile(cwd));
         try {
-          const files = await fs.readdir(directory);
-          const names = files.filter((name) =>
-            name.endsWith(".jsonl") &&
-            (name === `${sessionPrefix}.jsonl` || name.startsWith(`${sessionPrefix}-`) || name.startsWith(`${sessionPrefix}.`)),
-          );
-          if (state.store?.path && nodePath.dirname(state.store.path) === directory) {
-            const activeName = nodePath.basename(state.store.path);
-            if (!names.includes(activeName)) names.push(activeName);
-          }
-          const sessions = await Promise.all(names.map(async (name) => {
-            const path = nodePath.join(directory, name);
-            try {
-              const info = await fs.stat(path);
-              return { id: name.slice(0, -".jsonl".length), modified: info.mtimeMs, active: state.store?.path === path };
-            } catch {
-              return null;
-            }
+          const sessions = (await listSessionIds(cwd)).map((session) => ({
+            ...session,
+            active: state.store?.path === nodePath.join(directory, `${session.id}.jsonl`),
           }));
-          const available = sessions.filter((session): session is NonNullable<typeof session> => session !== null)
-            .sort((a, b) => b.modified - a.modified);
+          const available = sessions;
           if (!available.length) {
             out.write(c.dim("(no saved sessions for this directory)\n"));
           } else {
@@ -807,6 +826,10 @@ export const startRepl = async (state: SessionState): Promise<void> => {
   out.write(renderWelcome({ cwd: state.cwd, model: state.model?.spec ?? null, permissions: state.permissions, sandbox: state.sandboxCwd }));
   let abort: AbortController | null = null;
   let activeRl: readline.Interface | null = null;
+  /** The turn currently streaming, if any. Input steers it instead of queueing. */
+  let activeTurn: ActiveTurn | null = null;
+  const deferredCommands: string[] = [];
+  const renderSteerPrompt = () => c.dim("steer › ");
   const onSigint = () => {
     if (abort) {
       abort.abort();
@@ -838,9 +861,31 @@ export const startRepl = async (state: SessionState): Promise<void> => {
           receivedInput = true;
           const input = line.trim();
           if (!input) {
-            rl.prompt();
+            // Mid-turn, the background task owns the prompt; re-prompting here
+            // would race it and leave two prompts on screen.
+            if (!activeTurn) rl.prompt();
             continue;
           }
+          // Steering takes precedence over every other interpretation of the
+          // line. A turn is already in flight, so this line belongs to it:
+          // steering never interrupts the model call currently streaming — the
+          // message lands at the next step boundary.
+          if (activeTurn) {
+            if (input.startsWith("/")) {
+              // Slash commands act on settled session state (and some of them
+              // tear down the reader), so hold them until the turn finishes.
+              deferredCommands.push(input);
+              continue;
+            }
+            if (activeTurn.steer(input)) {
+              out.write(c.dim(`  ↳ steering: ${truncateForDisplay(input)}\n`));
+              continue;
+            }
+            // The run settled between this line arriving and the steer call, so
+            // there is nowhere to deliver it. Treat it as a fresh prompt.
+            activeTurn = null;
+          }
+
           if (input === "/model" || input === "/models") {
             openModelPicker = true;
             rl.close();
@@ -873,26 +918,52 @@ export const startRepl = async (state: SessionState): Promise<void> => {
           }
           const turn = runTurn(state, prompt, { signal: abort.signal });
           const turnFileChanges = state.activeFileChanges ?? [];
-          try {
-            await renderTurn(
-              withStatusUpdates(turn.events, state),
-              out,
-              () => state.providerStatus,
-              () => turnFileChanges,
-            );
-            await turn.done;
-          } catch (e) {
-            out.write(c.red(e instanceof Error ? e.message : String(e)) + "\n");
-          } finally {
-            abort = null;
-          }
-          out.write("\n");
-          rl.setPrompt(renderStatusPrompt(state));
+          const turnRef: ActiveTurn = { steer: (text) => turn.steer(text) };
+          activeTurn = turnRef;
+          // Make the affordance visible: typing now steers this turn.
+          rl.setPrompt(renderSteerPrompt());
           rl.prompt();
+
+          // Render and run in the background so this loop keeps reading lines.
+          void (async () => {
+            try {
+              await renderTurn(
+                withStatusUpdates(turn.events, state),
+                out,
+                () => state.providerStatus,
+                () => turnFileChanges,
+                protectTypedInput(rl),
+              );
+              await turn.done;
+            } catch (e) {
+              out.write(c.red(e instanceof Error ? e.message : String(e)) + "\n");
+            } finally {
+              abort = null;
+              if (activeTurn === turnRef) {
+                activeTurn = null;
+              }
+              // Commands typed mid-turn act on the now-settled session.
+              while (keepRunning && deferredCommands.length > 0) {
+                const deferred = deferredCommands.shift()!;
+                if ((await handleSlashCommand(deferred, state, state.cwd, out)) === "quit") {
+                  keepRunning = false;
+                }
+              }
+              out.write("\n");
+              rl.setPrompt(renderStatusPrompt(state));
+              rl.prompt();
+            }
+          })();
         }
       } finally {
         rl.close();
         activeRl = null;
+        // A turn may still be streaming; let it finish cleanly rather than
+        // leaving an orphaned agent mutating files after the UI is gone.
+        if (activeTurn) {
+          activeTurn = null;
+          abort?.abort();
+        }
       }
       if (!keepRunning) break;
       if (openModelPicker) {
@@ -971,7 +1042,15 @@ export const makeState = async (opts: {
       throw error;
     }
   }
-  const { createCodingTools, createJsonlSessionStore, CognitiveMemory } = await import(
+  // Memory: model-backed extraction plus on-disk persistence, so what a turn
+  // teaches survives into the next session. Extraction uses the same model.
+  const prepared = await prepareMemory({
+    cwd: opts.cwd,
+    persist: !opts.noSession,
+    extractor: model ? createTurnExtractor(model.model) : null,
+  });
+
+  const { createCodingTools, createJsonlSessionStore } = await import(
     "@astracollab/not-another-harness"
   );
 
@@ -1025,10 +1104,11 @@ export const makeState = async (opts: {
     permissions: opts.permissions ?? "yolo",
     sandboxCwd: cwdLabel,
     destroySandbox,
-    cognitiveMemory: new CognitiveMemory(),
+    cognitiveMemory: prepared.memory,
   };
   model?.setStatusHandler((status) => { state.providerStatus = status; });
   const approve = createApprover(() => state.permissions);
+  state.setApprovalPrompt = (prompt) => approve.setPrompt(prompt);
   state.tools = {
     ...createCodingTools(envToolSource, {
     approveToolCall: approve,
@@ -1036,6 +1116,7 @@ export const makeState = async (opts: {
     onFileWrite: (change) => state.activeFileChanges?.push(change),
     onShellCommand: (command) => state.activeShellCommands?.push(command),
     }),
+    recall: createRecallTool(() => state.cognitiveMemory),
     task_ledger: createTaskLedgerTool(state, approve),
     ...(!opts.sandbox ? {
       delegate_task: createDelegationTool({

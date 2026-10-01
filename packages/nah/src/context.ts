@@ -64,6 +64,90 @@ export const resolveSessionFile = (cwd: string, reference: string): string => {
   return nodePath.resolve(cwd, reference);
 };
 
+const sessionPrefixFor = (cwd: string): string => nodePath.basename(defaultSessionFile(cwd), ".jsonl");
+
+/** Every session file belonging to this cwd, newest first. */
+const listSessions = async (cwd: string): Promise<Array<{ id: string; path: string; modified: number }>> => {
+  const defaultFile = defaultSessionFile(cwd);
+  const directory = nodePath.dirname(defaultFile);
+  const prefix = sessionPrefixFor(cwd);
+  try {
+    const names = await fs.readdir(directory);
+    const found = await Promise.all(
+      names
+        .filter(
+          (name) =>
+            name.endsWith(".jsonl") &&
+            (name === `${prefix}.jsonl` || name.startsWith(`${prefix}-`) || name.startsWith(`${prefix}.`)),
+        )
+        .map(async (name) => {
+          const path = nodePath.join(directory, name);
+          try {
+            const info = await fs.stat(path);
+            return { id: name.slice(0, -".jsonl".length), path, modified: info.mtimeMs };
+          } catch {
+            return null;
+          }
+        }),
+    );
+    return found
+      .filter((entry): entry is { id: string; path: string; modified: number } => entry !== null)
+      .sort((a, b) => b.modified - a.modified);
+  } catch {
+    return [];
+  }
+};
+
+const hasContent = async (file: string): Promise<boolean> => {
+  try {
+    const info = await fs.stat(file);
+    return info.size > 0;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * The session `-c` should resume: the most recently touched one for this cwd.
+ *
+ * Previously this was hardcoded to the default filename. Now that each fresh run
+ * allocates its own file, the "most recent session" is whichever was written
+ * last — otherwise `--continue` would keep reopening the first, empty one.
+ */
+export const latestSessionFile = async (cwd: string): Promise<string> => {
+  const sessions = await listSessions(cwd);
+  return sessions[0]?.path ?? defaultSessionFile(cwd);
+};
+
+/**
+ * A fresh session file for a new run.
+ *
+ * Reusing the default file meant a "new" run silently chained its messages onto
+ * the previous run's tail: the file grew, but the transcript started empty, so
+ * prior history was invisible yet unreachable. Each run now gets its own file,
+ * following the same convention as `/session new` and `/branch <name>`. The
+ * default file is still used for the very first run in a directory.
+ */
+export const allocateSessionFile = async (cwd: string): Promise<string> => {
+  const defaultFile = defaultSessionFile(cwd);
+  if (!(await hasContent(defaultFile))) {
+    return defaultFile;
+  }
+  const taken = new Set((await listSessions(cwd)).map((session) => session.id));
+  const prefix = sessionPrefixFor(cwd);
+  for (let n = 2; n < 10_000; n += 1) {
+    const id = `${prefix}-${n}`;
+    if (taken.has(id)) continue;
+    return nodePath.join(nodePath.dirname(defaultFile), `${id}.jsonl`);
+  }
+  // Practically unreachable; a timestamp still guarantees uniqueness.
+  return `${defaultFile.replace(/\.jsonl$/, `-${Date.now()}.jsonl`)}`;
+};
+
+/** Session ids for this cwd, newest first (used by `/session list`). */
+export const listSessionIds = async (cwd: string): Promise<Array<{ id: string; modified: number }>> =>
+  (await listSessions(cwd)).map(({ id, modified }) => ({ id, modified }));
+
 /** Read @file inclusions (Pi-style) and prepend them to the prompt. */
 export const withFileInclusions = async (
   cwd: string,

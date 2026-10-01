@@ -16,6 +16,9 @@ import type { ResolvedModel } from "./model.js";
 import type { PermissionMode } from "./permissions.js";
 import { formatTaskLedger } from "./task-ledger.js";
 
+/** Asks the user to approve a tool call and resolves with their answer. */
+export type ApprovalPrompt = (question: string) => Promise<string>;
+
 export type SessionState = {
   messages: ModelMessage[];
   system: string;
@@ -41,6 +44,12 @@ export type SessionState = {
   turns: number;
   /** Approval policy for mutating tools (edit/write/bash). */
   permissions: PermissionMode;
+  /**
+   * Lets a host UI answer approval prompts itself. The alternate-screen TUI
+   * must use this: the readline fallback cannot read stdin while the TUI owns
+   * it in raw mode, and the unanswered prompt hangs the whole run.
+   */
+  setApprovalPrompt?: (prompt: ApprovalPrompt | null) => void;
   /** Display label for the working dir (e.g. remote sandbox name). */
   sandboxCwd?: string;
   /** Tear down a remote sandbox (no-op for local sessions). */
@@ -90,13 +99,21 @@ export type TurnHooks = {
  * transcript back into state and persist the delta (Pi-style branch append).
  *
  * The caller consumes `events` (unbounded queue — consumption is optional);
- * `done` resolves with the turn result either way.
+ * `done` resolves with the turn result either way. `steer`/`followUp` let the
+ * user send input while the turn is still in flight; both land at the next step
+ * boundary rather than cutting off the model call that is currently streaming.
  */
 export const runTurn = (
   state: SessionState,
   prompt: string,
   hooks: TurnHooks = {},
-): { events: AsyncIterable<HarnessEvent>; done: Promise<HarnessRunResult> } => {
+): {
+  events: AsyncIterable<HarnessEvent>;
+  done: Promise<HarnessRunResult>;
+  steer: (text: string) => boolean;
+  followUp: (text: string) => boolean;
+  pending: () => { steer: readonly string[]; followUp: readonly string[] };
+} => {
   if (!state.model) {
     throw new Error("No model is configured. Set a provider API key, then choose a model with /model <provider:model-id>.");
   }
@@ -217,7 +234,7 @@ export const runTurn = (
       yield event;
     }
   })();
-  return { events, done };
+  return { events, done, steer: run.steer, followUp: run.followUp, pending: run.pending };
 };
 
 const makeStepRecovery = (

@@ -1,0 +1,214 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as nodePath from "node:path";
+import { describe, expect, it } from "vitest";
+import { simulateReadableStream } from "ai";
+import { MockLanguageModelV2 } from "ai/test";
+import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import type { Terminal } from "@earendil-works/pi-tui";
+
+import { createApprover } from "../src/permissions.js";
+import type { SessionState } from "../src/session.js";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const strip = (s: string) =>
+  s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "");
+
+class FakeTerminal implements Terminal {
+  written = "";
+  kittyProtocolActive = false;
+  onInput: ((d: string) => void) | null = null;
+  constructor(
+    public columns = 80,
+    public rows = 24,
+  ) {}
+  start(onInput: (d: string) => void) {
+    this.onInput = onInput;
+  }
+  stop() {}
+  async drainInput() {}
+  write(d: string) {
+    this.written += d;
+  }
+  moveBy() {}
+  hideCursor() {}
+  showCursor() {}
+  clearLine() {}
+  clearFromCursor() {}
+  clearScreen() {}
+  setTitle() {}
+  setProgress() {}
+  type(text: string) {
+    for (const ch of text) this.onInput?.(ch);
+  }
+}
+
+const bashStream = (id: string) =>
+  simulateReadableStream<LanguageModelV2StreamPart>({
+    chunkDelayInMs: 0,
+    chunks: [
+      { type: "tool-call", toolCallId: id, toolName: "bash", input: JSON.stringify({ command: "echo hi" }) },
+      {
+        type: "finish",
+        finishReason: "tool-calls",
+        usage: { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
+      },
+    ],
+  });
+
+describe("approval prompt", () => {
+  it("uses the host prompt instead of readline when one is installed", async () => {
+    const ask = createApprover(() => "ask");
+    const asked: string[] = [];
+    ask.setPrompt(async (question) => {
+      asked.push(question);
+      return "y";
+    });
+    expect(await ask("bash", { command: "ls" })).toBe(true);
+    expect(asked[0]).toContain("ls");
+  });
+
+  it("'a' trusts the whole tool, so later commands stop asking", async () => {
+    const ask = createApprover(() => "ask");
+    let reply = "a";
+    ask.setPrompt(async () => reply);
+    let prompted = 0;
+    ask.setPrompt(async () => {
+      prompted += 1;
+      return reply;
+    });
+
+    expect(await ask("bash", { command: "git status" })).toBe(true);
+    expect(prompted).toBe(1);
+    // A different command, same tool: must not ask again.
+    reply = "n";
+    expect(await ask("bash", { command: "git log --oneline -10" })).toBe(true);
+    expect(prompted).toBe(1);
+    expect(await ask("bash", { command: "cd apps/nah && git diff --stat" })).toBe(true);
+    expect(prompted).toBe(1);
+    // A different tool is still asked about.
+    expect(await ask("write", { path: "a.ts", content: "x" })).toBe(false);
+    expect(prompted).toBe(2);
+  });
+
+  it("'A' trusts only that exact call", async () => {
+    const ask = createApprover(() => "ask");
+    let prompted = 0;
+    let reply = "A";
+    ask.setPrompt(async () => {
+      prompted += 1;
+      return reply;
+    });
+
+    expect(await ask("bash", { command: "git status" })).toBe(true);
+    expect(prompted).toBe(1);
+    // Same tool, different command: still asks.
+    reply = "n";
+    expect(await ask("bash", { command: "git log" })).toBe(false);
+    expect(prompted).toBe(2);
+  });
+
+  it("still short-circuits readonly and yolo without prompting", async () => {
+    const readonly = createApprover(() => "readonly");
+    let prompted = false;
+    readonly.setPrompt(async () => {
+      prompted = true;
+      return "y";
+    });
+    expect(await readonly("bash", { command: "echo hi" })).toBe(false);
+    expect(prompted).toBe(false);
+
+    const yolo = createApprover(() => "yolo");
+    yolo.setPrompt(async () => "n");
+    expect(await yolo("bash", { command: "echo hi" })).toBe(true);
+  });
+});
+
+describe("TUI approval does not wedge the run", () => {
+  it("answers a pending approval instead of hanging on the first mutating tool", async () => {
+    const { startTuiHost } = await import("../src/tui/host.js");
+    let call = 0;
+    const model = new MockLanguageModelV2({
+      doStream: async () => {
+        const index = call++;
+        return {
+          stream:
+            index < 2
+              ? bashStream(`c${index}`)
+              : simulateReadableStream<LanguageModelV2StreamPart>({
+                  chunkDelayInMs: 0,
+                  chunks: [
+                    { type: "text-start", id: "t" },
+                    { type: "text-delta", id: "t", delta: "done" },
+                    { type: "text-end", id: "t" },
+                    {
+                      type: "finish",
+                      finishReason: "stop",
+                      usage: { inputTokens: 5, outputTokens: 1, totalTokens: 6 },
+                    },
+                  ],
+                }),
+        };
+      },
+    });
+
+    const approve = createApprover(() => "ask");
+    const terminal = new FakeTerminal();
+    const { createCodingTools } = await import("@astracollab/not-another-harness");
+    const { createNodeEnvironment } = await import("@astracollab/not-another-harness/node");
+    const workspace = await mkdtemp(nodePath.join(tmpdir(), "nah-approval-"));
+    const env = createNodeEnvironment(workspace);
+    const tools = createCodingTools(env, { approveToolCall: approve });
+    const state = {
+      messages: [],
+      system: "s",
+      cwd: workspace,
+      tools,
+      workspace: env,
+      activeFileChanges: null,
+      activeShellCommands: null,
+      undoHistory: [],
+      sessionBasePath: null,
+      taskLedger: null,
+      discoveredChecks: [],
+      store: null,
+      model: { model, spec: "test:model" },
+      providerStatus: null,
+      totalUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      contextUsedTokens: 0,
+      contextUsageEstimated: false,
+      lastOutputTokens: 0,
+      turns: 0,
+      permissions: "ask",
+      setApprovalPrompt: (p: never) => approve.setPrompt(p),
+    } as unknown as SessionState;
+
+    const host = startTuiHost({ state, terminal });
+    await sleep(30);
+    terminal.type("run echo");
+    terminal.onInput?.("\r");
+
+    // Answer every approval the way a user would, and require the run to finish.
+    let sawPrompt = false;
+    for (let i = 0; i < 40 && state.turns === 0; i += 1) {
+      await sleep(50);
+      const frame = strip(terminal.written.split("\u001b[?2026h").slice(-1)[0] ?? "");
+      if (frame.includes("always this tool")) {
+        sawPrompt = true;
+        terminal.type("y");
+        terminal.onInput?.("\r");
+        await sleep(50);
+      }
+    }
+
+    // The question must be rendered inside the TUI, not on a readline prompt
+    // that the TUI would paint over and never receive an answer for.
+    expect(sawPrompt).toBe(true);
+    expect(state.turns).toBeGreaterThan(0);
+    expect(await rm(workspace, { recursive: true, force: true }).then(() => true)).toBe(true);
+
+
+    terminal.onInput?.("\x03");
+    await host;
+  }, 20000);
+});

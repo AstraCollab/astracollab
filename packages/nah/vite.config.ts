@@ -21,7 +21,11 @@ export default defineConfig({
       fileName: () => "cli.js",
     },
     rollupOptions: {
-      external: [/^node:/, "@astracollab/not-another-harness", "@blaxel/core"],
+      // pi-tui reaches for node:child_process (it can shell out for its
+      // autocomplete provider) and ships native clipboard prebuilds, so it must
+      // stay a real runtime dependency rather than being inlined into the CLI
+      // bundle. It is declared in `dependencies`, so npm installs it.
+      external: [/^node:/, "@astracollab/not-another-harness", "@blaxel/core", "@earendil-works/pi-tui"],
       output: {
         // Providers are lazy-imported; the banner makes dist/cli.js executable.
         banner: "#!/usr/bin/env node",

@@ -20,7 +20,7 @@ export const c = {
 
 const faint = (s: string) => wrap("\u001b[38;5;244m", "\u001b[39m")(s);
 const dark = (s: string) => wrap("\u001b[30;1m", "\u001b[39m")(s);
-const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+export const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
 
 export const renderWelcome = (opts: {
   cwd: string;
@@ -59,6 +59,9 @@ export const renderWelcome = (opts: {
 };
 
 /** Tool-call → one-line label (mirrors the harness's Ui discipline). */
+/** `delegate_task` → `delegate task`; used for any tool without a mapping. */
+const humanize = (toolName: string): string => toolName.replace(/_/g, " ");
+
 export const toolLabel = (toolName: string, input: unknown): string => {
   const args = (input ?? {}) as Record<string, unknown>;
   const path = typeof args.path === "string" ? args.path : "";
@@ -68,6 +71,8 @@ export const toolLabel = (toolName: string, input: unknown): string => {
       return `read ${path}${args.offset ? `:${args.offset}` : ""}`;
     case "list":
       return `list ${path || "."}`;
+    case "glob":
+      return `glob ${typeof args.pattern === "string" ? clip(args.pattern) : ""}`.trimEnd();
     case "grep":
       return `grep ${typeof args.pattern === "string" ? clip(args.pattern) : ""}`.trimEnd();
     case "edit":
@@ -78,9 +83,81 @@ export const toolLabel = (toolName: string, input: unknown): string => {
       return `$ ${typeof args.command === "string" ? clip(args.command) : ""}`;
     case "delegate_task":
       return `delegate in isolated worktree: ${typeof args.title === "string" ? clip(args.title) : "task"}`;
+    // Bookkeeping, not exploration: show the verb so the transcript reads as
+    // intent ("find checks", "save plan") instead of a bare tool name repeated.
+    case "task_ledger": {
+      const action = typeof args.action === "string" ? args.action : "";
+      switch (action) {
+        case "discover_checks":
+          return "find executable checks";
+        case "plan":
+          return "save plan";
+        case "step": {
+          const id = typeof args.id === "string" ? args.id : "?";
+          const status = typeof args.status === "string" ? args.status : "";
+          return `plan · ${id}${status ? ` → ${status}` : ""}`;
+        }
+        case "run_check":
+          return `run check ${typeof args.id === "string" ? args.id : "?"}`;
+        default:
+          return `plan · ${action || "update"}`;
+      }
+    }
     default:
-      return toolName;
+      return humanize(toolName);
   }
+};
+
+/**
+ * Tools whose success needs no result line.
+ *
+ * The call itself (`◆ read src/app.ts`) already says what happened; echoing the
+ * body back just doubles the noise. Errors are always surfaced.
+ */
+const QUIET_ON_SUCCESS = new Set(["read", "list", "glob", "grep", "task_ledger"]);
+
+export type ToolResultSummary = { show: boolean; text: string };
+
+/**
+ * One short line describing what a tool call achieved, instead of dumping the
+ * tool's full reply. `task_ledger` in particular returned several paragraphs per
+ * call, which buried the actual work in the transcript.
+ */
+export const summarizeToolResult = (
+  toolName: string,
+  input: unknown,
+  output: string,
+  isError: boolean,
+): ToolResultSummary => {
+  const args = (input ?? {}) as Record<string, unknown>;
+
+  if (toolName === "task_ledger") {
+    if (isError) return { show: true, text: output.split("\n")[0] ?? "failed" };
+    const action = typeof args.action === "string" ? args.action : "";
+    const found = output.match(/^- (.+)$/gm);
+    if (action === "discover_checks" && found) {
+      return { show: true, text: `${found.length} check${found.length === 1 ? "" : "s"} found` };
+    }
+    if (action === "plan") return { show: true, text: "plan saved" };
+    if (action === "run_check") {
+      const status = output.match(/\bexit code (\d+)\b|\b(exit \d+|passed|failed)\b/i)?.[0];
+      return { show: true, text: status ? `check ${String(args.id ?? "")} ${status}`.trim() : "check ran" };
+    }
+    const updated = output.match(/^([\w.-]+)\s+(→|->)\s*(\w+)/m);
+    if (updated) return { show: true, text: `${updated[1]} → ${updated[3]}` };
+    return { show: false, text: "" };
+  }
+
+  if (isError) {
+    return { show: true, text: output.split("\n")[0] ?? "failed" };
+  }
+  if (QUIET_ON_SUCCESS.has(toolName)) {
+    return { show: false, text: "" };
+  }
+
+  const first = output.split("\n").find((line) => line.trim().length > 0);
+  if (!first) return { show: false, text: "" };
+  return { show: true, text: first.length > 120 ? `${first.slice(0, 120)}…` : first };
 };
 
 export type RenderableFileChange = {

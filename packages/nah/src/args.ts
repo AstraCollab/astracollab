@@ -21,6 +21,8 @@ export type CliArgs = {
   sandbox?: string | true;
   showHelp: boolean;
   showVersion: boolean;
+  /** Force the line-oriented renderer instead of the alternate-screen TUI. */
+  noTui: boolean;
 };
 
 const HELP = `nah — not another harness, the CLI. A fast, minimal coding-agent terminal.
@@ -40,6 +42,7 @@ Options:
   -c, --continue        Continue the most recent session for this directory
   --session <id|path>   Load a session ID for this directory or a specific file
   --no-session          In-memory only; nothing is persisted
+  --no-tui              Use the line renderer instead of the alternate-screen TUI
   -y, --yolo            Allow all tool calls without prompting
   --permissions <mode>  ask | yolo | readonly (default: ask interactive, yolo in print/json)
   --sandbox [name]      Run in a Blaxel cloud sandbox (needs BL_API_KEY + BL_WORKSPACE)
@@ -60,6 +63,7 @@ export const parseCliArgs = (
     files: [],
     continueSession: false,
     noSession: false,
+    noTui: false,
     yolo: false,
     cwd: process.cwd(),
     showHelp: false,
@@ -115,6 +119,9 @@ export const parseCliArgs = (
         break;
       case "--no-session":
         args.noSession = true;
+        break;
+      case "--no-tui":
+        args.noTui = true;
         break;
       case "-y":
       case "--yolo":
