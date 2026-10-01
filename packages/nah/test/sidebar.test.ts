@@ -153,6 +153,99 @@ describe("bash commands render in full on a background", () => {
     }
   });
 
+  it("keeps a command's output inside the same panel", () => {
+    const output = new TurnOutput();
+    bash(output, "pnpm test");
+    output.apply({
+      type: "tool-result",
+      toolName: "bash",
+      input: { command: "pnpm test" },
+      output: "3 files passed\n66 tests",
+      isError: false,
+    } as never);
+
+    const lines = output.render(70);
+    const panel = lines.filter((line) => line.includes("\u001b[48;5;236m"));
+    // Command and output share one surface: the opencode shape the screenshot
+    // shows, rather than a filled command above a bare line of narration.
+    expect(panel).toHaveLength(3);
+    expect(stripAnsi(panel.join("\n"))).toContain("pnpm test");
+    expect(stripAnsi(panel.join("\n"))).toContain("3 files passed");
+    expect(stripAnsi(panel.join("\n"))).toContain("66 tests");
+  });
+
+  it("bounds a long output and counts what it dropped", () => {
+    const output = new TurnOutput();
+    bash(output, "pnpm build");
+    output.apply({
+      type: "tool-result",
+      toolName: "bash",
+      input: {},
+      output: Array.from({ length: 40 }, (_, i) => `log line ${i + 1}`).join("\n"),
+      isError: false,
+    } as never);
+
+    const rendered = stripAnsi(output.render(70).join("\n"));
+    expect(rendered).toContain("log line 12");
+    expect(rendered).not.toContain("log line 13");
+    // Dropped lines are counted, not silently discarded.
+    expect(rendered).toContain("… 28 more lines");
+  });
+
+  it("tints the whole panel when the command fails", () => {
+    const output = new TurnOutput();
+    bash(output, "pnpm test");
+    output.apply({
+      type: "tool-result",
+      toolName: "bash",
+      input: {},
+      output: "FAIL test/a.test.ts\n  expected 1 to be 2",
+      isError: true,
+    } as never);
+
+    const panel = output.render(60);
+    expect(panel).toHaveLength(3);
+    for (const line of panel) expect(line).toContain("\u001b[48;5;52m");
+  });
+
+  it("strips colour out of command output before it enters a panel", () => {
+    const output = new TurnOutput();
+    bash(output, "pnpm test");
+    output.apply({
+      type: "tool-result",
+      toolName: "bash",
+      input: {},
+      // tsc and vitest both colour their failures; that must not reach a row
+      // that is padded to the pane width.
+      output: "\u001b[31mFAIL\u001b[39m test/a.test.ts\n\u001b[2m  at Object.<anonymous>\u001b[0m",
+      isError: false,
+    } as never);
+
+    const panel = output.render(60).filter((line) => line.includes("\u001b[48;5;236m"));
+    expect(panel).toHaveLength(3);
+    for (const line of panel) {
+      const withoutFill = line.replaceAll("\u001b[48;5;236m", "").replaceAll("\u001b[49m", "");
+      expect(withoutFill).not.toContain("\u001b");
+    }
+    expect(stripAnsi(panel.join("\n"))).toContain("FAIL test/a.test.ts");
+  });
+
+  it("still renders other tools' results as their own line", () => {
+    const output = new TurnOutput();
+    output.apply({ type: "tool-call", toolName: "bash", input: { command: "true" } } as never);
+    output.apply({ type: "tool-result", toolName: "bash", input: {}, output: "", isError: false } as never);
+    output.apply({ type: "tool-call", toolName: "read", input: { path: "a.ts" } } as never);
+    output.apply({
+      type: "tool-result",
+      toolName: "write",
+      input: { path: "a.ts" },
+      output: "wrote 12 lines",
+      isError: false,
+    } as never);
+    const rendered = stripAnsi(output.render(60).join("\n"));
+    expect(rendered).toContain("wrote 12 lines");
+  });
+
   it("collapses identical consecutive commands but not merely similar ones", () => {
     const output = new TurnOutput();
     bash(output, "pnpm vitest run");

@@ -48,6 +48,36 @@ const toolCallLine = (label: string, count: number): string =>
   `  ${c.cyan("◆")} ${label}${count > 1 ? c.dim(` ${"\u00d7"}${count}`) : ""}`;
 
 /**
+ * How much of a command's output stays in its panel.
+ *
+ * A shell command's output is unbounded - an install or a test run prints
+ * hundreds of lines - and the panel is the transcript now, so it cannot simply
+ * hold all of it. Twelve is enough to show a failure's cause or a build's
+ * summary; the rest is counted rather than silently dropped.
+ */
+const PANEL_RESULT_LINES = 12;
+
+/**
+ * A command's output, as panel lines.
+ *
+ * ANSI is stripped: command output is the most common source of colour in the
+ * whole transcript, and a panel row cannot carry its own escapes without
+ * overflowing its column. Tabs are expanded for the same reason.
+ */
+const panelResultLines = (output: string, limit = PANEL_RESULT_LINES): string[] => {
+  const lines = stripAnsi(output)
+    .replace(/\t/g, "  ")
+    .split("\n")
+    .map((line) => line.replace(/\s+$/, ""));
+  while (lines.length > 0 && lines[0]!.trim().length === 0) lines.shift();
+  while (lines.length > 0 && lines[lines.length - 1]!.trim().length === 0) lines.pop();
+  if (lines.length === 0) return [];
+  return lines.length <= limit
+    ? lines
+    : [...lines.slice(0, limit), `… ${lines.length - limit} more lines`];
+};
+
+/**
  * A shell command, in full, on its own background block.
  *
  * `toolLabel` clips a command at 50 characters, which is right for a status line
@@ -105,19 +135,22 @@ const userText = (content: unknown): string => {
   return text ? `${text} ${note}` : c.dim(`(${files} attached file${files === 1 ? "" : "s"})`);
 };
 
+/** The text a `tool-result` part carries, whichever shape it was stored in. */
+const resultText = (part: MessagePart): string => {
+  const output = part.output as { value?: unknown } | string | undefined;
+  return typeof output === "string"
+    ? output
+    : typeof output?.value === "string"
+      ? output.value
+      : output === undefined || output === null
+        ? ""
+        : JSON.stringify(output);
+};
+
 /** `· result` for a restored `tool-result`, in the live renderer's shape. */
 const restoredResultLine = (part: MessagePart): string => {
   const toolName = typeof part.toolName === "string" ? part.toolName : "tool";
-  const output = part.output as { value?: unknown } | string | undefined;
-  const text =
-    typeof output === "string"
-      ? output
-      : typeof output?.value === "string"
-        ? output.value
-        : output === undefined || output === null
-          ? ""
-          : JSON.stringify(output);
-  const summary = summarizeToolResult(toolName, undefined, text.slice(0, 2000), false);
+  const summary = summarizeToolResult(toolName, undefined, resultText(part).slice(0, 2000), false);
   return summary.show ? `    ${c.dim("·")} ${c.dim(summary.text)}` : "";
 };
 
@@ -128,6 +161,9 @@ const restoredResultLine = (part: MessagePart): string => {
  * without a cast at every `setText`.
  */
 type SettableBlock = Component & { setText(text: string): void };
+
+/** A panel block, whose fill can be swapped when the call turns out to fail. */
+type FillableBlock = SettableBlock & { setCustomBgFn(fn?: (text: string) => string): void };
 
 export class TurnOutput implements Component {
   private readonly blocks: Component[] = [];
@@ -193,7 +229,14 @@ export class TurnOutput implements Component {
   }
 
   /** Current run of identical consecutive tool calls, collapsed to one line. */
-  private group: { label: string; key: string; count: number; block: SettableBlock } | null = null;
+  private group: {
+    label: string;
+    key: string;
+    count: number;
+    block: SettableBlock;
+    /** Set for a shell command, whose own result belongs inside the panel. */
+    command?: { text: string; block: FillableBlock };
+  } | null = null;
   /** Input of the most recent call, so its result can be summarised in context. */
   private groupInput: unknown = null;
 
@@ -206,6 +249,13 @@ export class TurnOutput implements Component {
         this.addToolCall(event.toolName, event.input);
         return;
       case "tool-result": {
+        // A command and what it printed are one unit. Leaving the output on a
+        // bare line under a filled block made it read as separate narration,
+        // and opencode-style panels put the whole exchange in one surface.
+        if (this.group?.command) {
+          this.appendPanelResult(event.output, event.isError);
+          return;
+        }
         const summary = summarizeToolResult(event.toolName, this.groupInput, event.output, event.isError);
         // Skip a line that would only restate the call above it, e.g.
         // "plan · step-1 → completed" followed by "step-1 → completed".
@@ -281,6 +331,12 @@ export class TurnOutput implements Component {
         // restored session from dumping whole file bodies into the pane.
         for (const part of partsOf(message.content)) {
           if (part.type !== "tool-result") continue;
+          // Same treatment as a live turn: a restored command keeps its output
+          // inside its own panel rather than reappearing as a bare line.
+          if (this.group?.command) {
+            this.appendPanelResult(resultText(part), false);
+            continue;
+          }
           const line = restoredResultLine(part);
           if (line) this.addLine(line);
         }
@@ -368,17 +424,38 @@ export class TurnOutput implements Component {
       return;
     }
 
+    const block =
+      command === null
+        ? this.push(toolCallLine(label, 1))
+        : // paddingX/paddingY 0: the block spans the pane edge to edge, so the
+          // surface reads as a panel rather than an indented quote.
+          this.pushPanel(commandBlock(command, 1));
+
     this.group = {
       label,
       key,
       count: 1,
-      block:
-        command === null
-          ? this.push(toolCallLine(label, 1))
-          : // paddingX/paddingY 0: the block spans the pane edge to edge, so the
-            // surface reads as a panel rather than an indented quote.
-            this.pushPanel(commandBlock(command, 1)),
+      block,
+      ...(command === null ? {} : { command: { text: command, block: block as FillableBlock } }),
     };
+  }
+
+  /**
+   * Fold a command's output into its panel.
+   *
+   * Rebuilds the whole block rather than appending a line, because a panel is a
+   * single `Text`: a separate block for the output would leave a gap that reads
+   * as a paragraph break. On failure the surface itself turns red, since a panel
+   * row cannot carry coloured text.
+   */
+  private appendPanelResult(output: string, isError: boolean): void {
+    const group = this.group?.command;
+    if (!group) return;
+    const lines = panelResultLines(output);
+    if (lines.length === 0) return;
+    const body = lines.map((line) => `    ${line}`).join("\n");
+    group.block.setText(`${commandBlock(group.text, this.group?.count ?? 1)}\n${body}`);
+    if (isError) group.block.setCustomBgFn((line) => c.backgroundError(line));
   }
 
   private push(text: string): Text {

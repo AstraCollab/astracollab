@@ -22,6 +22,14 @@ export const c = {
   underline: wrap("\u001b[4m", "\u001b[24m"),
   /** Panel fill. 236 is a near-black grey that reads as a surface, not a block. */
   background: wrap("\u001b[48;5;236m", "\u001b[49m"),
+  /**
+   * Failure fill, applied to the whole panel rather than to the text.
+   *
+   * A nested SGR sequence inside a full-width padded row overflows its column
+   * and the layout clips the closing escape, so a panel cannot carry its own
+   * colour. Tinting the surface is the way to mark a failure here.
+   */
+  backgroundError: wrap("\u001b[48;5;52m", "\u001b[49m"),
   magenta: wrap("[35m", "[0m"),
 };
 
