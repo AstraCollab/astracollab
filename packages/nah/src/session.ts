@@ -156,6 +156,11 @@ export const runTurn = (
   ].filter(Boolean).join("\n\n");
   const run = runAgent({
     model: state.model.model,
+    // Enables Anthropic-style prompt-cache breakpoints. Safe and worthwhile
+    // because it only *marks* the prefix; nothing is rewritten, so thinking
+    // signatures stay valid.
+    cacheProvider: state.model.provider,
+    cacheTtl: "5m",
     system: `${state.system}\n\n${taskContext}`,
     prompt,
     messages: state.messages,

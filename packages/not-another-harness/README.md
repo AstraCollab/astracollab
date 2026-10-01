@@ -80,6 +80,18 @@ glob { pattern: "*.ts", path: "src", includeHidden: true }
 
 `grep` accepts a glob in `path` as well (`grep { pattern: "DocsShell", path: "apps/nah/**/*.tsx" }`), which is usually the fastest way to find the code that references something. Both tools skip `node_modules`, `.git`, and build output; pass `includeHidden` to opt back into dotfiles.
 
+## Prompt caching
+
+Every step re-sends the transcript, so the system prompt, tool definitions and all earlier turns are re-billed on each call. Set `cacheProvider` and the runtime attaches Anthropic-style `cacheControl` breakpoints to the tool definitions and the system prompt, so the repeated prefix is read back at a fraction of the price.
+
+```ts
+const run = runAgent({ model, prompt, system, tools, cacheProvider: "anthropic", cacheTtl: "5m" });
+```
+
+`cacheProvider` is opt-in rather than detected from the model, because a marker sent to a provider that ignores it is wasted work at best. It applies to `anthropic` and `openrouter`.
+
+This only *marks* the prefix. It never rewrites earlier content, which matters: editing a prior `tool_result` invalidates the thinking-block signatures Anthropic binds to that prefix, and hard-fails the request. Trimming transcript content is therefore deliberately not done here.
+
 ## Budgets and compaction
 
 ```ts

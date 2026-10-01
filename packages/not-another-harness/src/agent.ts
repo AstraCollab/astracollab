@@ -1,6 +1,7 @@
 import { streamText, stepCountIs, type ModelMessage, type ToolSet } from "ai";
 
 import { compactMessages } from "./compaction.js";
+import { cacheOptions, withCachedToolSchemas } from "./cache.js";
 import { createStepDedupe } from "./dedupe.js";
 import { estimateMessageTokens, estimateRequestTokens } from "./estimate.js";
 import type {
@@ -182,6 +183,12 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
     // cleared per step, so re-running a command later — after an edit — still
     // works normally.
     const dedupe = createStepDedupe(options.tools);
+    // Tool definitions and the system prompt are re-sent verbatim every step, so
+    // they carry cache breakpoints. Marking a prefix is safe; rewriting one is
+    // not, because editing a prior tool_result invalidates Anthropic's
+    // thinking-block signatures.
+    const cachedTools = withCachedToolSchemas(dedupe.tools, options.cacheProvider, options.cacheTtl);
+    const providerOptions = cacheOptions(options.cacheProvider, options.cacheTtl);
 
     /**
      * Append queued messages for `delivery` to the transcript. Returns how many
@@ -236,7 +243,8 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           model: options.model,
           system: options.system,
           messages: requestMessages,
-          tools: dedupe.tools as ToolSet,
+          tools: cachedTools as ToolSet,
+          ...(providerOptions ? { providerOptions } : {}),
           abortSignal: signal,
           maxOutputTokens: stepOutputLimit,
           // One model round-trip (+ its tool executions) per loop iteration —

@@ -152,6 +152,13 @@ export type HarnessRunOptions = {
   compactKeepRecent?: number;
   /** Prior messages to continue from (e.g. restored session branch). */
   messages?: ModelMessage[];
+  /**
+   * Provider id used to decide whether prompt caching applies, e.g. "anthropic".
+   * Set it to opt into Anthropic-style cache breakpoints.
+   */
+  cacheProvider?: string;
+  /** Cache lifetime for breakpoints. 5m is cheaper, 1h holds across longer runs. */
+  cacheTtl?: "5m" | "1h";
   /** Optional awaited callbacks at each model step boundary. */
   onStepStart?: (step: number, messages: ModelMessage[]) => void | Promise<void>;
   onStepFinish?: (step: number, messages: ModelMessage[]) => void | Promise<void>;
