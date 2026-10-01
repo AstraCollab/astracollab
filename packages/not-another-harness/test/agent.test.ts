@@ -7,6 +7,9 @@ import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runAgent } from "../src/agent.js";
+import { tool } from "ai";
+import { z } from "zod";
+import type { ModelMessage } from "ai";
 import { buildSystemPrompt } from "../src/prompt.js";
 import { createJsonlSessionStore } from "../src/session.js";
 import { createNodeEnvironment } from "../src/node.js";
@@ -204,8 +207,8 @@ describe("runAgent", () => {
       prompt: "continue",
       messages: longHistory,
       tools: createCodingTools(env),
-      compaction: "truncate",
-      compactAtTokens: 10_000, // crossed after step 1's 8.2k usage (history keeps pressure on)
+      compactAtTokens: 10_000,
+      // Crossed after step 1's usage; the long history keeps pressure on.
       compactKeepRecent: 4,
     });
     const events = await collectEvents(run.events);
@@ -344,5 +347,120 @@ describe("jsonl session store", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+});
+
+describe("budget triage", () => {
+  it("compacts to keep going instead of stopping when the next step no longer fits", async () => {
+    // A big history that costs a lot to replay, then a tool call every step so
+    // cumulative spend climbs toward the cap.
+    const history: ModelMessage[] = Array.from({ length: 150 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: `${"filler ".repeat(80)} message ${i}`,
+    }));
+
+    let call = 0;
+    const model = new MockLanguageModelV2({
+      doStream: async (options) => {
+        const step = call++;
+        // Bill what the prompt actually costs, so the budget behaves like a real
+        // run rather than a flat per-step fiction.
+        const inputTokens = Math.ceil(JSON.stringify(options?.prompt ?? options?.messages ?? []).length / 4);
+        if (step < 14) {
+          return {
+            stream: simulateReadableStream<LanguageModelV2StreamPart>({
+              chunkDelayInMs: 0,
+              chunks: [
+                { type: "tool-call", toolCallId: `c${step}`, toolName: "probe", input: "{}" },
+                {
+                  type: "finish",
+                  finishReason: "tool-calls",
+                  usage: { inputTokens, outputTokens: 200, totalTokens: inputTokens + 200 },
+                },
+              ],
+            }),
+          };
+        }
+        return { stream: textStream("all done") };
+      },
+    });
+
+    const events: HarnessEvent[] = [];
+    const handle = runAgent({
+      model,
+      system: "s",
+      prompt: "do a long task",
+      messages: history,
+      tools: { probe: tool({ inputSchema: z.object({}), execute: async () => "ok" }) },
+      // Not enough to replay an ever-growing transcript, but enough once it is
+      // compacted. Without triage this run dies part-way through.
+      maxTokens: 120_000,
+      maxOutputTokens: 2_000,
+      // Above any single request, so only budget pressure can trigger compaction.
+      compactAtTokens: 200_000,
+      compaction: "truncate",
+    });
+    const consumer = (async () => {
+      for await (const event of handle.events) events.push(event);
+    })();
+    const result = await handle.result;
+    await consumer;
+
+    const compactions = events.filter((e) => e.type === "compacted").length;
+    console.log(
+      `      reason=${result.reason} steps=${result.steps} compactions=${result.compactions} total=${result.usage.totalTokens}`,
+    );
+
+    // The budget was genuinely tight: it finished while using most of it.
+    expect(result.usage.totalTokens).toBeGreaterThan(60_000);
+    expect(result.usage.totalTokens).toBeLessThan(120_000);
+    expect(compactions).toBeGreaterThan(0);
+    // The point: it finished rather than dying part-way.
+    expect(result.reason).toBe("completed");
+    expect(result.steps).toBe(15);
+  });
+
+  it("still stops when even a compacted request cannot be afforded", async () => {
+    let call = 0;
+    const model = new MockLanguageModelV2({
+      doStream: async () => {
+        const step = call++;
+        return {
+          stream: simulateReadableStream<LanguageModelV2StreamPart>({
+            chunkDelayInMs: 0,
+            chunks: [
+              ...(step < 2
+                ? [{ type: "tool-call" as const, toolCallId: `c${step}`, toolName: "probe", input: "{}" }]
+                : []),
+              {
+                type: "finish" as const,
+                finishReason: (step < 2 ? "tool-calls" : "stop") as "tool-calls" | "stop",
+                usage: { inputTokens: 0, outputTokens: 0, totalTokens: 40_000 },
+              },
+            ],
+          }),
+        };
+      },
+    });
+
+    const events: HarnessEvent[] = [];
+    const handle = runAgent({
+      model,
+      system: "s",
+      prompt: "go",
+      tools: { probe: tool({ inputSchema: z.object({}), execute: async () => "ok" }) },
+      maxTokens: 45_000,
+      maxOutputTokens: 1_000,
+      compaction: "truncate",
+    });
+    const consumer = (async () => {
+      for await (const event of handle.events) events.push(event);
+    })();
+    const result = await handle.result;
+    await consumer;
+
+    // Below the compaction reserve, triage must not attempt it.
+    expect(result.reason).toBe("max-tokens");
   });
 });

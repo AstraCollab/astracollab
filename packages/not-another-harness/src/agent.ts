@@ -21,6 +21,8 @@ const DEFAULT_MAX_TOKENS = 400_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
 const DEFAULT_COMPACT_AT_TOKENS = 120_000;
 const DEFAULT_KEEP_RECENT = 6;
+/** Headroom kept aside so a compaction summary can still be paid for. */
+const COMPACTION_RESERVE_TOKENS = 16_000;
 
 const emptyUsage = (): HarnessUsage => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0, estimated: false });
 
@@ -215,6 +217,38 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
       return pending.length;
     };
 
+  /**
+   * Compact the transcript, optionally ignoring the size threshold.
+   *
+   * Used twice: on the ordinary size trigger, and under budget pressure, where
+   * the next request no longer fits in what is left of the spend cap and the only
+   * way to continue is to make the request smaller.
+   */
+  const compactNow = async (opts: { force?: boolean } = {}): Promise<boolean> => {
+    if (compactionMode === "off") return false;
+    if (!opts.force && lastRequestTokens < compactAt) return false;
+    const compacted = await compactMessages({
+      model: options.model,
+      system: options.system,
+      messages,
+      keepRecent,
+      mode: compactionMode,
+      ...(maxTokens > 0 ? { maxTokensRemaining: Math.max(0, maxTokens - usage.totalTokens) } : {}),
+    });
+    if (!compacted) return false;
+    addUsage(usage, compacted.usage);
+    events.push({
+      type: "compacted",
+      droppedMessages: compacted.droppedMessages,
+      keptMessages: compacted.messages.length,
+      summaryChars: compacted.summaryChars,
+    });
+    messages = compacted.messages;
+    lastRequestTokens = estimateRequestTokens(options.system, messages);
+    compactions += 1;
+    return true;
+  };
+
     try {
       let step = 0;
       let stepLimit = maxSteps;
@@ -240,10 +274,26 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           const pruned = pruneOldToolResults(messages, options.pruneToolResults.keepRecentToolCalls);
           requestMessages = pruned.messages;
         }
-        const estimatedInputTokens = estimateRequestTokens(options.system, requestMessages);
-        if (maxTokens > 0 && remainingTokens <= estimatedInputTokens) {
-          reason = "max-tokens";
-          break;
+        let estimatedInputTokens = estimateRequestTokens(options.system, requestMessages);
+
+        // Budget triage. Waiting until the next request stops fitting means the
+        // run has already overspent, and the reason it stopped fitting is
+        // transcript size - which compaction fixes. So act while there is still
+        // headroom: if the next step plus a reserve is no longer affordable,
+        // spend a compaction to buy room, and only give up when even a compacted
+        // request cannot be paid for.
+        const costOfNextStep = estimatedInputTokens + COMPACTION_RESERVE_TOKENS;
+        if (maxTokens > 0 && remainingTokens <= costOfNextStep) {
+          const canAffordSummary = remainingTokens > COMPACTION_RESERVE_TOKENS;
+          const stepsLeft = stepLimit - step > 0;
+          if (canAffordSummary && stepsLeft && (await compactNow({ force: true }))) {
+            requestMessages = messages;
+            estimatedInputTokens = estimateRequestTokens(options.system, requestMessages);
+          }
+          if (remainingTokens <= estimatedInputTokens) {
+            reason = "max-tokens";
+            break;
+          }
         }
 
         const stepOutputLimit = Math.min(
@@ -357,30 +407,13 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 
         // Context pressure, not spend: only compact when the next request is
         // genuinely large. Compacting early destroys the working memory the
-        // agent needs to finish the task, which is far worse than a big prompt.
-        if (compactionMode !== "off" && lastRequestTokens >= compactAt) {
-          const compacted = await compactMessages({
-            model: options.model,
-            system: options.system,
-            messages,
-            keepRecent,
-            mode: compactionMode,
-            maxTokensRemaining: maxTokens > 0 ? maxTokens - usage.totalTokens : undefined,
-          });
-          if (compacted) {
-            addUsage(usage, compacted.usage);
-            events.push({
-              type: "compacted",
-              droppedMessages: compacted.droppedMessages,
-              keptMessages: compacted.messages.length,
-              summaryChars: compacted.summaryChars,
-            });
-            messages = compacted.messages;
-            compactions += 1;
-            if (maxTokens > 0 && usage.totalTokens >= maxTokens) {
-              reason = "max-tokens";
-              break;
-            }
+        // agent needs to finish, which is far worse than a big prompt.
+        if (await compactNow()) {
+          requestMessages = messages;
+          estimatedInputTokens = estimateRequestTokens(options.system, requestMessages);
+          if (maxTokens > 0 && usage.totalTokens >= maxTokens) {
+            reason = "max-tokens";
+            break;
           }
         }
       }

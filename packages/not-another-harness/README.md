@@ -143,6 +143,22 @@ Two things to know:
 
 This runs server-side, so it is not treated as a client edit and thinking-block signatures stay valid. Doing the same trimming locally is what Anthropic documents as invalid for every later thinking block.
 
+## Budgets, compaction, and not stopping half-way
+
+`maxTokens` is a **spend** budget. Exhausting it mid-task used to end the run immediately, which meant a long job simply stopped — even though the reason it could not afford the next step was transcript size, which compaction fixes.
+
+It now triages instead: when the next step plus a reserve is no longer affordable, it spends a compaction to buy room and carries on. It only gives up when even a compacted request cannot be paid for.
+
+```ts
+const run = runAgent({
+  model, prompt, system, tools,
+  maxTokens: 400_000,        // spend ceiling
+  compactAtTokens: 120_000,  // context size trigger
+});
+```
+
+Measured on a 15-step task with a 150-message history and a deliberately tight budget: **without triage the run dies at step 6 with `max-tokens`; with it, all 15 steps complete.**
+
 ## Budgets and compaction
 
 ```ts
