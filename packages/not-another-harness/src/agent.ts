@@ -1,6 +1,7 @@
 import { streamText, stepCountIs, type ModelMessage, type ToolSet } from "ai";
 
 import { compactMessages } from "./compaction.js";
+import { createStepDedupe } from "./dedupe.js";
 import { estimateMessageTokens, estimateRequestTokens } from "./estimate.js";
 import type {
   HarnessEvent,
@@ -177,6 +178,11 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 
     events.push({ type: "run-start", stepBudget: maxSteps, tokenBudget: maxTokens });
 
+    // Collapses identical tool calls emitted twice in the same step. The memo is
+    // cleared per step, so re-running a command later — after an edit — still
+    // works normally.
+    const dedupe = createStepDedupe(options.tools);
+
     /**
      * Append queued messages for `delivery` to the transcript. Returns how many
      * landed. Runs before the next model request is assembled, which is what
@@ -222,6 +228,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           maxTokens > 0 ? Math.max(1, remainingTokens - estimatedInputTokens) : maxOutputTokens,
         );
         steps = step;
+        dedupe.beginStep();
         await options.onStepStart?.(step, [...messages]);
         events.push({ type: "step-start", step });
 
@@ -229,7 +236,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           model: options.model,
           system: options.system,
           messages: requestMessages,
-          tools: options.tools as ToolSet,
+          tools: dedupe.tools as ToolSet,
           abortSignal: signal,
           maxOutputTokens: stepOutputLimit,
           // One model round-trip (+ its tool executions) per loop iteration —
