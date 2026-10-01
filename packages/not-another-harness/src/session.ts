@@ -44,13 +44,52 @@ export type SessionUsage = {
   lastOutputTokens: number;
 };
 
+/**
+ * One model request's accounting, kept per step.
+ *
+ * The cumulative `usage` record answers "what has this session spent". It cannot
+ * answer "why did that turn cost 550k", because that number and a provider's
+ * per-request figure differ by the step count and the replayed transcript - and
+ * telling those apart used to mean reconstructing it by hand from the
+ * transcript.
+ *
+ * `requestTokens` is this single request's prompt size and the rest is its cache
+ * composition, which together explain the gap between a turn's total and what
+ * any one call was billed for.
+ */
+export type SessionStepUsage = {
+  /** 1-based turn number within the session. */
+  turn: number;
+  /** 1-based step number within the turn. */
+  step: number;
+  /** Run-cumulative totals as of this step. */
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  /** This request's prompt size, cached prefix included. */
+  requestTokens: number;
+  freshInputTokens: number;
+  cachedInputTokens: number;
+  cacheCreationInputTokens: number;
+  /** Cached share of this request, 0-1. */
+  hitRate: number;
+  /** True when the provider reported no usage and figures were estimated. */
+  estimated: boolean;
+  at: string;
+};
+
+type StepUsageEntry = SessionStepUsage & {
+  id: string;
+  kind: "step-usage";
+};
+
 type UsageEntry = SessionUsage & {
   id: string;
   at: string;
   kind: "usage";
 };
 
-type SessionEntry = MessageEntry | ResetEntry | UsageEntry;
+type SessionEntry = MessageEntry | ResetEntry | UsageEntry | StepUsageEntry;
 
 const EMPTY_USAGE: SessionUsage = {
   turns: 0,
@@ -133,6 +172,10 @@ export type JsonlSessionStore = {
   load(): Promise<ModelMessage[]>;
   loadUsage(): Promise<SessionUsage>;
   saveUsage(usage: SessionUsage): Promise<void>;
+  /** Append one step's accounting. Cheap enough to call per step. */
+  appendStepUsage(record: Omit<SessionStepUsage, "at">): Promise<void>;
+  /** Every step record in file order. Empty for a file written before these. */
+  loadStepUsage(): Promise<SessionStepUsage[]>;
   loadTaskLedger(): Promise<SessionTaskLedger | null>;
   saveTaskLedger(ledger: SessionTaskLedger | null): Promise<void>;
   fork(destination: string): Promise<JsonlSessionStore>;
@@ -225,6 +268,26 @@ export const createJsonlSessionStore = (file: string): JsonlSessionStore => {
     await fs.appendFile(file, `${JSON.stringify(entry)}\n`, "utf8");
   };
 
+  const writeStepUsage = async (record: Omit<SessionStepUsage, "at">): Promise<void> => {
+    const at = new Date().toISOString();
+    const id = createHash("sha1").update(`${at}:step-usage:${randomUUID()}`).digest("hex").slice(0, 16);
+    // No `parentId`: like `usage`, this is a side-channel and must never become
+    // the tail that a later message chains back to.
+    const entry: StepUsageEntry = { id, at, kind: "step-usage", ...record };
+    await fs.appendFile(file, `${JSON.stringify(entry)}\n`, "utf8");
+  };
+
+  const readStepUsage = async (): Promise<SessionStepUsage[]> => {
+    const all = await readAll();
+    const out: SessionStepUsage[] = [];
+    for (const entry of all) {
+      if (entry.kind !== "step-usage") continue;
+      const { id: _id, kind: _kind, ...record } = entry;
+      out.push(record);
+    }
+    return out;
+  };
+
   /** The most recent `usage` record, or zeroes when the file has none. */
   const readUsage = async (): Promise<SessionUsage> => {
     const all = await readAll();
@@ -284,6 +347,13 @@ export const createJsonlSessionStore = (file: string): JsonlSessionStore => {
 
     /** Cumulative counters for the session, or zeroes when none were recorded. */
     loadUsage: (): Promise<SessionUsage> => serialize(readUsage),
+
+    appendStepUsage: (record): Promise<void> => serialize(async () => {
+      await fs.mkdir(nodePath.dirname(file), { recursive: true });
+      await writeStepUsage(record);
+    }),
+
+    loadStepUsage: (): Promise<SessionStepUsage[]> => serialize(readStepUsage),
 
     /** Record the running totals, so a resumed process can report them. */
     saveUsage: (usage): Promise<void> => serialize(async () => {

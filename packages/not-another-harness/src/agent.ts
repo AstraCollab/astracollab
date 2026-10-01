@@ -271,7 +271,14 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
         // editing. Skipped automatically when reasoning is present.
         let requestMessages = messages;
         if (options.pruneToolResults && step > 1) {
-          const pruned = pruneOldToolResults(messages, options.pruneToolResults.keepRecentToolCalls);
+          const pruned = pruneOldToolResults(messages, options.pruneToolResults.keepRecentToolCalls, {
+            // Reasoning signatures are an Anthropic concept. Without this the
+            // guard fired for every provider, so pruning never ran anywhere.
+            provider: options.cacheProvider,
+            // `LanguageModel` is `string | LanguageModelV2`, so the id is only
+            // reachable on the object arm.
+            modelId: typeof options.model === "string" ? options.model : options.model.modelId,
+          });
           requestMessages = pruned.messages;
         }
         let estimatedInputTokens = estimateRequestTokens(options.system, requestMessages);

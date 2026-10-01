@@ -262,8 +262,43 @@ export const runTurn = (
     return result;
   })();
 
+  /**
+   * Captured before the turn runs, not read per event: awaiting inside the
+   * event loop lets the turn settle underneath it, so `state.turns` had already
+   * advanced and every record after the first was stamped with the next turn.
+   */
+  const turnNumber = state.turns + 1;
+
   const events = (async function* () {
     for await (const event of run.events) {
+      /**
+       * Per-step accounting, written as it happens.
+       *
+       * End-of-turn totals cannot explain a surprising number: a turn reporting
+       * 553k processed may have been 27 requests replaying a transcript, with
+       * the largest single request only 36.6k. Keeping each step's request size
+       * and cache composition on disk is what makes that answerable later,
+       * rather than by reconstructing it from the transcript by hand.
+       */
+      if (event.type === "step-finish" && state.store) {
+        try {
+          await state.store.appendStepUsage({
+            turn: turnNumber,
+            step: event.step,
+            inputTokens: event.usage.inputTokens,
+            outputTokens: event.usage.outputTokens,
+            totalTokens: event.usage.totalTokens,
+            requestTokens: event.request?.totalInputTokens ?? 0,
+            freshInputTokens: event.request?.freshInputTokens ?? 0,
+            cachedInputTokens: event.request?.cachedInputTokens ?? 0,
+            cacheCreationInputTokens: event.request?.cacheCreationInputTokens ?? 0,
+            hitRate: event.request?.hitRate ?? 0,
+            estimated: event.usage.estimated === true,
+          });
+        } catch {
+          // Accounting must never fail a turn.
+        }
+      }
       hooks.onEvent?.(event);
       yield event;
     }

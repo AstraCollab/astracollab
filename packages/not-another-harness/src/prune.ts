@@ -40,6 +40,29 @@ const isReasoningPart = (part: unknown): boolean =>
 export const transcriptHasReasoning = (messages: readonly ModelMessage[]): boolean =>
   messages.some((message) => Array.isArray(message.content) && message.content.some(isReasoningPart));
 
+/**
+ * Whether this model validates thinking signatures against the conversation prefix.
+ *
+ * Anthropic binds a signature to the content that precedes a thinking block, so
+ * rewriting an earlier `tool_result` invalidates it. That validation is
+ * Anthropic-specific - no other provider checks signatures this way, and a
+ * reasoning part from one of them is no reason to refuse to prune.
+ *
+ * The model id has to be consulted alongside the provider, because OpenRouter
+ * fronts Anthropic models. `openrouter` + `anthropic/claude-sonnet-4.5` is still
+ * an Anthropic model underneath, and treating it as prunable would break exactly
+ * the signatures this guard exists to protect.
+ *
+ * An unrecognised provider is treated as strict, so the guard never fails open.
+ */
+export const bindsThinkingSignatures = (provider?: string, modelId?: string): boolean => {
+  const id = (modelId ?? "").toLowerCase();
+  if (id.includes("anthropic") || /(^|[/:_-])claude/.test(id)) return true;
+  const name = (provider ?? "").toLowerCase();
+  if (name === "anthropic") return true;
+  return name === "";
+};
+
 const textOf = (output: unknown): string => {
   if (typeof output === "string") return output;
   if (output && typeof output === "object" && "value" in output) {
@@ -65,11 +88,17 @@ const elidedNote = (text: string): string => {
 export const pruneOldToolResults = (
   messages: readonly ModelMessage[],
   keepRecentToolCalls = 6,
+  options: { provider?: string; modelId?: string } = {},
 ): { messages: ModelMessage[]; stats: PruneStats } => {
   // At least one round always survives: eliding every result leaves the model
   // unable to see anything it has done.
   const keep = Math.max(1, Math.floor(keepRecentToolCalls));
-  if (transcriptHasReasoning(messages)) {
+  // Reasoning only blocks pruning where signatures actually exist. Gating on
+  // the mere presence of a reasoning part meant every reasoning model on every
+  // provider ran with no client-side bound at all: a 27-step OpenRouter run
+  // carried all 21.5k tokens of tool results on every one of its requests,
+  // because pruning was inert and compaction only started at 40k.
+  if (bindsThinkingSignatures(options.provider, options.modelId) && transcriptHasReasoning(messages)) {
     return {
       messages: [...messages],
       stats: { pruned: 0, savedTokens: 0, skippedForReasoning: true },

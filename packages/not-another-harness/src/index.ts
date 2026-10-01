@@ -1,5 +1,25 @@
 export { runAgent } from "./agent.js";
 export { compactMessages, alignTailToToolBoundary, type CompactionOutcome } from "./compaction.js";
+export {
+  cacheAccountingFor,
+  cacheOptions,
+  contextManagementOptions,
+  supportsCaching,
+  withCachedTail,
+  withCachedToolSchemas,
+  MAX_CACHE_BREAKPOINTS,
+  TAIL_CACHE_BREAKPOINTS,
+  DEFAULT_PINNED_TOOLS,
+  type CacheAccounting,
+  type CacheControl,
+  type ContextEditingOptions,
+} from "./cache.js";
+export {
+  createSpendMeter,
+  usageCostUsd,
+  type CacheAwareUsage,
+  type ModelRates,
+} from "./spend.js";
 export { buildSystemPrompt } from "./prompt.js";
 export {
   createCodingTools,
@@ -12,6 +32,7 @@ export {
   createJsonlSessionStore,
   type JsonlSessionStore,
   type SessionTaskLedger,
+  type SessionStepUsage,
   type SessionUsage,
 } from "./session.js";
 export { DEFAULT_CAPS, capHead, capTail, sliceFileLines, toLines } from "./caps.js";

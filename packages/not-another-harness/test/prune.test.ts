@@ -104,6 +104,44 @@ describe("pruneOldToolResults", () => {
     expect(out).toEqual(messages);
   });
 
+  it("prunes a reasoning transcript for a provider with no signature check", () => {
+    const messages: ModelMessage[] = [
+      ...toolRound("a", big(400)),
+      ...toolRound("b", big(400)),
+      {
+        role: "assistant",
+        content: [{ type: "reasoning", text: "I should check the file" }],
+      } as unknown as ModelMessage,
+    ];
+    const { messages: out, stats } = pruneOldToolResults(messages, 1, {
+      provider: "openrouter",
+      modelId: "stealth/space-bunny-alpha",
+    });
+    // Reasoning is not Anthropic's signature problem everywhere. Gating on the
+    // mere presence of a reasoning part left every reasoning model on every
+    // provider with no client-side bound at all.
+    expect(stats.skippedForReasoning).toBe(false);
+    expect(stats.pruned).toBeGreaterThan(0);
+    expect(JSON.stringify(out).length).toBeLessThan(JSON.stringify(messages).length);
+  });
+
+  it("still refuses for an Anthropic model reached through OpenRouter", () => {
+    // `openrouter` alone is not the signal: OpenRouter fronts Anthropic models,
+    // and treating one as prunable would break the signatures the guard exists
+    // to protect.
+    const messages: ModelMessage[] = [
+      ...toolRound("a", big(400)),
+      ...toolRound("b", big(400)),
+      { role: "assistant", content: [{ type: "reasoning", text: "hmm" }] } as unknown as ModelMessage,
+    ];
+    const { messages: out, stats } = pruneOldToolResults(messages, 1, {
+      provider: "openrouter",
+      modelId: "anthropic/claude-sonnet-4.5",
+    });
+    expect(stats.skippedForReasoning).toBe(true);
+    expect(out).toEqual(messages);
+  });
+
   it("keeps tool-result output an object, which the SDK schema requires", () => {
     const messages = [...toolRound("a", big(200)), ...toolRound("b", big(200))];
     const { messages: out } = pruneOldToolResults(messages, 1);
