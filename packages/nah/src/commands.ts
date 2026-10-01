@@ -33,11 +33,6 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   },
   { name: "permissions", description: "ask | yolo | readonly (gates edit/write/bash)", argumentHint: "[mode]" },
   { name: "stats", description: "Tokens used this session", argless: true },
-  {
-    name: "budget",
-    description: "Show or set the per-turn spend ceiling (e.g. /budget 8, /budget auto)",
-    argumentHint: "[usd|auto]",
-  },
   { name: "task", description: "Show the saved plan and progress", argless: true },
   { name: "task clear", description: "Clear the active plan", argless: true },
   { name: "diff", description: "Show current workspace changes", argless: true },

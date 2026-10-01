@@ -13,20 +13,6 @@ import type {
   ProprioceptiveSelfModel,
 } from "./types.js";
 import { runFastGate } from "./fast-gate.js";
-import {
-  CANDIDATE_FLOOR,
-  COLLAPSE_THRESHOLD,
-  estimateTokens,
-  gistOf,
-  distinctiveTokens,
-  isInteractionScoped,
-  isLossyRewrite,
-  MAX_CANDIDATES,
-  overlapScore,
-  PROMOTE_THRESHOLD,
-  relevanceTokens,
-  similarity
-} from "./relevance.js";
 
 /**
  * CognitiveMemory
@@ -45,19 +31,154 @@ import {
  * a question that says "naming". Overlap over content words works because the
  * memory text and the question share the words that identify the fact.
  */
-/*
- * Relevance scoring, merge safety and index formatting all live in
- * `./relevance.ts` rather than here.
- *
- * They used to be private copies in this file, and the same logic was separately
- * reimplemented in the service. Three copies of a merge rule is three chances to
- * disagree about whether a fact was lost, so there is now exactly one, and it is
- * the version with the hostname and containment fixes in it.
- */
+const STOP_WORDS = new Set([
+  "the", "and", "for", "this", "that", "with", "from", "you", "are", "was", "has", "have",
+  "what", "which", "when", "were", "will", "your", "our", "its", "not", "but", "all", "any",
+  "can", "did", "does", "how", "into", "out", "use", "used", "using", "one", "two", "get",
+  "new", "now", "then", "than", "them", "they", "his", "her", "she", "him", "been", "being",
+  "there", "here", "also", "just", "like", "make", "made", "need", "want", "about", "after",
+  "tell", "know", "give", "show", "please", "would", "could", "should", "will", "shall",
+]);
+
+export const relevanceTokens = (value: string): Set<string> =>
+  new Set(
+    value
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((word) => word.length >= 3 && !STOP_WORDS.has(word)),
+  );
+
+/** Jaccard-style overlap of two token sets, normalised by the smaller side. */
+export const overlapScore = (query: Set<string>, candidate: Set<string>): number => {
+  if (query.size === 0 || candidate.size === 0) return 0;
+  let shared = 0;
+  for (const word of query) if (candidate.has(word)) shared += 1;
+  return shared / Math.min(query.size, candidate.size);
+};
+
+/** Minimum overlap before a warm memory is worth pre-staging. */
+const PROMOTE_THRESHOLD = 0.12;
 
 /** L1 only starts evicting past this size. */
-const DEMOTE_ABOVE = 5
+const DEMOTE_ABOVE = 5;
 
+/**
+ * Floor for *candidate* recall, not a similarity decision.
+ *
+ * Deliberately low. Lexical overlap peaks on identical strings and bottoms out
+ * on the paraphrases that actually add information, so a tight gate misses
+ * exactly the pairs worth merging. This only decides who gets adjudicated.
+ */
+const CANDIDATE_FLOOR = 0.3;
+
+/**
+ * Tokens that carry a fact's identity: identifiers, numbers, codes.
+ *
+ * Function words and generic nouns ("file", "name", "project") are dropped
+ * because they recur in every restatement and hide real differences.
+ */
+const distinctiveTokens = (value: string): Set<string> =>
+  new Set(
+    value
+      .toLowerCase()
+      .replace(/['']/g, "")
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean)
+      .filter((w) => /\d/.test(w) || w.length >= 4)
+      .filter((w) => !FILLER_TOKENS.has(w)),
+  );
+
+/**
+ * Whether rewriting `original` as `replacement` would drop information.
+ *
+ * Distinctive tokens are the ones that carry a fact's identity, so a
+ * replacement missing one has deleted something - usually the qualifier that
+ * made the two statements differ at all ("never production", a build id, a
+ * port). Trailing plurals are folded so "deploys" merging into "deploy" is not
+ * read as a deletion.
+ *
+ * Biased towards reporting a loss. A false positive only costs a duplicate
+ * entry, which is recoverable; a false negative deletes a fact for good.
+ */
+const isLossyRewrite = (original: string, replacement: string): boolean => {
+  const fold = (tokens: Set<string>): Set<string> =>
+    new Set([...tokens].map((t) => (t.length >= 4 && t.endsWith("s") ? t.slice(0, -1) : t)));
+  const after = fold(distinctiveTokens(replacement));
+  for (const token of fold(distinctiveTokens(original))) {
+    if (!after.has(token)) return true;
+  }
+  return false;
+};
+
+/** How many existing memories to put in front of the adjudicator. */
+const MAX_CANDIDATES = 8;
+
+/** Words that appear in every restatement and so carry no identity. */
+const FILLER_TOKENS = new Set([
+  "this", "that", "these", "those", "there", "here", "with", "from", "into", "must",
+  "should", "always", "never", "under", "over", "about", "after", "before", "when",
+  "where", "which", "what", "your", "their", "them", "they", "then", "than", "also",
+  "just", "only", "each", "every", "some", "such", "very", "more", "most", "same",
+  "file", "files", "name", "names", "project", "repository", "repo", "note",
+]);
+
+
+/** Rough token cost of a string. */
+const estimateTokens = (value: string): number => Math.ceil(value.length / 4);
+
+/**
+ * Identifiers worth matching a memory against: URLs, dotted paths, SCREAMING
+ * names and camelCase/kebab tokens.
+ *
+ * Aider's repo map calls these `mentioned_idents` and uses them to personalise
+ * PageRank; the point is that a user naming a concrete thing is a far stronger
+ * signal than the words around it.
+ */
+export const extractIdentifiers = (text: string): string[] => {
+  const found = new Set<string>();
+  for (const match of text.match(/\bhttps?:\/\/[^\s<>()[\]"'`]+/g) ?? []) found.add(match);
+  for (const match of text.match(/\b(?:\.{0,2}\/)?[\w-]+(?:\/[\w.-]+)+\/?/g) ?? []) {
+    if (match.length > 3) found.add(match);
+  }
+  for (const match of text.match(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g) ?? []) found.add(match);
+  for (const match of text.match(/\b[A-Z]{2,}[0-9][A-Z0-9-]*\b/g) ?? []) found.add(match);
+  for (const match of text.match(/\b[a-z]+(?:[A-Z][a-z0-9]+){1,}\b/g) ?? []) found.add(match);
+  for (const match of text.match(/\b[a-z]+(?:-[a-z0-9]+){2,}\b/g) ?? []) found.add(match);
+  for (const match of text.match(/\b[0-9a-f]{6,}\b/gi) ?? []) found.add(match);
+  return [...found];
+};
+
+/** Index line: short, scannable, no body. */
+const gistOf = (item: MemoryItem): string => {
+  if (item.gist && item.gist.trim().length > 0) return item.gist.trim();
+  const first = item.content.split(/(?<=[.!?])\s/)[0] ?? item.content;
+  const trimmed = first.trim();
+  return trimmed.length > 90 ? `${trimmed.slice(0, 90)}…` : trimmed;
+};
+
+
+/**
+ * Instructions about *this conversation* rather than durable facts about the
+ * project. "Do not verify the staging build ID against the repository" and "Just
+ * remember this" describe how to behave right now, so storing them produces
+ * noise that later looks like a project constraint.
+ *
+ * Deliberately explicit patterns rather than a "is this specific enough?"
+ * heuristic — over-filtering would silently lose real memories, which is the
+ * worse failure.
+ */
+const INTERACTION_SCOPED = [
+  /\b(?:do not|don'?t|never|no need to)\s+(?:verify|check|confirm|look\s?up|search|investigate|browse|resolve)\b/i,
+  /\bjust\s+(?:remember|note|acknowledge|retain|treat)\b/i,
+  /\b(?:held|noted|stored|remembered)\s+(?:in|for)\s+(?:this|the)\s+conversation\b/i,
+  /\bnot\s+verified\b/i,
+  /\bwithout\s+verifying\b/i,
+  /\bfor\s+this\s+(?:conversation|session|turn|reply|response)\s+only\b/i,
+  /^(?:ok|okay|noted|got it|sure|thanks)\b[.!]?$/i,
+];
+
+export const isInteractionScoped = (content: string): boolean =>
+  INTERACTION_SCOPED.some((pattern) => pattern.test(content));
 
 export class CognitiveMemory {
   // L0: Pinned core state (identity, self-model, active tensions)
@@ -280,12 +401,11 @@ export class CognitiveMemory {
     const seen: string[] = [];
     const out: Array<{ item: MemoryItem; score: number }> = [];
     for (const entry of scored) {
-      // Identical-on-identity-tokens, not identical-on-words: a paraphrase of one
-      // fact should occupy one slot in a result list.
-      if (seen.some((existing) => similarity(existing, entry.item.content) >= COLLAPSE_THRESHOLD)) {
+      const key = entry.item.content.toLowerCase();
+      if (seen.some((existing) => overlapScore(relevanceTokens(existing), relevanceTokens(key)) >= 0.8)) {
         continue;
       }
-      seen.push(entry.item.content);
+      seen.push(key);
       out.push(entry);
       if (out.length >= Math.max(1, limit)) break;
     }

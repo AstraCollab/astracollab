@@ -139,8 +139,6 @@ describe("runAgent", () => {
       prompt: "loop forever",
       tools: createCodingTools(env),
       maxSteps: 3,
-      // Isolating the step budget from the wrap-up step, which this test is not about.
-      wrapUpOnLimit: false,
     });
     const eventsPromise = (async () => {
       for await (const e of run.events) {
@@ -154,128 +152,6 @@ describe("runAgent", () => {
     expect(result.reason).toBe("max-steps");
     expect(usageEvents.length).toBe(3);
     expect(usageEvents[2]?.totalTokens).toBe(USAGE.totalTokens * 3);
-  });
-
-  it("spends one wrap-up step handing off instead of stopping mid-task", async () => {
-    // The failure this prevents: a run ends on a ceiling with uncommitted work
-    // and nothing recorded, so the next session has to reconstruct it from a
-    // half-finished diff.
-    const model = scriptedModel([() => toolCallStream("read", { path: "x" })]);
-    const env = createNodeEnvironment(dir);
-    const events: HarnessEvent[] = [];
-    const run = runAgent({
-      model,
-      system: "test",
-      prompt: "loop forever",
-      tools: createCodingTools(env),
-      maxSteps: 2,
-    });
-    const consumer = (async () => {
-      for await (const e of run.events) events.push(e);
-    })();
-    const result = await run.result;
-    await consumer;
-
-    // 2 working steps + 1 wrap-up, and the wrap-up is announced as such rather
-    // than looking like a failure.
-    expect(result.steps).toBe(3);
-    expect(result.wrappedUp).toBe(true);
-    expect(result.reason).toBe("max-steps");
-    const wrapUp = events.find((e) => e.type === "wrap-up");
-    expect(wrapUp).toEqual({ type: "wrap-up", reason: "max-steps" });
-
-    // The instruction reaches the model, which is the whole point.
-    const lastUser = [...result.messages].reverse().find((m) => m.role === "user");
-    expect(typeof lastUser?.content === "string" ? lastUser.content : "").toContain(
-      "out of budget",
-    );
-  });
-
-  it("wraps up at most once, even when the wrap-up step hits the ceiling again", async () => {
-    // The wrap-up step deliberately runs past the step budget. If the guard were
-    // missing, that step would trip the same ceiling and arm a second wrap-up,
-    // and the run would never terminate.
-    const model = scriptedModel([() => toolCallStream("read", { path: "x" })]);
-    const env = createNodeEnvironment(dir);
-    const events: HarnessEvent[] = [];
-    const run = runAgent({
-      model,
-      system: "test",
-      prompt: "loop",
-      tools: createCodingTools(env),
-      maxSteps: 1,
-    });
-    const consumer = (async () => {
-      for await (const e of run.events) events.push(e);
-    })();
-    const result = await run.result;
-    await consumer;
-
-    expect(events.filter((e) => e.type === "wrap-up")).toHaveLength(1);
-    expect(result.steps).toBe(2);
-    expect(result.reason).toBe("max-steps");
-  });
-
-  it("stops without a wrap-up when no budget remains to pay for one", async () => {
-    // A 200-token rail with 120-token steps leaves 80 after one step — not enough
-    // for another request. Announcing a wrap-up the harness then cannot afford
-    // would promise a handoff and not deliver one, so it stays quiet instead.
-    const model = scriptedModel([() => toolCallStream("read", { path: "x" })]);
-    const env = createNodeEnvironment(dir);
-    const events: HarnessEvent[] = [];
-    const run = runAgent({
-      model,
-      system: "test",
-      prompt: "loop",
-      tools: createCodingTools(env),
-      maxSteps: 50,
-      maxTokens: 200,
-      compaction: "off",
-    });
-    const consumer = (async () => {
-      for await (const e of run.events) events.push(e);
-    })();
-    const result = await run.result;
-    await consumer;
-
-    expect(result.reason).toBe("max-tokens");
-    expect(result.wrappedUp).toBe(false);
-    expect(events.some((e) => e.type === "wrap-up")).toBe(false);
-  });
-
-  it("does not wrap up on a normal completion", async () => {
-    // A finished run has nothing to hand off, and spending a request to say so
-    // would be pure waste.
-    const model = scriptedModel([() => textStream("All done.")]);
-    const run = runAgent({ model, system: "test", prompt: "hi", tools: {} });
-    const events = await collectEvents(run.events);
-    const result = await run.result;
-    expect(result.reason).toBe("completed");
-    expect(result.wrappedUp).toBe(false);
-    expect(events.some((e) => e.type === "wrap-up")).toBe(false);
-  });
-
-  it("does not wrap up after the caller aborts", async () => {
-    // Someone who pressed Escape does not want a farewell message.
-    const abort = new AbortController();
-    const model = scriptedModel([() => toolCallStream("read", { path: "x" })]);
-    const env = createNodeEnvironment(dir);
-    const run = runAgent({
-      model,
-      system: "test",
-      prompt: "loop",
-      tools: createCodingTools(env),
-      maxSteps: 2,
-      abortSignal: abort.signal,
-      onStepFinish: () => {
-        abort.abort();
-      },
-    });
-    const events = await collectEvents(run.events);
-    const result = await run.result;
-    expect(result.reason).toBe("aborted");
-    expect(result.wrappedUp).toBe(false);
-    expect(events.some((e) => e.type === "wrap-up")).toBe(false);
   });
 
   it("hard-stops on the token budget even with steps remaining", async () => {

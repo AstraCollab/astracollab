@@ -1,6 +1,4 @@
 import type { LanguageModel, ModelMessage } from "ai";
-import type { ModelRates } from "./spend.js";
-import type { CacheAccounting } from "./cache.js";
 
 /** Token usage reported for a step or an entire run. */
 export type HarnessUsage = {
@@ -9,51 +7,6 @@ export type HarnessUsage = {
   totalTokens: number;
   /** True when one or more step totals had to be estimated from text length. */
   estimated?: boolean;
-  /**
-   * Tokens served from prompt cache, cumulative for the run.
-   *
-   * Reported separately by Anthropic and *not* included in `inputTokens` when
-   * caching is active, which makes `inputTokens` alone a misleading measure of
-   * how large a request actually was.
-   */
-  cachedInputTokens?: number;
-  /** Tokens written into the prompt cache by this run. */
-  cacheCreationInputTokens?: number;
-  /** Cumulative dollar spend. Requires `rates`; 0 when unset. */
-  spendUsd?: number;
-};
-
-/**
- * The cache-aware shape of one request, as the provider billed it.
- *
- * `HarnessUsage` is cumulative, so it cannot answer "how big is the prompt right
- * now" — summing inputs across steps gives the total spent, not the context in
- * use. Providers also split input three ways, and only one of the three is
- * `inputTokens`:
- *
- * ```
- * total input = cache_read + cache_creation + fresh
- * ```
- *
- * Omitting the first two is how a caller ends up displaying a cumulative spend
- * figure as if it were a context size.
- */
-export type HarnessRequestBreakdown = {
-  /** Everything sent as input, cached and fresh. This is the context footprint. */
-  totalInputTokens: number;
-  /** Read back from cache. */
-  cachedInputTokens: number;
-  /** Written into cache by this request. */
-  cacheCreationInputTokens: number;
-  /** Sent uncached, i.e. after the last breakpoint. */
-  freshInputTokens: number;
-  /**
-   * `cachedInputTokens / totalInputTokens`, or 0 when nothing has been cached.
-   *
-   * The number to watch: a well-cached run sits above 90%, and a low value means
-   * something in the prefix is changing between steps.
-   */
-  hitRate: number;
 };
 
 /** Why an agent run ended. */
@@ -69,10 +22,10 @@ export type HarnessStopReason =
    * nothing was wrong with input size or spend, one response was simply longer
    * than the allowance. Thinking tokens count against that cap, so on a reasoning
    * model a single verbose step can trip it - and reporting that as `max-tokens`
-   * sends the reader to tune input context, the one knob that cannot fix it.
+   * sends the reader to tune input context, which is the one knob that cannot
+   * fix it.
    */
   | "max-output"
-  | "max-context" /** Next request exceeded the context window even after compaction. */
   | "aborted"
   | "error";
 
@@ -108,14 +61,8 @@ export type HarnessEvent =
       output: string;
       isError: boolean;
     }
-  | { type: "step-finish"; step: number; usage: HarnessUsage; request: HarnessRequestBreakdown }
+  | { type: "step-finish"; step: number; usage: HarnessUsage }
   | { type: "compacted"; droppedMessages: number; keptMessages: number; summaryChars: number }
-  /**
-   * A budget or step limit is about to stop the run, so one final step is being
-   * spent on handing off cleanly instead. A UI should show this as "wrapping up",
-   * not as a failure — the run is ending by design, not because it broke.
-   */
-  | { type: "wrap-up"; reason: HarnessStopReason }
   /**
    * A user message sent while the run was in flight. `queued` fires when the
    * harness accepts it, `delivered` when it actually enters the transcript —
@@ -194,29 +141,8 @@ export type HarnessRunOptions = {
   tools: Record<string, unknown>;
   /** Hard step cap (one step = one model round-trip + its tool calls). Default 32. */
   maxSteps?: number;
-  /**
-   * @deprecated Renamed to `maxSpendUsd`. A token budget cannot express cost,
-   * because a cached token costs a tenth of a fresh one — so this fired on
-   * harness efficiency rather than on money, which made it behave as a step
-   * counter. Still honoured when set; prefer `maxSpendUsd` plus `rates`.
-   */
+  /** Hard cumulative token cap for the run. Default 400_000; 0 disables. */
   maxTokens?: number;
-  /**
-   * Cumulative spend ceiling in US dollars. Requires `rates`.
-   *
-   * This is the safety rail, and it is checked against what the run has actually
-   * cost rather than against a token count. 0 or undefined disables it.
-   */
-  maxSpendUsd?: number;
-  /** Per-model prices used to turn usage into the `maxSpendUsd` figure. */
-  rates?: ModelRates;
-  /**
-   * Per-request input ceiling in tokens, checked against the model's context
-   * window. When the next request would exceed it the response is to compact,
-   * not to stop — a full context window is fixable, so stopping is the worst
-   * available response to one.
-   */
-  maxContextTokens?: number;
   /** Maximum generated tokens for one model response. Default 8_192. */
   maxOutputTokens?: number;
   /** Cancel the run. */
@@ -232,22 +158,8 @@ export type HarnessRunOptions = {
    * input tokens. Measured from the last step's reported input count, so
    * repeated re-sending of the transcript does not inflate the trigger. Default
    * 120_000.
-   *
-   * Set high relative to the model's window on purpose: compaction is lossy, and
-   * the research on constraint decay is unambiguous that a single compaction can
-   * drop invariants the agent was relying on. Compact late, and keep cheap
-   * tool-output elision underneath it.
    */
   compactAtTokens?: number;
-  /**
-   * Run one final wrap-up step before a hard stop, so the agent commits its
-   * work and states what remains instead of being cut off mid-task. Default true.
-   *
-   * Costs one request and converts every hard stop from lost work into a
-   * resumable state. Does not fire on `completed` or `error`, or when the caller
-   * has aborted — someone who pressed Escape does not want a farewell message.
-   */
-  wrapUpOnLimit?: boolean;
   /** Messages to keep verbatim when compacting. Default 6. */
   compactKeepRecent?: number;
   /** Prior messages to continue from (e.g. restored session branch). */
@@ -257,15 +169,6 @@ export type HarnessRunOptions = {
    * Set it to opt into Anthropic-style cache breakpoints.
    */
   cacheProvider?: string;
-  /**
-   * Override the inferred cache-accounting convention.
-   *
-   * Anthropic reports the cached prefix outside `input_tokens`; OpenAI-compatible
-   * gateways include it. Summing them blindly inflates the reported context on the
-   * latter. Inferred from `cacheProvider` when unset — set this explicitly when a
-   * gateway fronts a different convention than its id suggests.
-   */
-  cacheAccounting?: CacheAccounting;
   /** Cache lifetime for breakpoints. 5m is cheaper, 1h holds across longer runs. */
   cacheTtl?: "5m" | "1h";
   /**
@@ -303,8 +206,6 @@ export type HarnessRunResult = {
   messages: ModelMessage[];
   /** Number of compactions performed during the run. */
   compactions: number;
-  /** True when the run was ended by a wrap-up step rather than cut off. */
-  wrappedUp: boolean;
 };
 
 export type HarnessRun = {

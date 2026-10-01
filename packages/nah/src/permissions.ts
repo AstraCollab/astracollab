@@ -63,27 +63,11 @@ export const createApprover = (
       }
       const label = toolLabel(toolName, input);
       const question = `${label} — allow? [y / n / a=always this tool / A=always this exact call]`;
-      /**
-       * Plain text, with the amber left to the renderer.
-       *
-       * The two hosts apply the surface differently and neither can accept a
-       * coloured string. The TUI clamps each row to the terminal width and loses a
-       * nested SGR escape to that clamp, leaving the fill bleeding onto the rows
-       * below — the failure `commandBlock`'s comment warns about at length. Readline
-       * pads nothing, so there is no full-width row to paint. So the string carries
-       * no escape of its own and each host supplies the fill: the TUI through
-       * `addApproval`, readline by wrapping here.
-       *
-       * The `!` used to be `c.yellow`. On an amber surface that is the one pairing
-       * guaranteed to disappear, so the fill now carries the emphasis on its own.
-       */
-      const plain = `  ! ${label} — allow? [y / n / a=always this tool / A=always this exact call]`;
-      const readlinePrompt = `${c.backgroundWarn(plain)} `;
       // Case matters: "a" trusts the tool, "A" trusts only this exact call.
       const raw = (
         askFn
           ? await askFn(question)
-          : await askOnReadline(readlinePrompt)
+          : await askOnReadline(`${c.yellow("!")} ${c.bold(label)} ${c.dim("— allow? [y / n / a=always this tool / A=always this exact call]")} `)
       ).trim();
       const answer = raw.toLowerCase();
       // "a" trusts the *tool* for the rest of the session, which is what people

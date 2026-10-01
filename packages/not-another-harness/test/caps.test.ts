@@ -45,22 +45,4 @@ describe("caps", () => {
     // oversized read is paid for again on each subsequent step.
     expect(capped.body.split("\n").length).toBe(DEFAULT_CAPS.read.maxLines);
   });
-
-  it("sliceFileLines reports the window it covered, not just the file length", () => {
-    // The resume offset depends on where the read *started*, so the caller cannot
-    // derive it from `totalLines` alone. A read at offset 10 covering 5 lines ends
-    // at 14, not at 15.
-    const file = Array.from({ length: 1000 }, (_, i) => `l${i}`).join("\n");
-    expect(sliceFileLines(file, 10, 5)).toMatchObject({ start: 10, end: 14, totalLines: 1000 });
-    expect(sliceFileLines(file, 1, undefined)).toMatchObject({ start: 1, end: DEFAULT_CAPS.read.maxLines });
-  });
-
-  it("sliceFileLines clamps the reported end to the file, so no resume past EOF", () => {
-    const file = "a\nb\nc\n";
-    // Reading near the end covers fewer lines than the cap. Reporting
-    // `start - 1 + cap` would tell the model to resume past a line that does not
-    // exist.
-    const out = sliceFileLines(file, 2, 250);
-    expect(out).toMatchObject({ start: 2, end: 3, totalLines: 3 });
-  });
 });

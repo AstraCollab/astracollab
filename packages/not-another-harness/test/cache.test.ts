@@ -7,12 +7,9 @@ import {
   cacheOptions,
   contextManagementOptions,
   supportsCaching,
-  withCachedTail,
   withCachedToolSchemas,
-  MAX_CACHE_BREAKPOINTS,
 } from "../src/cache.js";
 import { runAgent } from "../src/agent.js";
-import type { ModelMessage } from "ai";
 
 const USAGE = { inputTokens: 10, outputTokens: 2, totalTokens: 12 };
 
@@ -36,37 +33,12 @@ describe("cache breakpoint detection", () => {
 });
 
 describe("tool schema caching", () => {
-  it("marks only the last tool, since a breakpoint covers the whole prefix", () => {
-    // A breakpoint marks a prefix ending at its block, so the final tool carries
-    // the entire tool block into cache. Marking each tool spends the provider's
-    // four-breakpoint budget to say one thing N times — and the excess is
-    // discarded silently, so the unmarked tools are re-billed in full on every
-    // step with nothing in the logs.
-    const tools = withCachedToolSchemas(
-      { a: { description: "x" }, b: { description: "y" }, c: { description: "z" } },
-      "anthropic",
-    );
-    const marked = (name: string) =>
-      (tools[name] as { providerOptions?: { anthropic?: { cacheControl?: unknown } } }).providerOptions?.anthropic
-        ?.cacheControl;
-    expect(marked("a")).toBeUndefined();
-    expect(marked("b")).toBeUndefined();
-    expect(marked("c")).toEqual({ type: "ephemeral", ttl: "5m" });
-  });
-
-  it("stays within the provider breakpoint budget for a realistic tool count", () => {
-    // An 11-tool session previously emitted 11 markers; 4 survived and 7 were
-    // dropped by the SDK validator. One marker is all that is needed.
-    const tools: Record<string, unknown> = {};
-    for (const name of ["read", "list", "grep", "edit", "write", "outline", "bash", "glob", "recall", "task_ledger", "delegate_task"]) {
-      tools[name] = { description: name };
+  it("marks every tool definition", () => {
+    const tools = withCachedToolSchemas({ a: { description: "x" }, b: { description: "y" } }, "anthropic");
+    for (const tool of Object.values(tools)) {
+      expect((tool as { providerOptions?: { anthropic?: { cacheControl?: unknown } } }).providerOptions?.anthropic?.cacheControl)
+        .toEqual({ type: "ephemeral", ttl: "5m" });
     }
-    const out = withCachedToolSchemas(tools, "anthropic");
-    const count = Object.values(out).filter((t) =>
-      Boolean((t as { providerOptions?: { anthropic?: { cacheControl?: unknown } } }).providerOptions?.anthropic?.cacheControl),
-    ).length;
-    expect(count).toBe(1);
-    expect(count).toBeLessThanOrEqual(MAX_CACHE_BREAKPOINTS);
   });
 
   it("leaves tools untouched for providers that ignore breakpoints", () => {
@@ -74,75 +46,20 @@ describe("tool schema caching", () => {
     expect(withCachedToolSchemas(tools, "openai")).toBe(tools);
   });
 
-  it("preserves other provider options on the marked tool", () => {
+  it("preserves other provider options on a tool", () => {
     const tools = {
-      a: { description: "x" },
-      b: { description: "y", providerOptions: { openai: { parallelToolCalls: false } } },
+      a: { description: "x", providerOptions: { openai: { parallelToolCalls: false } } },
     };
     const out = withCachedToolSchemas(tools, "anthropic") as Record<
       string,
       { providerOptions: Record<string, Record<string, unknown>> }
     >;
-    expect(out.b!.providerOptions.openai).toEqual({ parallelToolCalls: false });
-    expect(out.b!.providerOptions.anthropic).toBeDefined();
-    // The earlier tool is untouched, so its own options survive as-is.
-    expect((out.a as { providerOptions?: unknown }).providerOptions).toBeUndefined();
+    expect(out.a!.providerOptions.openai).toEqual({ parallelToolCalls: false });
+    expect(out.a!.providerOptions.anthropic).toBeDefined();
   });
 
   it("passes non-object tools through unchanged", () => {
     expect(withCachedToolSchemas({ a: undefined }, "anthropic").a).toBeUndefined();
-  });
-
-  it("returns an empty tool set unchanged", () => {
-    const empty = {};
-    expect(withCachedToolSchemas(empty, "anthropic")).toBe(empty);
-  });
-});
-
-describe("moving tail breakpoint", () => {
-  const messages: ModelMessage[] = [
-    { role: "user", content: "one" },
-    { role: "assistant", content: [{ type: "text", text: "two" }] },
-    { role: "user", content: "three" },
-    { role: "assistant", content: [{ type: "text", text: "four" }] },
-  ];
-
-  const cacheControlAt = (msgs: ModelMessage[], index: number) =>
-    (msgs[index] as { providerOptions?: { anthropic?: { cacheControl?: unknown } } }).providerOptions?.anthropic
-      ?.cacheControl;
-
-  it("marks the message that the previous request already sent", () => {
-    // Marking the very last message would write a fresh cache entry on every
-    // step and read nothing back. The prefix must be one a prior request wrote.
-    const out = withCachedTail(messages, 2, "anthropic");
-    expect(cacheControlAt(out, 2)).toEqual({ type: "ephemeral", ttl: "5m" });
-    expect(cacheControlAt(out, 3)).toBeUndefined();
-  });
-
-  it("never rewrites message content, so thinking signatures stay valid", () => {
-    const withThinking: ModelMessage[] = [
-      {
-        role: "assistant",
-        content: [{ type: "reasoning", text: "thought", signature: "sig" } as never],
-      },
-      { role: "user", content: "next" },
-    ];
-    const out = withCachedTail(withThinking, 0, "anthropic");
-    expect(out[0]!.content).toEqual(withThinking[0]!.content);
-    expect(JSON.stringify(out[0]!.content)).toContain("sig");
-  });
-
-  it("clamps a stale index rather than marking a message that does not exist", () => {
-    // After compaction the transcript is shorter than the index the previous
-    // request used. Reading past the end would mark nothing and silently lose
-    // the cache entirely.
-    const out = withCachedTail(messages, 99, "anthropic");
-    expect(cacheControlAt(out, messages.length - 1)).toBeDefined();
-    expect(out).toHaveLength(messages.length);
-  });
-
-  it("is a no-op for providers that ignore breakpoints", () => {
-    expect(withCachedTail(messages, 2, "openai")).toEqual(messages);
   });
 });
 
@@ -192,30 +109,6 @@ describe("caching reaches the model call", () => {
     // Context editing rides in the same provider block as the cache breakpoint.
     const edits = (anthropic.contextManagement as { edits: Array<{ type: string }> }).edits;
     expect(edits[0]!.type).toBe("clear_tool_uses_20250919");
-  });
-
-  it("keeps the request-level breakpoint when context editing is also set", async () => {
-    // Both options live under the same provider key, so merging them with a plain
-    // spread lets the second erase the first. That silently uncached the system
-    // prompt: requests still succeeded, they just stopped being cheap, and the
-    // only symptom was a bill.
-    const seen = await capture("anthropic");
-    const anthropic = (seen[0]!.providerOptions as { anthropic: Record<string, unknown> }).anthropic;
-    expect(anthropic.cacheControl).toEqual({ type: "ephemeral", ttl: "5m" });
-    expect(anthropic.contextManagement).toBeDefined();
-  });
-
-  it("marks the transcript tail on the request that carries it", async () => {
-    // The tail is the only part of the request that grows, so it is the only part
-    // worth spending a breakpoint on for a long run.
-    const seen = await capture("anthropic");
-    const prompt = seen[0]!.prompt as Array<Record<string, unknown>>;
-    const marked = prompt.filter((message) => {
-      const options = (message.providerOptions as { anthropic?: { cacheControl?: unknown } } | undefined)
-        ?.anthropic;
-      return Boolean(options?.cacheControl);
-    });
-    expect(marked.length).toBe(1);
   });
 
   it("sends none for a provider that would ignore them", async () => {

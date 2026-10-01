@@ -565,25 +565,6 @@ export class TurnOutput implements Component {
     return block;
   }
 
-  /**
-   * An approval prompt, on its own amber surface.
-   *
-   * A panel rather than a line, for the reason `commandBlock` is colour-free:
-   * pi-tui pads to the pane width and the layout then clamps to the terminal
-   * width, so a background applied to an ordinary line loses its closing escape to
-   * the clamp and the fill bleeds onto the rows below. Applying it through `bgFn`
-   * — which receives the already-padded line — puts the escape last, where the
-   * clamp cannot reach it. That also means `text` must be plain: a nested colour
-   * here is what the comment above `commandBlock` warns about.
-   */
-  addApproval(text: string): void {
-    this.stream = null;
-    this.streamBuffer = "";
-    this.gap("notice");
-    const block = new Text(text, 0, 0, (line) => c.backgroundWarn(line));
-    this.blocks.push(block);
-  }
-
   private pushMarkdown(text: string): SettableBlock {
     const block = markdownBlock(text);
     this.blocks.push(block);

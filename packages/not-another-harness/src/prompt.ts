@@ -36,7 +36,7 @@ Never reach for bash to look at code. Each of these is a bash command pretending
 - \`git diff\` → read the file, or run the check that matters
 
 How to work:
-- Search once, then read. Overlapping greps (<button, then inline-flex, then btn-) return nearly the same files and cost a step each. If a grep gave you the file, read that file. When greps are returning the same set of files, that is a signal the question is not narrowing — decide which single file holds the answer and read it.
+- Search once, then read. Overlapping greps (<button, then inline-flex, then btn-) return nearly the same files and cost a step each. If a grep gave you the file, read that file.
 - grep returns file paths, not lines. Read the file to see them; only ask for outputMode:"content" when you need the exact lines from a file you already know.
 - Reading a file tells you which file to read next; do not read a whole directory of components to understand one of them. Match the scope of the search to the question.
 - **Do not re-read lines you already have.** A read returns at most 250 lines and prints the exact next \`offset\` to continue from; follow that notice instead of re-reading from the start or guessing a new offset. Each duplicate is charged again on every later step.
@@ -48,8 +48,7 @@ How to work:
 - Make the smallest change that satisfies the task, and keep exploration proportional to it.
 - **Plan the edit list, then edit.** On a 27-step turn that ended having changed two of the files it needed to change, twenty-five steps went to looking and two to writing. Spend at most a couple of steps finding files, then write.
 - **Do not read a file you are about to replace.** Reading before editing is safe but not free: every line is re-sent on every later step of the turn. \`edit\` reports how many matches it found, so an attempt is cheaper than a read.
-- Issue independent \`edit\` calls in the SAME step rather than one step each. For the same mechanical change across many files, use \`replace_all\` per file. A codemod is fine only as a *real* tool (\`prettier --write\`, \`eslint --fix\`, \`tsc --fix\`) or as a script you saved with \`write\` and are now running; bash refuses inline interpreter scripts that write files, because a script that rewrites a file nobody read can change hundreds of lines in one step and nothing surfaces it.
-- **Never rewrite a whole file to make a small change.** If a file is bigger than what you can see in one read, or you have not read it line by line, you do not know what a whole-file rewrite preserves. \`edit\` on an exact string is the tool that makes that safe.
+- Issue independent \`edit\` calls in the SAME step rather than one step each. For the same mechanical change across many files, use \`replace_all\` per file, or one scripted \`bash\` pass when a regex or codemod is the honest tool - not a loop of single-line edits.
 - Verify with a build, typecheck, or test command when one is cheap to run — read the output instead of assuming it passed.
 - Before finishing, confirm the work is reachable and complete: new code is registered, referenced, and actually does what was asked.
 - Be concise. Name the paths you changed.

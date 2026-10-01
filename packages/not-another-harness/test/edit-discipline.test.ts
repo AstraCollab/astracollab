@@ -21,21 +21,9 @@ describe("the prompt teaches the edit phase", () => {
     expect(prompt).toContain("Do not read a file you are about to replace");
   });
 
-  it("points at replace_all, and keeps codemods to real tools", () => {
+  it("points at replace_all and a scripted pass for mechanical changes", () => {
     expect(prompt).toContain("replace_all");
-    expect(prompt).toContain("codemod");
-    // The clause used to say "one scripted bash pass" for a regex change, which
-    // is the instruction that produced an unread 117-line rewrite.
-    expect(prompt).not.toContain("one scripted `bash` pass");
-    expect(prompt).toMatch(/refuses inline interpreter scripts/);
-  });
-
-  it("forbids the whole-file rewrite that replaces a targeted change", () => {
-    expect(prompt).toContain("Never rewrite a whole file to make a small change");
-  });
-
-  it("warns that repeated greps mean the question is not narrowing", () => {
-    expect(prompt).toMatch(/the question is not narrowing/);
+    expect(prompt).toContain("scripted");
   });
 
   it("still advertises outline, which was shipped but never mentioned", () => {
@@ -87,30 +75,5 @@ describe("the edit tool explains itself", () => {
     // one, which is what left uniqueness and read-first behaviour to guesswork.
     const description = await editDescription();
     expect(description.split(". ").length).toBeGreaterThanOrEqual(4);
-  });
-});
-
-describe("the bash tool says it will refuse scripted rewrites", () => {
-  const bashDescription = async (): Promise<string> => {
-    const dir = await mkdtemp(nodePath.join(tmpdir(), "nah-bashdesc-"));
-    const tools = createCodingTools(createNodeEnvironment(dir)) as Record<
-      string,
-      { description?: string }
-    >;
-    return tools.bash?.description ?? "";
-  };
-
-  it("warns before the refusal, not just after", async () => {
-    // A guard the model has never heard of reads as a broken tool.
-    const description = await bashDescription();
-    expect(description).toMatch(/will refuse an inline interpreter script/);
-    expect(description).toMatch(/edit\/replace_all/);
-  });
-
-  it("says reading with an interpreter is still allowed", async () => {
-    // Otherwise the model concludes the shell is off-limits for analysis too
-    // and starts reimplementing counting with file tools.
-    const description = await bashDescription();
-    expect(description).toMatch(/purely to read or analyse is fine/);
   });
 });

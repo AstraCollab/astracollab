@@ -141,12 +141,7 @@ const resolveInside = (cwd: string, path: string): string => {
   const abs = nodePath.resolve(cwd, path);
   const root = nodePath.resolve(cwd);
   if (abs !== root && !abs.startsWith(root + nodePath.sep)) {
-    throw new Error(
-      `${path} is outside the workspace root (${root}). ` +
-        `Use a path inside it — if the target is in a sibling package or directory, ` +
-        `address it from the root rather than with "..". ` +
-        `bash is not confined to the root and can read it if you truly need that.`,
-    );
+    throw new Error(`path escapes workspace root: ${path}`);
   }
   return abs;
 };
@@ -160,7 +155,7 @@ const resolveSafe = async (
   allowMissing = false,
 ): Promise<string> => {
   const abs = resolveInside(root, path);
-  const realRealRoot = await fs.realpath(root);
+  const realRoot = await fs.realpath(root);
   let cursor = abs;
   const suffix: string[] = [];
 
@@ -168,11 +163,8 @@ const resolveSafe = async (
     try {
       const realCursor = await fs.realpath(cursor);
       const realCandidate = nodePath.resolve(realCursor, ...suffix);
-      if (!isInside(realRealRoot, realCandidate)) {
-        throw new Error(
-          `${path} resolves outside the workspace root (${root}) through a symlink. ` +
-            `Use a path inside the workspace that does not traverse a symlink out of it.`,
-        );
+      if (!isInside(realRoot, realCandidate)) {
+        throw new Error(`path escapes workspace root: ${path}`);
       }
       return abs;
     } catch (error) {

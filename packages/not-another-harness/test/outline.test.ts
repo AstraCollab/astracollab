@@ -130,49 +130,4 @@ describe("outline tool", () => {
       await rm(ws, { recursive: true, force: true });
     }
   });
-
-  it("defaults to a small map, since the full map costs more than reading the files", async () => {
-    // Measured on a 5,800-line package: the full map was ~6,200 tokens, which is
-    // more than every file the agent went on to read individually. A default
-    // above the point of diminishing returns makes `outline` the most expensive
-    // call available for merely finding out where something lives.
-    const ws = await setup();
-    try {
-      const out = await run({});
-      const lines = out.split("\n").filter((l) => l.includes("  "));
-      expect(lines.length).toBeLessThanOrEqual(120);
-    } finally {
-      await rm(ws, { recursive: true, force: true });
-    }
-  });
-
-  it("lets an explicit maxEntries exceed the default", async () => {
-    // The default must be a default, not a ceiling. It was previously clamped to
-    // the same constant it defaulted from, so raising the default would have made
-    // the larger map unreachable no matter what the model asked for.
-    const ws = await setup();
-    try {
-      const out = await run({ maxEntries: 2_000 });
-      // The schema allows up to 2,000; a value above the default must not be
-      // silently reduced back to it.
-      expect(out).not.toContain("maxEntries=120");
-    } finally {
-      await rm(ws, { recursive: true, force: true });
-    }
-  });
-
-  it("names the call that recovers omitted signatures", async () => {
-    const ws = await setup();
-    try {
-      const out = await run({ maxEntries: 1 });
-      // The old notice said "narrow with path or query". But `query` only
-      // *ranks*: it reorders the same entries and returns the same count, so
-      // following that advice costs another full map and changes nothing.
-      // `maxEntries` is the lever that returns more.
-      expect(out).toContain("maxEntries=");
-      expect(out).not.toContain("query");
-    } finally {
-      await rm(ws, { recursive: true, force: true });
-    }
-  });
 });

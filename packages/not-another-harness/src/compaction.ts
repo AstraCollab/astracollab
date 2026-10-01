@@ -150,15 +150,7 @@ export const compactMessages = async (opts: {
   const { messages, keepRecent } = opts;
   const tailStart = alignTailToToolBoundary(messages, keepRecent);
   // [task, ...middle..., ...recent]
-  //
-  // The question is whether the middle has anything in it. Expressing that
-  // directly matters: deriving it from message counts instead makes the answer
-  // depend on `keepRecent` in a way that silently disables compaction at small
-  // values. Since `tailStart` is `length - keepRecent` for an aligned tail, a
-  // `length <= tailStart + 2` guard reduces to `keepRecent <= 2` — so
-  // `keepRecent: 2`, the minimum the agent loop allows, could never compact at
-  // any transcript length.
-  if (tailStart < 2) {
+  if (messages.length <= tailStart + 2) {
     return null;
   }
   const head = messages.slice(0, 1);

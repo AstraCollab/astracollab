@@ -42,30 +42,20 @@ export type SessionUsage = {
   contextUsedTokens: number;
   contextUsageEstimated: boolean;
   lastOutputTokens: number;
-  /**
-   * Prompt-cache read and write tokens, cumulative.
-   *
-   * Additive and optional: a session file written before these existed simply
-   * reports zero, which is the honest reading of "we were not measuring it".
-   */
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  /** Cumulative spend in USD, when rates were known. */
-  spendUsd?: number;
 };
 
 /**
  * One model request's accounting, kept per step.
  *
  * The cumulative `usage` record answers "what has this session spent". It cannot
- * answer "why did that turn cost 550k", because the two numbers differ by the
- * number of steps and the size of the replayed transcript - and the only way to
- * tell those apart from a provider dashboard was to reconstruct it by hand from
- * the transcript.
+ * answer "why did that turn cost 550k", because that number and a provider's
+ * per-request figure differ by the step count and the replayed transcript - and
+ * telling those apart used to mean reconstructing it by hand from the
+ * transcript.
  *
  * `requestTokens` is this single request's prompt size and the rest is its cache
- * composition, which together explain the difference between a turn's total and
- * what any one call was billed for.
+ * composition, which together explain the gap between a turn's total and what
+ * any one call was billed for.
  */
 export type SessionStepUsage = {
   /** 1-based turn number within the session. */

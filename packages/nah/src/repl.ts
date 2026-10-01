@@ -21,10 +21,6 @@ import { adoptUsage, resetUsage, runTurn, type SessionState, type StepRecovery }
 import { createTaskLedgerTool, formatTaskLedger } from "./task-ledger.js";
 import { createDelegationTool } from "./delegation.js";
 import { loadLastModel, saveLastModel } from "./model-preferences.js";
-import { ratesFor } from "./rates.js";
-import { formatUsd, projectStepCostUsd, resolveTurnSpendUsd } from "./budget.js";
-import { describeWorkspaceBoundary, resolveWorkspaceRoot } from "./workspace.js";
-import { formatTokens } from "./tui/sidebar.js";
 
 const REPL_HELP = renderCommandHelp();
 
@@ -282,19 +278,9 @@ const withStatusUpdates = async function* (
 ): AsyncIterable<HarnessEvent> {
   for await (const event of events) {
     if (event.type === "step-finish") {
-      /**
-       * Context size comes from `event.request`, not `event.usage`.
-       *
-       * `usage` accumulates across every step of the run, so its `inputTokens` is
-       * the total spent, not what is in the window. Reading it as the context
-       * made a 30k-token session display as though it were carrying 270k — the
-       * two differ by the number of steps, which is exactly the quantity the
-       * panel exists to help you reason about.
-       */
-      state.contextUsedTokens = event.request.totalInputTokens;
+      state.contextUsedTokens = event.usage.inputTokens;
       state.lastOutputTokens = event.usage.outputTokens;
       state.contextUsageEstimated = event.usage.estimated === true;
-      state.cacheHitRate = event.request.hitRate;
     }
     if (event.type === "finish" || event.type === "error") state.providerStatus = null;
     yield event;
@@ -486,47 +472,6 @@ export const handleSlashCommand = async (
         ) + "\n",
       );
       return "handled";
-    case "budget": {
-      /**
-       * Show the rail, and let it be changed.
-       *
-       * The default scales with the transcript the turn is carrying, so the
-       * number is not the same all session — which makes it worth being able to
-       * see and override, and worth saying what it is scaled against.
-       */
-      const rates = state.model ? ratesFor(state.model.modelId) : null;
-      const auto = resolveTurnSpendUsd(state.contextUsedTokens, null);
-      if (arg === "auto") {
-        state.turnSpendLimitUsd = null;
-        out.write(c.dim(`(per-turn budget: ${formatUsd(auto)} — scaled to context)\n`));
-        return "handled";
-      }
-      if (arg) {
-        const parsed = Number.parseFloat(arg);
-        if (!Number.isFinite(parsed) || parsed <= 0) {
-          out.write(c.red(`not a dollar amount: ${arg}\n`));
-          return "handled";
-        }
-        state.turnSpendLimitUsd = parsed;
-        out.write(c.dim(`(per-turn budget: ${formatUsd(parsed)} — fixed)\n`));
-        return "handled";
-      }
-      const effective = state.turnSpendLimitUsd ?? auto;
-      const mode = state.turnSpendLimitUsd === null ? "scaled to context" : "fixed";
-      const lines = [
-        `${formatUsd(state.spendUsd)} spent this session`,
-        `${formatUsd(effective)} per-turn ceiling (${mode})`,
-        `context ${formatTokens(state.contextUsedTokens)}` +
-          (rates
-            ? ` · next step ≈ ${formatUsd(
-                projectStepCostUsd(state.contextUsedTokens, state.cacheHitRate, rates),
-              )} at ${Math.round(state.cacheHitRate * 100)}% cached`
-            : ""),
-        c.dim("/budget <usd> to fix it · /budget auto to scale it again"),
-      ];
-      out.write(`${lines.join("\n")}\n`);
-      return "handled";
-    }
     case "task":
       if (arg === "clear") {
         try {
@@ -1260,13 +1205,6 @@ export const makeState = async (opts: {
   let envToolSource: Parameters<typeof createCodingTools>[0];
   let cwdLabel = opts.cwd;
   let destroySandbox: (() => Promise<void>) | undefined;
-  /**
-   * The directory the file tools are confined to. Normally the enclosing git
-   * repository rather than `opts.cwd`, because `cwd` is where the user happened to
-   * be standing while the unit of work is usually the repo. See workspace.ts for
-   * the measured cost of getting this wrong.
-   */
-  let workspaceRoot = opts.cwd;
   if (opts.sandbox) {
     const { createBlaxelEnvironment } = await import("./sandbox.js");
     const bl = await createBlaxelEnvironment({
@@ -1277,8 +1215,7 @@ export const makeState = async (opts: {
     destroySandbox = bl.destroy;
   } else {
     const { createNodeEnvironment } = await import("@astracollab/not-another-harness/node");
-    workspaceRoot = await resolveWorkspaceRoot(opts.cwd);
-    envToolSource = createNodeEnvironment(workspaceRoot);
+    envToolSource = createNodeEnvironment(opts.cwd);
   }
 
   const system =
@@ -1288,10 +1225,7 @@ export const makeState = async (opts: {
           "",
           `You are working in a remote sandbox (repo at ${cwdLabel === opts.cwd ? opts.cwd : "/workspace/repo"}). Changes do not affect the local machine.`,
         ].join("\n")
-      : [
-          await buildNahSystemPrompt(opts.cwd),
-          describeWorkspaceBoundary(workspaceRoot, opts.cwd),
-        ].join("\n\n");
+      : await buildNahSystemPrompt(opts.cwd);
 
   const store = opts.noSession || !opts.sessionPath ? null : createJsonlSessionStore(opts.sessionPath);
   const taskLedger = await store?.loadTaskLedger() ?? null;
@@ -1315,16 +1249,8 @@ export const makeState = async (opts: {
     contextUsageEstimated: false,
     lastOutputTokens: 0,
     turns: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    cacheHitRate: 0,
-    spendUsd: 0,
-    // Null means "use the context-scaled default", which is the point: a turn
-    // should not inherit a ceiling sized for a different amount of context.
-    turnSpendLimitUsd: null,
     permissions: opts.permissions ?? "yolo",
     sandboxCwd: cwdLabel,
-    workspaceRoot: opts.sandbox == null ? workspaceRoot : undefined,
     destroySandbox,
     cognitiveMemory: prepared.memory,
     memoryInjectionLog: new MemoryInjectionLog(),

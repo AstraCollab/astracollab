@@ -11,12 +11,15 @@
  * 2. **Persistence.** Nothing ever called `onPersist`/`loadSnapshot`, so memory
  *    died with the process and could not carry anything into a later session.
  */
+import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
+import * as os from "node:os";
 import * as nodePath from "node:path";
 import { generateText, type LanguageModel } from "ai";
-import { CognitiveMemory, extractDeterministic } from "@astracollab/not-another-harness";
+import { CognitiveMemory } from "@astracollab/not-another-harness";
 import type { MemoryReconciliation } from "@astracollab/not-another-harness";
 
-import { MemoryStore, legacyMemoryJsonPath, memoryDbPath } from "./memory-store.js";
+import { extractDeterministic } from "./memory-rules.js";
 
 export type TurnExtractor = (turn: {
   userMessage: string;
@@ -311,18 +314,14 @@ export const createMemoryReconciler = (model: LanguageModel) => {
   };
 };
 
-/**
- * Where memory for a working directory is stored.
- *
- * A SQLite file rather than the JSON document this used to be: nah already
- * requires Node 22.19, `node:sqlite` has been built in since 22.5, and rows you
- * can query beat a blob you cannot. See `./memory-store.ts`.
- */
-export const memoryFileFor = (cwd: string): string => memoryDbPath(nodePath.resolve(cwd));
-
-/** The pre-SQLite location, kept so an existing install can be brought forward. */
-export const legacyMemoryFileFor = (cwd: string): string =>
-  legacyMemoryJsonPath(nodePath.resolve(cwd));
+/** Where memory for a given working directory is stored. */
+export const memoryFileFor = (cwd: string): string =>
+  nodePath.join(
+    os.homedir(),
+    ".nah",
+    "memory",
+    `${createHash("sha1").update(nodePath.resolve(cwd)).digest("hex").slice(0, 12)}.json`,
+  );
 
 /** Invoked after each successful persist; used by the live eval to await background work. */
 let onPersisted: (() => void) | null = null;
@@ -347,8 +346,6 @@ export type PreparedMemory = {
   path: string;
   /** True when a previous session's memory was restored. */
   restored: boolean;
-  /** Set when a pre-SQLite JSON memory was imported into the database. */
-  importedFrom?: string;
 };
 
 /**
@@ -358,10 +355,6 @@ export type PreparedMemory = {
 export const prepareMemory = async (options: MemoryOptions): Promise<PreparedMemory> => {
   const path = memoryFileFor(options.cwd);
   const persist = options.persist !== false;
-  // Opened eagerly rather than inside `onPersist`, so a first run pays for the
-  // schema and the legacy import once instead of on the first turn's background
-  // work, where a thrown error would be invisible.
-  const store = persist ? new MemoryStore({ path }) : null;
 
   const debug = process.env.NAH_MEMORY_DEBUG === "1";
   const extract = options.extractor
@@ -401,10 +394,11 @@ export const prepareMemory = async (options: MemoryOptions): Promise<PreparedMem
 
   const memory = new CognitiveMemory({
     ...(extract ? { extract } : {}),
-    ...(persist && store
+    ...(persist
       ? {
           onPersist: async (snapshot) => {
-            store.save(snapshot);
+            await fs.mkdir(nodePath.dirname(path), { recursive: true });
+            await fs.writeFile(path, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
             // Persisting is the last step of postTurnAsync, so it doubles as the
             // signal that a turn's background work has finished.
             if (process.env.NAH_MEMORY_DEBUG) {
@@ -417,30 +411,15 @@ export const prepareMemory = async (options: MemoryOptions): Promise<PreparedMem
   });
 
   let restored = false;
-  let importedFrom: string | undefined;
-  if (persist && store) {
-    const existing = store.load();
-    if (existing) {
-      memory.loadSnapshot(existing);
-      restored = existing.l1.length + existing.l2.length + existing.l3.length > 0;
-    } else {
-      // Nothing in SQLite. A pre-SQLite install still has its JSON file, so try
-      // that before concluding this is a first run — losing someone's memory to a
-      // silent format change would be unforgivable.
-      const imported = store.importLegacyJson(nodePath.resolve(options.cwd));
-      if (imported.imported) {
-        const brought = store.load();
-        if (brought) {
-          memory.loadSnapshot(brought);
-          restored = true;
-          importedFrom = imported.path;
-          if (debug) {
-            console.log(`  [memory] imported pre-SQLite memory from ${imported.path}`);
-          }
-        }
-      }
+  if (persist) {
+    try {
+      const raw = await fs.readFile(path, "utf8");
+      memory.loadSnapshot(JSON.parse(raw) as Parameters<CognitiveMemory["loadSnapshot"]>[0]);
+      restored = memory.getSnapshot().l1.length + memory.getSnapshot().l2.length > 0;
+    } catch {
+      // No prior memory for this directory.
     }
   }
 
-  return { memory, path, restored, ...(importedFrom === undefined ? {} : { importedFrom }) };
+  return { memory, path, restored };
 };
