@@ -1,21 +1,20 @@
 # agent-sandbox-sdk
 
-Open-source SDK for orchestrating Mastra `Workspace` coding sandboxes.
+Open-source, framework-neutral SDK for coding sandboxes, with Mastra and NAH adapters.
 
-This monorepo houses small, type-first, ESM-first packages built for Mastra
-users who want to drive a `WorkspaceSandbox` (Blaxel, E2B, Modal, Daytona,
-local, or a self-hosted runtime) without hand-rolling the lifecycle, git,
-or snapshot plumbing.
+The shared core handles sandbox filesystems, Git, lifecycle, and S3-compatible
+snapshots. Optional adapters connect it to Mastra `Workspace` or NAH's
+`ToolEnvironment` contract. Sandbox providers such as Blaxel, E2B, Modal,
+Daytona, local, or self-hosted runtimes are supplied by the application.
 
 ## Packages
 
 | Package | Description |
 | --- | --- |
-| [`@astracollab/agent-sandbox`](./packages/agent-sandbox) | Core SDK: `createCodingWorkspace`, `cloneRepo`, `commitAndPush`, `snapshotToS3`, `restoreFromS3`, `withSandbox`, retry/pagination helpers. Mastra-aware, vendor-agnostic. |
+| [`@astracollab/agent-sandbox`](./packages/agent-sandbox) | Framework-neutral core plus `./mastra` and `./nah` adapter subpaths; includes `cloneRepo`, `commitAndPush`, `snapshotToS3`, `restoreFromS3`, `withSandbox`, retry/pagination helpers. |
 
-Future packages (deferred) will add concrete sandbox providers (e.g. a
-self-hosted Hetzner/Fly/Cloudflare runtime) that implement Mastra's
-`WorkspaceSandbox` interface.
+Sandbox providers remain the application's choice; adapt their runtime to
+the shared sandbox execution and repository filesystem contracts as needed.
 
 ## Design rules
 
@@ -28,8 +27,8 @@ self-hosted Hetzner/Fly/Cloudflare runtime) that implement Mastra's
 - **Types-first** with literal unions instead of enums.
 - **Vite library mode** with `formats: ["es", "cjs"]`, ESM-first, sourcemaps
   on, `vite-plugin-dts` for declarations.
-- **No vendor SDK imports** in `@astracollab/agent-sandbox`. Callers pass in
-  the `WorkspaceSandbox` instance themselves.
+- **Framework-neutral core.** Mastra and NAH integrations live in adapter
+  subpaths; callers pass their sandbox provider runtime to the shared helpers.
 - **No Astra-specific defaults** baked in. `skills`, `runId` formatting, git
   identity, and image choices are caller-provided.
 

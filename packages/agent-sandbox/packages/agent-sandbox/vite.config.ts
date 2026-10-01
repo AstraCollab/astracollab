@@ -13,6 +13,7 @@ export default defineConfig({
         errors: resolve(__dirname, "src/errors.ts"),
         "helpers/index": resolve(__dirname, "src/helpers/index.ts"),
         "adapters/mastra/index": resolve(__dirname, "src/adapters/mastra/index.ts"),
+        "adapters/nah/index": resolve(__dirname, "src/adapters/nah/index.ts"),
       },
       formats: ["es", "cjs"],
       fileName: (format, entryName) =>
@@ -24,6 +25,8 @@ export default defineConfig({
         "@mastra/core",
         "@mastra/core/workspace",
         /^@mastra\/core\//,
+        "@astracollab/not-another-harness",
+        "@astracollab/not-another-harness/node",
         "@blaxel/core",
         "zod",
         "node:fs",

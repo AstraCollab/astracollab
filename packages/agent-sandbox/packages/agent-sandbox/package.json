@@ -1,7 +1,7 @@
 {
   "name": "@astracollab/agent-sandbox",
   "version": "0.1.0",
-  "description": "Mastra-aware, vendor-agnostic toolkit for orchestrating coding sandboxes (clone, run, snapshot to S3, lifecycle).",
+  "description": "Framework-neutral coding sandbox core with Mastra and NAH adapters (clone, run, snapshot, lifecycle).",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -27,6 +27,11 @@
       "types": "./dist/adapters/mastra/index.d.ts",
       "import": "./dist/adapters/mastra/index.js",
       "require": "./dist/adapters/mastra/index.cjs"
+    },
+    "./nah": {
+      "types": "./dist/adapters/nah/index.d.ts",
+      "import": "./dist/adapters/nah/index.js",
+      "require": "./dist/adapters/nah/index.cjs"
     }
   },
   "files": [
@@ -53,6 +58,7 @@
   },
   "keywords": [
     "mastra",
+    "nah",
     "sandbox",
     "agent",
     "workspace",
@@ -72,6 +78,11 @@
     "@mastra/core": ">=1.35.0",
     "ofetch": "^1.4.0",
     "zod": "^3.25.0 || ^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@blaxel/core": { "optional": true },
+    "@mastra/core": { "optional": true },
+    "zod": { "optional": true }
   },
   "dependencies": {
     "picomatch": "^4.0.2"

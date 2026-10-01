@@ -1,10 +1,16 @@
-import type { SandboxInstance } from "@blaxel/core";
-import type {
-  SkillSource,
-  SkillsResolver,
-  WorkspaceSandbox,
-  WorkspaceToolsConfig,
-} from "@mastra/core/workspace";
+/** Minimal execution/lifecycle surface shared by sandbox provider adapters. */
+export interface SandboxRuntime {
+  executeCommand?: (
+    command: string,
+    args: string[],
+    options?: { cwd?: string; env?: Record<string, string>; timeout?: number },
+  ) => Promise<{ success?: boolean; exitCode?: number; stdout?: string; stderr?: string; result?: string; bytesUploaded?: number }>;
+  start?: () => Promise<unknown>;
+  destroy?: () => Promise<unknown>;
+  processes?: {
+    spawn?: (command: string, options?: { cwd?: string; env?: Record<string, string> }) => Promise<{ pid?: string | number }>;
+  };
+}
 
 /**
  * Sandbox provider literals. Use a string union rather than an enum so the
@@ -21,50 +27,6 @@ export type ProviderName =
   | "local"
   | (string & {});
 
-export interface CodingWorkspaceOptions {
-  /** A `WorkspaceSandbox` instance (Blaxel, E2B, Modal, Daytona, local, …). */
-  sandbox: WorkspaceSandbox;
-  /** Stable identifier for this run, used as the workspace id. */
-  runId: string;
-  /**
-   * Absolute path to the git clone inside the sandbox (default `/workspace/repo`).
-   * Used when {@link getBlaxelInstance} is set to wire Mastra `Workspace.filesystem`.
-   */
-  repoRoot?: string;
-  /**
-   * When set (typically Blaxel), builds a Mastra {@link WorkspaceFilesystem} over
-   * `SandboxInstance.fs` so agents get `read_file` / `write_file` without MCP `fs*`.
-   * Must be callable only after `await workspace.init()` / sandbox start.
-   */
-  getBlaxelInstance?: () => SandboxInstance;
-  /**
-   * Optional GitHub token. The SDK itself never reads this — pass it
-   * to `cloneRepo` / `commitAndPush` when you call them. Stored on the
-   * options for symmetry with the prompt-injection helpers in the docs.
-   */
-  githubToken?: string;
-  /** Skill paths or a Mastra `SkillsResolver` (static array or dynamic function). */
-  skills?: SkillsResolver;
-  /**
-   * When set, Mastra discovers workspace skills via this source (e.g. {@link LocalSkillSource}).
-   * If omitted, Mastra may fall back to the workspace filesystem for discovery — which can break
-   * for Blaxel-backed repo filesystems where skill paths are not host-local.
-   */
-  skillSource?: SkillSource;
-  /**
-   * When true, Mastra built-in workspace FS tools (`mastra_workspace_read_file`, etc.)
-   * are disabled so the host can register {@link createCodingRepoFilesystemTools} on the
-   * `Agent` instead — same tool ids, no Mastra workspace `writer` streaming in those tools.
-   */
-  useAstraRepoFilesystemTools?: boolean;
-  /** Per-tool overrides (merged onto the defaults defined in this package). */
-  tools?: WorkspaceToolsConfig;
-  /** Enable debug logging (no-ops in production by default). */
-  debug?: boolean;
-  /** Override the auto-generated `id` (defaults to `agent-run-${runId}`). */
-  id?: string;
-}
-
 /**
  * Generic S3-compatible snapshot configuration. Works with Tigris, AWS S3,
  * Cloudflare R2, MinIO — anything `s5cmd` can talk to.
@@ -79,7 +41,7 @@ export interface S3SnapshotConfig {
 }
 
 export interface SnapshotOptions {
-  sandbox: WorkspaceSandbox;
+  sandbox: SandboxRuntime;
   /** Working directory inside the sandbox that contains the repo. */
   cwd: string;
   /** Object key, e.g. `orgs/{orgId}/tickets/{ticketId}/runs/{runId}.tar.gz`. */
@@ -93,7 +55,7 @@ export interface SnapshotOptions {
   /**
    * When true, run the tar+upload as a sandbox-side background process and
    * return the spawned PID without waiting for completion. The workflow can
-   * then poll `get_process_output` (Mastra suspend/resume) to await it.
+   * then poll the provider's process output API to await it.
    */
   background?: boolean;
   /** Timeout in ms for the foreground call (ignored when `background: true`). */
@@ -110,7 +72,7 @@ export interface SnapshotResult {
 }
 
 export interface RestoreOptions {
-  sandbox: WorkspaceSandbox;
+  sandbox: SandboxRuntime;
   key: string;
   config: S3SnapshotConfig;
   /** Directory the archive contents should be extracted into. */
@@ -119,7 +81,7 @@ export interface RestoreOptions {
 }
 
 export interface CloneOptions {
-  sandbox: WorkspaceSandbox;
+  sandbox: SandboxRuntime;
   /** HTTPS clone URL. The token is injected via `x-access-token`. */
   url: string;
   token?: string;
@@ -130,7 +92,7 @@ export interface CloneOptions {
 }
 
 export interface CommitOptions {
-  sandbox: WorkspaceSandbox;
+  sandbox: SandboxRuntime;
   cwd: string;
   message: string;
   branch: string;
@@ -139,7 +101,7 @@ export interface CommitOptions {
 }
 
 export interface GitConfigOptions {
-  sandbox: WorkspaceSandbox;
+  sandbox: SandboxRuntime;
   cwd: string;
   userName: string;
   userEmail: string;
@@ -164,7 +126,7 @@ export type PageFetcher<T> = (
 ) => Promise<PageFetchResult<T>>;
 
 export interface RotateSnapshotsOptions {
-  sandbox: WorkspaceSandbox;
+  sandbox: SandboxRuntime;
   /**
    * Prefix to scan, e.g. `s3://bucket/orgs/{orgId}/tickets/{ticketId}/runs/`.
    * The helper sorts by ModTime descending and deletes everything except

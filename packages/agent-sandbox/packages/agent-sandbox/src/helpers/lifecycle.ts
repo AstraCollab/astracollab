@@ -1,4 +1,4 @@
-import type { WorkspaceSandbox } from "@mastra/core/workspace";
+import type { SandboxRuntime } from "../types.js";
 
 /**
  * RAII wrapper: starts the sandbox, runs `fn`, and destroys it after.
@@ -6,9 +6,9 @@ import type { WorkspaceSandbox } from "@mastra/core/workspace";
  * Destroy is best-effort — errors from the cleanup phase are swallowed and
  * logged via `console.warn` so they don't mask the user's original error.
  */
-export const withSandbox = async <T>(
-  sandbox: WorkspaceSandbox,
-  fn: (sandbox: WorkspaceSandbox) => Promise<T>,
+export const withSandbox = async <S extends SandboxRuntime, T>(
+  sandbox: S,
+  fn: (sandbox: S) => Promise<T>,
 ): Promise<T> => {
   if (typeof sandbox.start === "function") {
     await sandbox.start();

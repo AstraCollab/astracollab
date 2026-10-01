@@ -4,6 +4,27 @@ export { buildSystemPrompt } from "./prompt.js";
 export { createCodingTools, APPROVAL_GATED_TOOLS, type CodingToolsOptions, type ApprovalDecision } from "./tools.js";
 export { createJsonlSessionStore, type JsonlSessionStore, type SessionTaskLedger } from "./session.js";
 export { DEFAULT_CAPS, capHead, capTail, sliceFileLines } from "./caps.js";
+export {
+  CognitiveMemory,
+  runFastGate,
+  extractDomains,
+  createModelArbiter,
+  type FastGateResult,
+  type CreateModelArbiterOptions,
+  type MemoryTier,
+  type TensionStatus,
+  type TensionImpact,
+  type KnowledgeTension,
+  type DomainCapability,
+  type ProprioceptiveSelfModel,
+  type MemoryMetadata,
+  type MemoryItem,
+  type TrajectoryPrediction,
+  type ArbiterEvaluationResult,
+  type ArbiterFn,
+  type CognitiveMemoryOptions,
+  type CognitiveMemoryStateSnapshot,
+} from "./cognitive-memory/index.js";
 export type {
   HarnessEvent,
   HarnessRun,

@@ -1,4 +1,4 @@
-import type { WorkspaceSandbox } from "@mastra/core/workspace";
+import type { SandboxRuntime } from "./types.js";
 
 import { DEFAULT_CODING_SANDBOX_REPO_DIR } from "./coding-sandbox-repo-path.js";
 
@@ -62,7 +62,7 @@ export type InstallBundledWorkspaceSkillsOptions = {
  * Set `MASTRA_SKIP_BUNDLED_SKILL_INSTALL=1` on the host process to skip (e.g. air-gapped sandboxes).
  */
 export const installBundledWorkspaceSkills = async (
-  sandbox: WorkspaceSandbox,
+  sandbox: SandboxRuntime,
   options?: InstallBundledWorkspaceSkillsOptions,
 ): Promise<void> => {
   if (
