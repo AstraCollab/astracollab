@@ -97,6 +97,85 @@ describe("memory extraction", () => {
     expect(stored).toEqual(["User prefers kebab-case file names for new source files."]);
   });
 
+  it("declines a merge that would drop a qualifier, keeping both", async () => {
+    const m = new CognitiveMemory({
+      extract: async () => ({
+        memories: [
+          { content: "Deploys go to the staging environment." },
+          { content: "Deploys go to the staging environment these days." },
+        ],
+      }),
+      // The adjudicator calls this a restatement and offers a "fuller" text
+      // that quietly drops "never production", the part that made the two
+      // statements differ.
+      reconcile: async ({ items }) => items.map(() => ({
+        action: "merge" as const,
+        content: "Deploys go to the staging environment.",
+      })),
+    });
+    await m.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });
+    const stored = [...m.getSnapshot().l1, ...m.getSnapshot().l2].map((i) => i.content);
+    // Both survive: a duplicate costs one index line, a silent deletion is gone.
+    expect(stored).toHaveLength(2);
+    expect(stored).toContain("Deploys go to the staging environment.");
+  });
+
+  it("keeps the survivor intact when a merge would drop an identifier", async () => {
+    const m = new CognitiveMemory({
+      extract: async () => ({
+        memories: [
+          { content: "The staging build ID is ZQ7X4M2K." },
+          { content: "Staging build ID is ZQ7X4M2K for the staging environment." },
+        ],
+      }),
+      reconcile: async ({ items }) => items.map(() => ({
+        action: "merge" as const,
+        content: "There is a staging build ID.",
+      })),
+    });
+    await m.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });
+    const stored = [...m.getSnapshot().l1, ...m.getSnapshot().l2].map((i) => i.content);
+    expect(stored).toContain("The staging build ID is ZQ7X4M2K.");
+    expect(stored).not.toContain("There is a staging build ID.");
+  });
+
+  it("allows a merge that only folds a plural", async () => {
+    const m = new CognitiveMemory({
+      extract: async () => ({
+        memories: [
+          { content: "The deploys target staging." },
+          { content: "The deploys target staging these days." },
+        ],
+      }),
+      reconcile: async ({ items }) => items.map(() => ({
+        action: "merge" as const,
+        content: "The deploy target staging these days.",
+      })),
+    });
+    await m.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });
+    const stored = [...m.getSnapshot().l1, ...m.getSnapshot().l2].map((i) => i.content);
+    expect(stored).toEqual(["The deploy target staging these days."]);
+  });
+
+  it("leaves a replace target unchanged when its new text drops detail", async () => {
+    const m = new CognitiveMemory({
+      extract: async () => ({
+        memories: [
+          { content: "The staging build ID is ZQ7X4M2K." },
+          { content: "The staging build ID is QP8N1R3T." },
+        ],
+      }),
+      reconcile: async ({ items }) =>
+        items.map(() => ({ action: "replace" as const, content: "A staging build ID." })),
+    });
+    await m.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });
+    const stored = [...m.getSnapshot().l1, ...m.getSnapshot().l2].map((i) => i.content);
+    // The old value is still superseded, but the new entry keeps its own text
+    // rather than being trimmed to something that dropped the id.
+    expect(stored).not.toContain("The staging build ID is ZQ7X4M2K.");
+    expect(stored).toContain("The staging build ID is QP8N1R3T.");
+  });
+
   it("supersedes the old entry on replace", async () => {
     const first = new CognitiveMemory({
       extract: async () => ({ memories: [{ content: "Staging host is h1.example." }] }),

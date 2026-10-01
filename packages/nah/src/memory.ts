@@ -268,6 +268,9 @@ Decide:
 - "reject" - it is not worth remembering at all.
 
 Rules:
+- A merged statement must contain every detail from BOTH sides. Never drop an
+  id, port, qualifier or condition while merging - if the result would say less
+  than one of the two, report "add" instead and keep them apart.
 - A restatement is never a second memory. "Likes cheese pizza" and "Loves cheese pizza" are one.
 - Do not merge when numbers, dates, names or qualifiers differ; that is "replace", not "merge".
 - Prefer "add" when you are unsure. A duplicate costs one entry; a wrong merge loses information permanently.

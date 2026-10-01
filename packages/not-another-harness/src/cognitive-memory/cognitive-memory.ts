@@ -88,6 +88,28 @@ const distinctiveTokens = (value: string): Set<string> =>
       .filter((w) => !FILLER_TOKENS.has(w)),
   );
 
+/**
+ * Whether rewriting `original` as `replacement` would drop information.
+ *
+ * Distinctive tokens are the ones that carry a fact's identity, so a
+ * replacement missing one has deleted something - usually the qualifier that
+ * made the two statements differ at all ("never production", a build id, a
+ * port). Trailing plurals are folded so "deploys" merging into "deploy" is not
+ * read as a deletion.
+ *
+ * Biased towards reporting a loss. A false positive only costs a duplicate
+ * entry, which is recoverable; a false negative deletes a fact for good.
+ */
+const isLossyRewrite = (original: string, replacement: string): boolean => {
+  const fold = (tokens: Set<string>): Set<string> =>
+    new Set([...tokens].map((t) => (t.length >= 4 && t.endsWith("s") ? t.slice(0, -1) : t)));
+  const after = fold(distinctiveTokens(replacement));
+  for (const token of fold(distinctiveTokens(original))) {
+    if (!after.has(token)) return true;
+  }
+  return false;
+};
+
 /** How many existing memories to put in front of the adjudicator. */
 const MAX_CANDIDATES = 8;
 
@@ -521,9 +543,14 @@ export class CognitiveMemory {
         if (verdict.action === "reject") continue;
         if (verdict.action === "merge") {
           // Merge means one memory survives, holding the fuller statement -
-          // never "keep both" and never "keep the barer one".
-          if (verdict.content && candidates[0]) this.enrich(candidates[0], verdict.content);
-          continue;
+          // never "keep both" and never "keep the barer one". A rewrite that
+          // would drop information is declined, and falling through stores the
+          // restatement separately instead of losing what it added.
+          // The incoming statement was never stored, so there is nothing to
+          // remove: it folds into the survivor or falls through and is kept.
+          if (candidates[0] && this.mergeInto(candidates[0], verdict.content, { text: content, stored: false })) {
+            continue;
+          }
         }
         if (verdict.action === "replace") {
           // Supersede rather than keep both: the old entry stops being returned.
@@ -571,10 +598,12 @@ export class CognitiveMemory {
         if (!verdict) continue;
         if (verdict.action === "reject") this.removeByContent(entry.content);
         else if (verdict.action === "merge") {
-          // Drop the duplicate BEFORE enriching the survivor: they hold the same
-          // text afterwards, so removing by content first would delete both.
-          this.removeByContent(entry.content);
-          if (verdict.content && entry.candidates[0]) this.enrich(entry.candidates[0], verdict.content);
+          const survivor = entry.candidates[0];
+          // Stored optimistically, so the duplicate is removed on the way in -
+          // before the rewrite, never after.
+          if (survivor && this.mergeInto(survivor, verdict.content, { text: entry.content, stored: true })) {
+            continue;
+          }
         } else if (verdict.action === "replace") {
           this.supersede(entry.candidates.map((c) => c.content));
           if (verdict.content) this.replaceByContent(entry.content, verdict.content);
@@ -612,7 +641,9 @@ export class CognitiveMemory {
     const target = from.trim().toLowerCase();
     for (const map of [this.l1HotCache, this.l2WarmStore, this.l3ColdArchive]) {
       for (const item of map.values()) {
-        if (item.content.trim().toLowerCase() === target) this.enrich(item, to);
+        if (item.content.trim().toLowerCase() === target && !isLossyRewrite(item.content, to)) {
+          this.enrich(item, to);
+        }
       }
     }
   }
@@ -622,6 +653,39 @@ export class CognitiveMemory {
     target.content = content;
     target.bookmark = content.slice(0, 80);
     target.metadata.lastAccessedAt = Date.now();
+  }
+
+  /**
+   * Fold a duplicate into its survivor, refusing rewrites that drop anything.
+   *
+   * `merge` returns the model's idea of the fuller statement, and overwriting
+   * with it deletes whatever the model happened to leave out. The under-merge
+   * bias covers merging the *wrong* pair, but nothing covered a lossy rewrite
+   * of the right pair, so containment is checked first.
+   *
+   * @returns false when the rewrite would lose information, in which case the
+   * caller keeps both entries.
+   */
+  private mergeInto(
+    survivor: MemoryItem,
+    replacement: string | undefined,
+    duplicate: { text: string; stored: boolean },
+  ): boolean {
+    const text = replacement?.trim();
+    // Both statements are checked, not just the survivor: a merge has to carry
+    // everything either one held, so dropping the *incoming* qualifier loses it
+    // just as permanently as dropping the survivor's.
+    if (
+      text &&
+      (isLossyRewrite(survivor.content, text) || isLossyRewrite(duplicate.text, text))
+    ) {
+      return false;
+    }
+    // Remove the duplicate BEFORE rewriting the survivor: afterwards the two
+    // hold the same text, so removing by content would match both.
+    if (duplicate.stored) this.removeByContent(duplicate.text);
+    if (text) this.enrich(survivor, text);
+    return true;
   }
 
   /** Retire the entries a replacement supersedes, keeping them out of retrieval. */
