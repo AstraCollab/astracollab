@@ -53,28 +53,98 @@ describe("memory extraction", () => {
     expect(m.getPromptContext("x").toLowerCase()).toContain("kebab");
   });
 
-  it("does not re-learn a paraphrase of something it already knows", async () => {
-    const seen: string[] = [];
+  it("holds a paraphrase for adjudication instead of merging it blind", async () => {
+    // Lexical overlap peaks on identical strings and bottoms out on the
+    // paraphrases that add information, so it must not make this call itself.
+    // Under-merge is the safe bias: a duplicate row is recoverable, a wrong merge
+    // is not.
     const m = new CognitiveMemory({
-      extract: async ({ userMessage }) => {
-        seen.push(userMessage);
-        return {
-          memories: [
-            { content: "The staging build ID is ZQ7X4M2K.", domains: [] },
-            // Same fact, more words: must be rejected as a duplicate.
-            {
-              content: "The staging build ID ZQ7X4M2K must be treated as user-provided, not verified.",
-              domains: [],
-            },
-          ],
-        };
-      },
+      extract: async () => ({
+        // The real pair from a live session: same request, two angles.
+        memories: [
+          {
+            content:
+              "The user wants the AI used by myresumeguru to be swappable and the change to apply to resume feedback as well.",
+          },
+          {
+            content:
+              "The AI used by myresumeguru, including its resume-feedback functionality, should be changed to astracollab/not-another-harness.",
+          },
+        ],
+      }),
     });
     await m.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });
-    expect(seen).toHaveLength(1);
-    const stored = [...m.getSnapshot().l1, ...m.getSnapshot().l2];
-    expect(stored).toHaveLength(1);
-    expect(stored[0]!.content).toContain("ZQ7X4M2K");
+    // Held as two candidates: lexical overlap is 0.4, below any safe gate, and
+    // nothing can adjudicate without a reconcile function.
+    expect(m.getSnapshot().l1.length).toBe(2);
+  });
+
+  it("merges a restatement when the adjudicator says so, keeping the fuller text", async () => {
+    const m = new CognitiveMemory({
+      extract: async () => ({
+        memories: [
+          { content: "User prefers kebab-case." },
+          { content: "User prefers kebab-case file names for new source files." },
+        ],
+      }),
+      reconcile: async () => ({
+        action: "merge",
+        content: "User prefers kebab-case file names for new source files.",
+      }),
+    });
+    await m.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });
+    const stored = [...m.getSnapshot().l1, ...m.getSnapshot().l2].map((i) => i.content);
+    expect(stored).toEqual(["User prefers kebab-case file names for new source files."]);
+  });
+
+  it("supersedes the old entry on replace", async () => {
+    const first = new CognitiveMemory({
+      extract: async () => ({ memories: [{ content: "Staging host is h1.example." }] }),
+    });
+    await first.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });
+
+    const second = new CognitiveMemory({
+      extract: async () => ({ memories: [{ content: "Staging host is h2.example." }] }),
+      reconcile: async () => ({ action: "replace" }),
+    });
+    second.loadSnapshot(first.getSnapshot());
+    await second.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });
+
+    const stored = [...second.getSnapshot().l1, ...second.getSnapshot().l2].map((i) => i.content);
+    expect(stored).not.toContain("Staging host is h1.example.");
+    expect(stored).toContain("Staging host is h2.example.");
+  });
+
+  it("honours reject, and keeps the candidate if the adjudicator throws", async () => {
+    const seed = new CognitiveMemory({
+      extract: async () => ({ memories: [{ content: "Deploys run from the release branch." }] }),
+    });
+    await seed.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });
+
+    const rejected = new CognitiveMemory({
+      extract: async () => ({
+        memories: [{ content: "The deploy script lives at ops/deploy.sh and runs the release." }],
+      }),
+      reconcile: async () => ({ action: "reject" }),
+    });
+    rejected.loadSnapshot(seed.getSnapshot());
+    await rejected.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });
+    expect(rejected.getSnapshot().l1).toHaveLength(1);
+    expect(rejected.getSnapshot().l1[0]!.content).toBe("Deploys run from the release branch.");
+
+    const failing = new CognitiveMemory({
+      extract: async () => ({
+        memories: [
+          { content: "User prefers tabs over spaces." },
+          { content: "The user prefers tab characters in this repository." },
+        ],
+      }),
+      reconcile: async () => {
+        throw new Error("model unavailable");
+      },
+    });
+    await failing.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });
+    expect(failing.getSnapshot().l1.length).toBe(2);
   });
 
   it("ignores empty or trivially short extractions", async () => {

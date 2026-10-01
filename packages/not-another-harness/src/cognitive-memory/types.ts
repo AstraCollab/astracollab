@@ -76,6 +76,23 @@ export interface MemoryItem {
 }
 
 /** Why a memory ended up in the prompt — the thing you tune once you log it. */
+/** What to do with a candidate memory once compared against what we hold. */
+export type MemoryReconciliation = {
+  /**
+   * `add` keeps it as a new memory and is the safe default when unsure: an
+   * unmerged duplicate costs a row, while a wrong merge corrupts what we believe.
+   * `merge` collapses a restatement into the existing entry, keeping whichever
+   * carries more information. `replace` supersedes the existing entry. `reject`
+   * drops it as not worth storing.
+   */
+  action: "add" | "merge" | "replace" | "reject";
+  /** Content to store when merging or replacing; defaults to the candidate. */
+  content?: string;
+  /** Why, so a bad merge is diagnosable rather than mysterious. */
+  reason?: string;
+};
+
+
 export type MemoryInclusionReason =
   /** Shown in the always-present index as a gist only. */
   | "index"
@@ -166,6 +183,20 @@ export interface CognitiveMemoryOptions {
   initialSelfModel?: Partial<ProprioceptiveSelfModel>;
   /** Auto-extract candidate items from completed turns (default: true) */
   autoExtractMemories?: boolean;
+  /**
+   * Adjudicate a candidate memory against ones that already exist.
+   *
+   * Lexical overlap cannot make this call: it peaks on identical strings and
+   * bottoms out on the paraphrases that actually add information. Every mature
+   * memory system therefore recalls candidates cheaply and then asks a model,
+   * explicitly allowing "no match". `remember` is the low-bar candidate
+   * recall; `decide` is the precision step.
+   */
+  reconcile?: (input: {
+    candidate: string;
+    /** Closest existing memories, best first. May be empty. */
+    remember: string[];
+  }) => Promise<MemoryReconciliation>;
   /**
    * Model-backed turn extractor. Preferred over the built-in regex, which only
    * recognises "always/never/make sure to/remember to" and therefore never

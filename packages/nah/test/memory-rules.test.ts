@@ -11,10 +11,14 @@ describe("deterministic extraction", () => {
     expect(found).toContain("internal staging host is internal-hbr-2291.pineapple.example");
   });
 
-  it("captures identifiers, paths and ports", () => {
+  it("captures identifiers and ports, but not bare paths", () => {
     expect(texts("The staging build ID is ZQ7X4M2K.")).toContain("staging build ID is ZQ7X4M2K");
     expect(texts("The default port is 8080.")).toContain("default port is 8080");
-    expect(texts("Deploy with ./ops/deploy.sh for that.")).toContain("User-referenced path: ./ops/deploy.sh");
+    // A path on its own is not a durable fact: the filesystem already answers
+    // it, and a path mentioned once says nothing about future sessions. This
+    // mirrors auto-memory guidance that skips anything derivable, file paths
+    // named explicitly.
+    expect(texts("Deploy with ./ops/deploy.sh for that.")).toEqual([]);
   });
 
   it("captures URLs whole, query string included", () => {

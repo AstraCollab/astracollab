@@ -14,7 +14,7 @@ import { createApprover, parsePermissionMode, type PermissionMode } from "./perm
 import { c, formatFileChange, formatWorkspaceDiff, renderWelcome, toolLabel, usageLine, type RenderableFileChange } from "./render.js";
 import { renderCommandHelp } from "./commands.js";
 import { listSessionIds, resolveSessionFile } from "./context.js";
-import { createTurnExtractor, prepareMemory } from "./memory.js";
+import { createMemoryReconciler, createTurnExtractor, prepareMemory } from "./memory.js";
 import { createRecallTool } from "./memory-tool.js";
 import { MemoryInjectionLog } from "./memory-injection.js";
 import { adoptUsage, resetUsage, runTurn, type SessionState, type StepRecovery } from "./session.js";
@@ -1193,6 +1193,9 @@ export const makeState = async (opts: {
     cwd: opts.cwd,
     persist: !opts.noSession,
     extractor: model ? createTurnExtractor(model.model) : null,
+    // Adjudicates near-duplicates. Lexical overlap cannot: it peaks on identical
+    // strings and bottoms out on the paraphrases that add information.
+    reconciler: model ? createMemoryReconciler(model.model) : null,
   });
 
   const { createCodingTools, createJsonlSessionStore } = await import(

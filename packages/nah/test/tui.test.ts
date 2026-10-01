@@ -532,4 +532,26 @@ describe("orphaned mouse-report text", () => {
     output.appendStream(`answer ${GARBAGE} done`);
     expect(strip(output.render(120).join("\n"))).not.toMatch(/\d+;\s*\d+;\s*\d+[Mm]/);
   });
+
+  it("sanitises a restored markdown response, which skips the plain-line path", () => {
+    const output = new TurnOutput();
+    output.seedHistory([
+      { role: "assistant", content: `## Result ${GARBAGE} done` },
+    ]);
+    expect(strip(output.render(120).join("\n"))).not.toMatch(/\d+;\s*\d+;\s*\d+[Mm]/);
+  });
+
+  it("keeps markdown indentation, which the report stripper used to flatten", () => {
+    // Collapsing runs of spaces to one turned every nested list and every
+    // indented code block into a flush-left paragraph, destroying the structure.
+    const output = new TurnOutput();
+    output.addMarkdown("- top level\n  - nested item\n\n    indented code\n");
+    const text = strip(output.render(120).join("\n"));
+    // Lines are space-padded to the pane width, so compare trimmed lines.
+    const lines = text.split("\n").map((line) => line.trimEnd());
+    // The nested bullet keeps its extra indent relative to the top-level one.
+    expect(lines).toContain("  - top level");
+    expect(lines).toContain("      - nested item");
+    expect(lines).toContain("        indented code");
+  });
 });

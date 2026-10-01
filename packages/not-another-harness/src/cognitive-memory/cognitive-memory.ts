@@ -3,6 +3,7 @@ import type {
   MemoryInclusionReason,
   MemoryInjectionEntry,
   MemoryInjectionReport,
+  MemoryReconciliation,
   ArbiterFn,
   CognitiveMemoryOptions,
   CognitiveMemoryStateSnapshot,
@@ -61,8 +62,34 @@ const PROMOTE_THRESHOLD = 0.12;
 /** L1 only starts evicting past this size. */
 const DEMOTE_ABOVE = 5;
 
-/** Overlap at which two memories are considered the same fact. */
-const DUPLICATE_THRESHOLD = 0.65;
+/**
+ * Floor for *candidate* recall, not a similarity decision.
+ *
+ * Deliberately low. Lexical overlap peaks on identical strings and bottoms out
+ * on the paraphrases that actually add information, so a tight gate misses
+ * exactly the pairs worth merging. This only decides who gets adjudicated.
+ */
+const CANDIDATE_FLOOR = 0.3;
+
+/**
+ * Tokens that carry a fact's identity: identifiers, numbers, codes.
+ *
+ * Function words and generic nouns ("file", "name", "project") are dropped
+ * because they recur in every restatement and hide real differences.
+ */
+const distinctiveTokens = (value: string): Set<string> =>
+  new Set(
+    value
+      .toLowerCase()
+      .replace(/['']/g, "")
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean)
+      .filter((w) => /\d/.test(w) || w.length >= 4)
+      .filter((w) => !FILLER_TOKENS.has(w)),
+  );
+
+/** How many existing memories to put in front of the adjudicator. */
+const MAX_CANDIDATES = 8;
 
 /** Words that appear in every restatement and so carry no identity. */
 const FILLER_TOKENS = new Set([
@@ -153,6 +180,7 @@ export class CognitiveMemory {
   private arbiter: ArbiterFn | null = null;
   private autoExtractMemories: boolean;
   /** Model-backed turn extractor; the regex fallback runs when this is absent. */
+  private reconcile?: CognitiveMemoryOptions["reconcile"];
   private extract?: (turn: { userMessage: string; assistantResponse: string }) => Promise<{
     memories: Array<{ content: string; domains?: string[] }>;
     tensions?: Array<{
@@ -178,6 +206,7 @@ export class CognitiveMemory {
     this.arbiter = options.arbiter ?? null;
     this.autoExtractMemories = options.autoExtractMemories ?? true;
     this.extract = options.extract;
+    this.reconcile = options.reconcile;
     this.onPersist = options.onPersist;
 
     this.selfModel = {
@@ -459,11 +488,46 @@ export class CognitiveMemory {
       actionableQuestion: string;
     }>;
   }): Promise<void> {
-    for (const memory of result.memories) {
+    for (const memory of result.memories ?? []) {
       const content = memory.content.trim();
       if (content.length < 8 || content.length > 600) continue;
       if (isInteractionScoped(content)) continue;
-      if (this.hasContent(content)) continue;
+
+      // Two stages: recall candidates cheaply, then adjudicate.
+      //
+      // The safe default when nothing can adjudicate, or when the adjudicator is
+      // unsure, is to add. An unmerged duplicate costs one row; a wrong merge
+      // corrupts what we believe and is hard to unwind. Zep publishes the same
+      // bias: prefer under-merge over over-merge.
+      let stored = content;
+      const candidates = this.recallSimilar(content);
+      if (candidates.length > 0) {
+        let verdict: MemoryReconciliation = { action: "add" };
+        if (this.reconcile) {
+          try {
+            verdict = await this.reconcile({ candidate: content, remember: candidates.map((c) => c.content) });
+          } catch {
+            verdict = { action: "add" };
+          }
+        } else if (candidates.some((c) => c.content.trim().toLowerCase() === content.trim().toLowerCase())) {
+          // Byte-identical restatement: never worth storing twice.
+          verdict = { action: "merge" };
+        }
+
+        if (verdict.action === "reject") continue;
+        if (verdict.action === "merge") {
+          // Merge means one memory survives, holding the fuller statement -
+          // never "keep both" and never "keep the barer one".
+          if (verdict.content && candidates[0]) this.enrich(candidates[0], verdict.content);
+          continue;
+        }
+        if (verdict.action === "replace") {
+          // Supersede rather than keep both: the old entry stops being returned.
+          this.supersede(candidates.map((c) => c.content));
+        }
+        stored = verdict.content?.trim() || content;
+      }
+
       const now = Date.now();
       const id = `mem-${now}-${Math.random().toString(36).slice(2, 7)}`;
       // File it in L1, not L2. The user stated this one turn ago, so it is
@@ -473,8 +537,8 @@ export class CognitiveMemory {
       this.addMemory(
         {
           id,
-          content,
-          bookmark: content.slice(0, 80),
+          content: stored,
+          bookmark: stored.slice(0, 80),
           tier: "L1",
           metadata: {
             domains: memory.domains ?? [],
@@ -502,50 +566,51 @@ export class CognitiveMemory {
     }
   }
 
-  /**
-   * True when an equivalent statement is already stored in any tier.
-   *
-   * Two things this had to learn. Matching normalised *strings* missed
-   * paraphrases outright. Then matching distinctive token *sets* still missed
-   * them, because the deterministic extractor's own label ("User requirement
-   * (always): …") was being compared as if it were part of the fact — stripping
-   * those labels first, and loosening the threshold, is what finally collapsed
-   * "always use kebab-case" and "file names must use kebab-case" into one entry.
-   */
-  private hasContent(content: string): boolean {
-    // Labels the extractors prepend describe provenance, not identity.
-    const stripLabel = (value: string): string =>
-      value
-        .replace(/^\s*user (?:requirement \(\w+\)|provided url|referenced path)\s*:?\s*/i, "")
-        .trim();
-    const distinctive = (value: string): Set<string> =>
-      new Set(
-        stripLabel(value)
-          .toLowerCase()
-          .replace(/['']/g, "")
-          .split(/[^a-z0-9]+/)
-          .filter(Boolean)
-          // Identifiers, numbers and codes carry a fact's identity; filler does not.
-          .filter((w) => /\d/.test(w) || w.length >= 4)
-          .filter((w) => !FILLER_TOKENS.has(w)),
-      );
+  /** Replace an entry's content, keeping its identity and tags. */
+  private enrich(target: MemoryItem, content: string): void {
+    target.content = content;
+    target.bookmark = content.slice(0, 80);
+    target.metadata.lastAccessedAt = Date.now();
+  }
 
-    const needle = distinctive(content);
-    if (needle.size === 0) return false;
-    const all = [
+  /** Retire the entries a replacement supersedes, keeping them out of retrieval. */
+  private supersede(contents: string[]): void {
+    const targets = new Set(contents.map((c) => c.trim().toLowerCase()));
+    for (const map of [this.l1HotCache, this.l2WarmStore, this.l3ColdArchive]) {
+      for (const [id, item] of map) {
+        if (targets.has(item.content.trim().toLowerCase())) map.delete(id);
+      }
+    }
+  }
+
+  /**
+   * Existing memories worth adjudicating a candidate against.
+   *
+   * Cheap and deliberately over-inclusive. An identical string short-circuits
+   * because it is never worth a model call; anything else above the recall floor
+   * is offered to the adjudicator, which decides.
+   */
+  private recallSimilar(content: string): MemoryItem[] {
+    const needle = distinctiveTokens(content);
+    if (needle.size === 0) return [];
+    const existing = [
       ...this.l1HotCache.values(),
       ...this.l2WarmStore.values(),
       ...this.l3ColdArchive.values(),
     ];
-    return all.some((item) => {
-      const have = distinctive(item.content);
-      if (have.size === 0) return false;
-      let shared = 0;
-      for (const word of needle) if (have.has(word)) shared += 1;
-      // Compare against the smaller side so a terse restatement of a verbose
-      // memory still registers as the same fact.
-      return shared / Math.min(needle.size, have.size) >= DUPLICATE_THRESHOLD;
-    });
+
+    const scored = existing
+      .map((item) => {
+        const have = distinctiveTokens(item.content);
+        let shared = 0;
+        for (const word of needle) if (have.has(word)) shared += 1;
+        return { item, exact: item.content.trim().toLowerCase() === content.trim().toLowerCase(), score: have.size ? shared / Math.min(needle.size, have.size) : 0 };
+      })
+      // An exact restatement is certain; the rest are merely candidates.
+      .filter((entry) => entry.exact || entry.score >= CANDIDATE_FLOOR)
+      .sort((a, b) => Number(b.exact) - Number(a.exact) || b.score - a.score);
+
+    return scored.slice(0, MAX_CANDIDATES).map((entry) => entry.item);
   }
 
   /**

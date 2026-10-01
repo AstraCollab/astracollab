@@ -15,8 +15,10 @@ import { promises as fs } from "node:fs";
 import { createHash } from "node:crypto";
 import * as os from "node:os";
 import * as nodePath from "node:path";
-import { generateText, type LanguageModel } from "ai";
+import { generateObject, generateText, type LanguageModel } from "ai";
+import { z } from "zod";
 import { CognitiveMemory } from "@astracollab/not-another-harness";
+import type { MemoryReconciliation } from "@astracollab/not-another-harness";
 
 import { extractDeterministic } from "./memory-rules.js";
 
@@ -171,6 +173,51 @@ export const createTurnExtractor = (model: LanguageModel): TurnExtractor => {
   };
 };
 
+const RECONCILE_SCHEMA = z.object({
+  action: z.enum(["add", "merge", "replace", "reject"]),
+  content: z.string().optional().describe("The fuller statement, when merging or replacing"),
+  reason: z.string().optional(),
+});
+
+const RECONCILE_INSTRUCTION = `You maintain durable memory for a coding agent. A new candidate statement may restate something already remembered, add detail to it, or contradict it.
+
+Decide:
+- "merge" - it says the same thing as something you already hold. Merge them into ONE memory, keeping whichever carries more information. Do not keep both.
+- "replace" - it updates or contradicts what you hold about the same subject (for example a changed value, a superseded preference). The newer statement wins.
+- "add" - it is genuinely new.
+- "reject" - it is not worth remembering at all.
+
+Rules:
+- A restatement is never a second memory. "Likes cheese pizza" and "Loves cheese pizza" are one.
+- Do not merge when numbers, dates, names or qualifiers differ; that is "replace", not "merge".
+- Prefer "add" when you are unsure. A duplicate costs one entry; a wrong merge loses information permanently.
+- Never invent information that is in neither the candidate nor the memories you were given.`;
+
+/** Model-backed adjudicator: mem0's ADD/MERGE/REPLACE/REJECT over recalled candidates. */
+export const createMemoryReconciler = (model: LanguageModel) => {
+  return async ({ candidate, remember }: { candidate: string; remember: string[] }) => {
+    try {
+      const result = await generateObject({
+        model,
+        schema: RECONCILE_SCHEMA,
+        system: RECONCILE_INSTRUCTION,
+        prompt: [
+          "Already remembered:",
+          ...remember.map((m) => `- ${m}`),
+          "",
+          "New candidate:",
+          candidate,
+        ].join("\n"),
+        maxOutputTokens: 400,
+      });
+      return result.object as MemoryReconciliation;
+    } catch {
+      // Unsure, or the model failed: keep both rather than risk a bad merge.
+      return { action: "add" as const };
+    }
+  };
+};
+
 /** Where memory for a given working directory is stored. */
 export const memoryFileFor = (cwd: string): string =>
   nodePath.join(
@@ -189,6 +236,8 @@ export const setMemoryPersistedHook = (fn: (() => void) | null): void => {
 export type MemoryOptions = {
   /** Omit to build a memory that only uses the built-in regex extraction. */
   extractor?: TurnExtractor | null;
+  /** Adjudicates near-duplicate memories. Omit to fall back to exact-match only. */
+  reconciler?: ((input: { candidate: string; remember: string[] }) => Promise<MemoryReconciliation>) | null;
   cwd: string;
   /** Set false to skip loading and saving (e.g. --no-session). */
   persist?: boolean;

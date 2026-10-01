@@ -9,12 +9,17 @@ export const c = {
   added: wrap("\u001b[38;5;114m", "\u001b[39m"),
   removed: wrap("\u001b[38;5;203m", "\u001b[39m"),
   hunk: wrap("\u001b[38;5;141m", "\u001b[39m"),
+  /** Structure colour: headings, bullets, rules. Distinct from UI chrome. */
+  purple: wrap("\u001b[38;5;141m", "\u001b[39m"),
   dim: wrap("[2m", "[0m"),
   bold: wrap("[1m", "[0m"),
   cyan: wrap("[36m", "[0m"),
   green: wrap("[32m", "[0m"),
   yellow: wrap("[33m", "[0m"),
   red: wrap("[31m", "[0m"),
+  italic: wrap("\u001b[3m", "\u001b[23m"),
+  strikethrough: wrap("\u001b[9m", "\u001b[29m"),
+  underline: wrap("\u001b[4m", "\u001b[24m"),
   magenta: wrap("[35m", "[0m"),
 };
 

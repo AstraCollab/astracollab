@@ -1,15 +1,22 @@
 /**
  * The transcript pane of the alternate-screen TUI.
  *
- * A `Component` that turns harness events into wrapped `Text` blocks. Because
- * pi-tui repaints the whole layout on every frame, streaming text simply
- * appends to the last block and invalidates it — which is what keeps the editor
- * pinned at the bottom untouched no matter how fast output arrives.
+ * A `Component` that turns harness events into rendered blocks. Because pi-tui
+ * repaints the whole layout on every frame, streaming text simply appends to
+ * the last block and invalidates it — which is what keeps the editor pinned at
+ * the bottom untouched no matter how fast output arrives.
+ *
+ * Two block kinds share the pane. Assistant prose goes through pi-tui's
+ * `Markdown` so a `##` heading or a `-` list renders as structure rather than
+ * as literal characters; tool lines, results, and diffs stay plain `Text`,
+ * because they are already formatted and running them back through a markdown
+ * parser would mangle shell output that happens to contain `-` or `*`.
  */
 import { Text, type Component } from "@earendil-works/pi-tui";
 import type { HarnessEvent } from "@astracollab/not-another-harness";
 
 import { c, formatFileChange, stripAnsi, summarizeToolResult, toolLabel, type RenderableFileChange } from "../render.js";
+import { markdownBlock } from "./theme.js";
 
 /**
  * Strip bursts of orphaned SGR-mouse report text.
@@ -18,11 +25,15 @@ import { c, formatFileChange, stripAnsi, summarizeToolResult, toolLabel, type Re
  * literal characters and can end up persisted in a session. Requiring **two or
  * more** consecutive reports keeps this from touching ordinary prose, which never
  * contains a run of `n;n;nM` tokens.
+ *
+ * The pattern's trailing `\s*` already consumes the whitespace at the seam, so
+ * removal alone leaves no double space behind. An earlier version also collapsed
+ * runs of two or more spaces, which was redundant for reports and destroyed
+ * markdown indentation — nested list items and indented code blocks.
  */
 const MOUSE_REPORT_RUN = /(?:\d{1,3};\s*\d{1,3};\s*\d{1,3}[Mm]\s*){2,}/g;
 
-export const stripMouseReportText = (text: string): string =>
-  text.replace(MOUSE_REPORT_RUN, "").replace(/[ \t]{2,}/g, " ");
+export const stripMouseReportText = (text: string): string => text.replace(MOUSE_REPORT_RUN, "");
 
 /** `◆ label`, with a `×N` suffix once a run of identical calls collapses. */
 const toolCallLine = (label: string, count: number): string =>
@@ -76,9 +87,17 @@ const restoredResultLine = (part: MessagePart): string => {
   return summary.show ? `    ${c.dim("·")} ${c.dim(summary.text)}` : "";
 };
 
+/**
+ * The one capability the streaming path needs beyond `Component`.
+ *
+ * `Text` and `Markdown` both expose it, so naming it here keeps the stream typed
+ * without a cast at every `setText`.
+ */
+type SettableBlock = Component & { setText(text: string): void };
+
 export class TurnOutput implements Component {
-  private readonly blocks: Text[] = [];
-  private stream: Text | null = null;
+  private readonly blocks: Component[] = [];
+  private stream: SettableBlock | null = null;
   private streamBuffer = "";
   private renderedChanges = 0;
   private lastChanges: RenderableFileChange[] | null = null;
@@ -87,11 +106,17 @@ export class TurnOutput implements Component {
     private readonly getFileChanges: () => RenderableFileChange[] = () => [],
   ) {}
 
-  /** Coalesced streaming assistant text, so a wall of deltas is one wrapping block. */
+  /**
+   * Coalesced streaming assistant text, so a wall of deltas is one block.
+   *
+   * Markdown, not `Text`: a response that opens with `## Setup` was rendering
+   * its heading characters verbatim. The block is replaced on first delta so a
+   * stream that follows a tool result starts its own block.
+   */
   appendStream(delta: string): void {
     this.streamBuffer += stripMouseReportText(delta);
     if (!this.stream) {
-      this.stream = this.push("");
+      this.stream = this.pushMarkdown("");
     }
     this.stream.setText(this.streamBuffer.trimStart());
   }
@@ -101,6 +126,18 @@ export class TurnOutput implements Component {
     this.stream = null;
     this.streamBuffer = "";
     this.push(stripMouseReportText(text));
+  }
+
+  /**
+   * A finished markdown block, e.g. a restored response.
+   *
+   * Separate from `addLine` so restored prose is parsed while tool lines and
+   * diffs are not.
+   */
+  addMarkdown(text: string): void {
+    this.stream = null;
+    this.streamBuffer = "";
+    this.pushMarkdown(stripMouseReportText(text));
   }
 
   /** Drop everything rendered so far, e.g. after switching sessions. */
@@ -217,8 +254,11 @@ export class TurnOutput implements Component {
       }
       if (message.role !== "assistant") continue;
 
+      // Restored prose goes through the same markdown renderer as a live
+      // response, so a resumed session's `##` headings are headings rather than
+      // the characters that spelled them.
       if (typeof message.content === "string") {
-        this.addLine(`  ${message.content}`);
+        this.addMarkdown(message.content);
         continue;
       }
 
@@ -228,11 +268,12 @@ export class TurnOutput implements Component {
         if (part.type === "reasoning" && typeof part.text === "string" && part.text.trim()) {
           // `◦` at prose indent, against the `·` that hangs under a call. Both
           // are dimmed, so the glyph and the indent are what tell them apart.
+          // Plain, not markdown: this is a log line, not an answer.
           this.addLine(c.dim(`  ◦ ${clipLine(part.text, 100)}`));
           continue;
         }
         if (part.type === "text" && typeof part.text === "string") {
-          this.addLine(`  ${part.text}`);
+          this.addMarkdown(part.text);
           continue;
         }
         if (part.type === "tool-call" && typeof part.toolName === "string") {
@@ -288,6 +329,12 @@ export class TurnOutput implements Component {
 
   private push(text: string): Text {
     const block = new Text(text, 1, 0);
+    this.blocks.push(block);
+    return block;
+  }
+
+  private pushMarkdown(text: string): SettableBlock {
+    const block = markdownBlock(text);
     this.blocks.push(block);
     return block;
   }

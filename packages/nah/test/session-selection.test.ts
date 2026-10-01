@@ -202,6 +202,80 @@ describe("resumed transcript is visible", () => {
   });
 });
 
+describe("response markdown", () => {
+  const PURPLE = "[38;5;141m";
+
+  it("renders a heading as structure, not as the characters that spelled it", () => {
+    const output = new TurnOutput();
+    output.appendStream("## Setup\n\nSome prose.\n");
+    const text = strip(output.render(90).join("\n"));
+    expect(text).toContain("Setup");
+    // The `##` is consumed as a heading marker rather than printed.
+    expect(text).not.toContain("##");
+  });
+
+  it("colours headings purple", () => {
+    const output = new TurnOutput();
+    output.appendStream("## Setup\n");
+    const raw = output.render(90).join("\n");
+    expect(raw).toContain(PURPLE);
+    expect(raw).toContain("Setup");
+  });
+
+  it("renders a bullet list with a marker, not a literal dash", () => {
+    const output = new TurnOutput();
+    output.appendStream("- `landing/` is the source\n- `resolvewise/` is the target\n");
+    const text = strip(output.render(90).join("\n"));
+    expect(text).toContain("- landing/ is the source");
+    expect(text).toContain("- resolvewise/ is the target");
+  });
+
+  it("keeps emphasis and inline code out of the plain text", () => {
+    const output = new TurnOutput();
+    output.appendStream("The port is **fragile** and uses `lib/effect`.\n");
+    const text = strip(output.render(90).join("\n"));
+    expect(text).toContain("The port is fragile and uses lib/effect.");
+    expect(text).not.toContain("**");
+    expect(text).not.toContain("`");
+  });
+
+  it("does not run a tool line through the markdown parser", () => {
+    // A result whose text starts with a dash and a hash is markdown to a parser.
+    // Tool traffic is already formatted, so it must survive verbatim.
+    const output = new TurnOutput();
+    output.addLine("  - ## not a heading: literal output");
+    const text = strip(output.render(90).join("\n"));
+    expect(text).toContain("- ## not a heading: literal output");
+  });
+
+  it("renders a restored assistant response as markdown too", () => {
+    const output = new TurnOutput();
+    output.seedHistory([
+      { role: "user", content: "how did it go?" },
+      { role: "assistant", content: "## Result\n\nAll **eleven** paths ported.\n" },
+    ]);
+    const text = strip(output.render(90).join("\n"));
+    expect(text).toContain("Result");
+    expect(text).not.toContain("##");
+    expect(text).toContain("All eleven paths ported.");
+  });
+
+  it("keeps a streamed fence open instead of collapsing the block", () => {
+    const output = new TurnOutput();
+    // The closing fence has not arrived, which is the normal mid-stream state.
+    output.appendStream("## Fix\n\n```ts\nconst x = 1;\n");
+    const text = strip(output.render(90).join("\n"));
+    expect(text).toContain("const x = 1;");
+  });
+
+  it("leaves a plain response untouched", () => {
+    const output = new TurnOutput();
+    output.appendStream("No changes were needed. The copy has already been done.\n");
+    const text = strip(output.render(90).join("\n"));
+    expect(text).toContain("No changes were needed. The copy has already been done.");
+  });
+});
+
 describe("end-to-end resume through the host", () => {
   beforeEach(() => {
     cwdCounter += 1;

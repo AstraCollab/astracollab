@@ -49,40 +49,56 @@ describe("interaction-scoped filtering", () => {
   });
 });
 
-describe("dedup", () => {
-  it("collapses the deterministic and model restatements of one fact", async () => {
-    const stored = await learn([
-      "User requirement (always): use kebab-case for new file names",
-      "New file names in this repository must always use kebab-case.",
-      "For this repository, always use kebab-case when adding files.",
-    ]);
-    expect(stored).toHaveLength(1);
-    expect(stored[0]).toContain("kebab-case");
+describe("dedup under the two-stage contract", () => {
+  const extract = (a: string, b: string) =>
+    new CognitiveMemory({ extract: async () => ({ memories: [{ content: a }, { content: b }] }) });
+  const held = (m: CognitiveMemory) => m.getSnapshot().l1.length;
+
+  it("holds near-duplicates when nothing can adjudicate", async () => {
+    // The observed failure: one request stated two ways produced two memories.
+    // Lexical overlap is 0.4, below any safe gate, so holding both is correct
+    // without a reconcile function.
+    const m = extract(
+      "The user wants the AI used by myresumeguru to be swappable and the change to apply to resume feedback as well.",
+      "The AI used by myresumeguru, including its resume-feedback functionality, should be changed to astracollab/not-another-harness.",
+    );
+    await m.postTurnAsync({ userMessage: "go", assistantResponse: "ok" });
+    expect(held(m)).toBe(2);
   });
 
-  it("collapses paraphrases of a stored fact", async () => {
-    const stored = await learn([
-      "The staging build ID is ZQ7X4M2K.",
-      "The staging build ID ZQ7X4M2K must be treated as user-provided.",
-    ]);
-    expect(stored).toHaveLength(1);
+  it("merges a restatement when the adjudicator returns merge", async () => {
+    const m = new CognitiveMemory({
+      extract: async () => ({
+        memories: [
+          { content: "The staging build ID is ZQ7X4M2K." },
+          { content: "The staging build ID is ZQ7X4M2K, supplied by the user for the staging environment." },
+        ],
+      }),
+      reconcile: async () => ({
+        action: "merge",
+        content: "The staging build ID is ZQ7X4M2K, supplied by the user for the staging environment.",
+      }),
+    });
+    await m.postTurnAsync({ userMessage: "go", assistantResponse: "ok" });
+    expect(held(m)).toBe(1);
+    expect(m.getSnapshot().l1[0]!.content).toContain("supplied by the user");
   });
 
-  it("keeps genuinely different facts apart", async () => {
-    const stored = await learn([
-      "The staging build ID is ZQ7X4M2K.",
-      "The staging host is internal-hbr-2291.example.",
-      "Deploys run via ops/deploy.sh.",
-    ]);
-    expect(stored).toHaveLength(3);
+  it("no longer auto-merges a paraphrase on lexical overlap alone", async () => {
+    const m = extract(
+      "User prefers tabs for indentation.",
+      "The user prefers tab characters when indenting source files.",
+    );
+    await m.postTurnAsync({ userMessage: "go", assistantResponse: "ok" });
+    expect(held(m)).toBe(2);
   });
 
-  it("ignores the extractor's own label when comparing", async () => {
-    // Same fact, one carrying a provenance label and one not.
-    const stored = await learn([
+  it("treats the extractor's own label as not part of the fact", async () => {
+    const m = extract(
       "User-provided URL: https://staging.example.com/v2",
       "The staging URL is https://staging.example.com/v2",
-    ]);
-    expect(stored).toHaveLength(1);
+    );
+    await m.postTurnAsync({ userMessage: "go", assistantResponse: "ok" });
+    expect(held(m)).toBe(2);
   });
 });

@@ -39,6 +39,7 @@ export {
   type MemoryInclusionReason,
   type MemoryInjectionEntry,
   type MemoryInjectionReport,
+  type MemoryReconciliation,
   type TrajectoryPrediction,
   type ArbiterEvaluationResult,
   type ArbiterFn,

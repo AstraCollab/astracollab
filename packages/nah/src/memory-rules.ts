@@ -26,9 +26,6 @@ const URL = /\bhttps?:\/\/[^\s<>()[\]"'`]+/g;
 const REQUIREMENT =
   /\b(always|never|must|should|make sure to|remember to)\b[\s:]+([^.?!\n]{4,160})/gi;
 
-/** Explicit relative or absolute file paths the user names. */
-const PATH = /(?:^|[\s(])(\.\/[\w.\/-]+|\/[\w.\/-]+\/[\w.\/-]+)/g;
-
 /**
  * "<subject> is <value>".
  *
@@ -91,12 +88,6 @@ export const extractDeterministic = (userMessage: string): DeterministicMemory[]
     const body = tidy(match[2] ?? "");
     if (!body) continue;
     push(`User requirement (${verb}): ${body}`);
-  }
-
-  // 3. Named file paths.
-  for (const match of userMessage.matchAll(PATH)) {
-    const path = (match[1] ?? "").trim();
-    if (path.length >= 4) push(`User-referenced path: ${path}`);
   }
 
   // 4. "X is Y" where Y is identifier-shaped.

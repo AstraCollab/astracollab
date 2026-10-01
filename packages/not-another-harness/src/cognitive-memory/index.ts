@@ -20,6 +20,7 @@ export type {
   MemoryInclusionReason,
   MemoryInjectionEntry,
   MemoryInjectionReport,
+  MemoryReconciliation,
   ArbiterEvaluationResult,
   ArbiterFn,
   CognitiveMemoryOptions,
