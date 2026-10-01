@@ -131,7 +131,7 @@ describe("/session <id>", () => {
       { role: "assistant", content: "session one answer" },
     ]);
     expect(state.store?.path).toBe(first);
-    expect(out.join("")).toContain("switched");
+    expect(strip(out.join(""))).toContain("switched");
     expect(out.join("")).toContain("2 messages restored");
   });
 
@@ -196,5 +196,140 @@ describe("TurnOutput.reset", () => {
     const text = strip(output.render(80).join("\n"));
     expect(text).toContain("second session");
     expect(text).not.toContain("first session");
+  });
+});
+describe("/branch", () => {
+  let home: string;
+  let realHome: string | undefined;
+  let cwd: string;
+  let out: string[];
+
+  beforeEach(async () => {
+    realHome = process.env.HOME;
+    home = await mkdtemp(nodePath.join(tmpdir(), "nah-branch-"));
+    process.env.HOME = home;
+    cwd = await mkdtemp(nodePath.join(tmpdir(), "nah-bproj-"));
+    out = [];
+  });
+
+  afterEach(async () => {
+    if (realHome === undefined) delete process.env.HOME;
+    else process.env.HOME = realHome;
+    await rm(home, { recursive: true, force: true });
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  const seeded = async (): Promise<SessionState> => {
+    const { defaultSessionFile } = await import("../src/context.js");
+    const base = defaultSessionFile(cwd);
+    await createJsonlSessionStore(base).append([
+      { role: "user", content: "original question" },
+      { role: "assistant", content: "original answer" },
+    ]);
+    return {
+      messages: [],
+      system: "s",
+      cwd,
+      tools: {},
+      workspace: {},
+      activeFileChanges: null,
+      activeShellCommands: null,
+      undoHistory: [],
+      sessionBasePath: base,
+      taskLedger: null,
+      discoveredChecks: [],
+      store: createJsonlSessionStore(base),
+      model: null,
+      providerStatus: null,
+      totalUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      contextUsedTokens: 0,
+      contextUsageEstimated: false,
+      lastOutputTokens: 0,
+      turns: 0,
+      permissions: "yolo",
+    } as unknown as SessionState;
+  };
+
+  const run = (state: SessionState, input: string) =>
+    handleSlashCommand(input, state, cwd, {
+      write: (chunk: string) => {
+        out.push(chunk);
+        return true;
+      },
+    } as never);
+
+  it("forks a named branch and says it created one", async () => {
+    const state = await seeded();
+    expect(await run(state, "/branch work")).toBe("handled");
+    expect(strip(out.join(""))).toContain("created branch work");
+    expect(strip(out.join(""))).toContain("/branch main returns you");
+    expect(state.store?.path).toContain(".work.jsonl");
+  });
+
+  it("switches back to main and restores its messages", async () => {
+    const state = await seeded();
+    await run(state, "/branch work");
+    out.length = 0;
+    let notified = 0;
+    state.onSessionSwitch = () => {
+      notified += 1;
+    };
+
+    expect(await run(state, "/branch main")).toBe("handled");
+    expect(state.messages).toEqual([
+      { role: "user", content: "original question" },
+      { role: "assistant", content: "original answer" },
+    ]);
+    expect(strip(out.join(""))).toContain("switched");
+    // The pane has to be rebuilt, or it still shows the branch transcript.
+    expect(notified).toBe(1);
+  });
+
+  it("refreshes the pane when switching to an existing branch too", async () => {
+    const state = await seeded();
+    await run(state, "/branch work");
+    out.length = 0;
+    let notified = 0;
+    state.onSessionSwitch = () => {
+      notified += 1;
+    };
+
+    await run(state, "/branch work");
+    expect(strip(out.join(""))).toContain("switched");
+    expect(notified).toBe(1);
+  });
+
+  it("lists branches on a bare /branch, with sizes and the active one", async () => {
+    const state = await seeded();
+    await run(state, "/branch work");
+    out.length = 0;
+
+    await run(state, "/branch");
+    const text = out.join("");
+    expect(text).toContain("Branches");
+    expect(text).toContain("main");
+    expect(text).toContain("work");
+    expect(text).toContain("msg");
+    expect(text).toContain("active");
+  });
+
+  it("/branches and a bare /branch agree", async () => {
+    const state = await seeded();
+    await run(state, "/branch alpha");
+    out.length = 0;
+    await run(state, "/branch");
+    const bare = out.join("");
+
+    out.length = 0;
+    await run(state, "/branches");
+    expect(out.join("")).toBe(bare);
+  });
+
+  it("says so when persistence is off", async () => {
+    const state = await seeded();
+    state.store = null;
+    state.sessionBasePath = null;
+    await run(state, "/branches");
+    expect(strip(out.join(""))).toContain("persistence is off");
   });
 });

@@ -383,6 +383,58 @@ export const setupProvider = async (
 
 type SlashResult = "handled" | "quit" | "not-a-command";
 
+
+/** One row per branch: the base transcript plus every named sibling. */
+const listBranches = async (
+  state: SessionState,
+  cwd: string,
+): Promise<Array<{ name: string; path: string; active: boolean; messages: number; modified: number }>> => {
+  const base = state.sessionBasePath ?? defaultSessionFile(cwd);
+  const stem = base.replace(/\.jsonl$/, "");
+  const parent = nodePath.dirname(stem);
+  const prefix = `${nodePath.basename(stem)}.`;
+  const { createJsonlSessionStore } = await import("@astracollab/not-another-harness");
+
+  const collect = async (name: string, path: string) => {
+    let modified = 0;
+    try {
+      modified = (await fs.stat(path)).mtimeMs;
+    } catch {
+      modified = 0;
+    }
+    return {
+      name,
+      path,
+      active: state.store?.path === path,
+      messages: (await createJsonlSessionStore(path).load()).length,
+      modified,
+    };
+  };
+
+  const rows = [await collect("main", base)];
+  for (const file of (await fs.readdir(parent)).sort()) {
+    if (file.startsWith(prefix) && file.endsWith(".jsonl")) {
+      rows.push(await collect(file.slice(prefix.length, -".jsonl".length), nodePath.join(parent, file)));
+    }
+  }
+  return rows;
+};
+
+const renderBranches = (rows: Array<{ name: string; active: boolean; messages: number; modified: number }>) => {
+  if (rows.length === 1 && rows[0]!.messages === 0) {
+    return "(no branches yet — /branch <name> forks one)\n";
+  }
+  const lines = [`${c.bold("Branches")}`];
+  for (const row of rows) {
+    const active = row.active ? c.green(" · active") : "";
+    const when = row.modified ? c.dim(new Date(row.modified).toLocaleString()) : c.dim("never");
+    const size = c.dim(`${row.messages} msg${row.messages === 1 ? "" : "s"}`);
+    lines.push(`  ${row.active ? c.magenta("❯") : " "} ${row.name}${active}  ${size}  ${when}`);
+  }
+  lines.push(c.dim("Switch with: /branch <name>   ·   back to the original: /branch main"));
+  return `${lines.join("\n")}\n`;
+};
+
 export const handleSlashCommand = async (
   input: string,
   state: SessionState,
@@ -513,18 +565,12 @@ export const handleSlashCommand = async (
       return "handled";
     }
     case "branches": {
-      if (!state.sessionBasePath) {
+      if (!state.sessionBasePath && !state.store) {
         out.write(c.dim("(session persistence is off)\n"));
         return "handled";
       }
       try {
-        const base = state.sessionBasePath.replace(/\.jsonl$/, "");
-        const parent = nodePath.dirname(base);
-        const prefix = `${nodePath.basename(base)}.`;
-        const files = await fs.readdir(parent);
-        const names = files.filter((file) => file.startsWith(prefix) && file.endsWith(".jsonl")).map((file) => file.slice(prefix.length, -6));
-        out.write(`${c.bold("main")}${state.store?.path === state.sessionBasePath ? " (active)" : ""}\n`);
-        for (const name of names.sort()) out.write(`${name}${state.store?.path === `${base}.${name}.jsonl` ? " (active)" : ""}\n`);
+        out.write(renderBranches(await listBranches(state, cwd)));
       } catch (e) {
         out.write(c.red(`could not list branches: ${e instanceof Error ? e.message : String(e)}\n`));
       }
@@ -533,6 +579,14 @@ export const handleSlashCommand = async (
     case "branch": {
       if (!state.store || !state.sessionBasePath) {
         out.write(c.red("session branching requires session persistence\n"));
+        return "handled";
+      }
+      if (!arg) {
+        try {
+          out.write(renderBranches(await listBranches(state, cwd)));
+        } catch (e) {
+          out.write(c.red(`could not list branches: ${e instanceof Error ? e.message : String(e)}\n`));
+        }
         return "handled";
       }
       if (!/^[a-zA-Z0-9_-]{1,48}$/.test(arg)) {
@@ -547,7 +601,8 @@ export const handleSlashCommand = async (
           state.messages = await store.load();
           state.taskLedger = await store.loadTaskLedger();
           state.undoHistory = [];
-          out.write(c.dim("switched to branch main\n"));
+          out.write(`${c.green("switched")} → main ${c.dim(`${state.messages.length} messages`)}\n`);
+          state.onSessionSwitch?.(state.messages);
           return "handled";
         }
         const base = state.sessionBasePath.replace(/\.jsonl$/, "");
@@ -562,14 +617,19 @@ export const handleSlashCommand = async (
           state.messages = messages;
           state.taskLedger = await store.loadTaskLedger();
           state.undoHistory = [];
-          out.write(c.dim(`switched to branch ${arg}\n`));
+          out.write(`${c.green("switched")} → ${arg} ${c.dim(`${messages.length} messages`)}\n`);
+          state.onSessionSwitch?.(state.messages);
         } catch (e) {
           if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-          state.store = await state.store.fork(destination);
-          state.messages = await state.store.load();
-          state.taskLedger = await state.store.loadTaskLedger();
+          const forked = await state.store.fork(destination);
+          const restored = await forked.load();
+          state.store = forked;
+          state.messages = restored;
+          state.taskLedger = await forked.loadTaskLedger();
           state.undoHistory = [];
-          out.write(c.dim(`forked branch ${arg}\n`));
+          out.write(`${c.yellow("created")} branch ${arg} ${c.dim(`from ${restored.length} carried message(s)`)}\n`);
+          out.write(c.dim(`  /branch main returns you · /branches lists them\n`));
+          state.onSessionSwitch?.(state.messages);
         }
       } catch (e) {
         out.write(c.red(`could not switch branch: ${e instanceof Error ? e.message : String(e)}\n`));
