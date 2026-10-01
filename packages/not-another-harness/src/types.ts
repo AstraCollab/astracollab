@@ -31,6 +31,9 @@ export type WorkspaceSnapshot = {
 
 export type WorkspaceRestoreResult = { restoredPaths: string[]; conflicts: string[] };
 
+/** How a mid-run user message is delivered into the transcript. */
+export type HarnessSteerDelivery = "steer" | "follow-up";
+
 /** Streaming events emitted while the agent loop runs. */
 export type HarnessEvent =
   | { type: "run-start"; stepBudget: number; tokenBudget: number }
@@ -48,6 +51,18 @@ export type HarnessEvent =
     }
   | { type: "step-finish"; step: number; usage: HarnessUsage }
   | { type: "compacted"; droppedMessages: number; keptMessages: number; summaryChars: number }
+  /**
+   * A user message sent while the run was in flight. `queued` fires when the
+   * harness accepts it, `delivered` when it actually enters the transcript —
+   * these are different moments, and a UI needs both to show a pending chip
+   * that clears once the model can see it.
+   */
+  | {
+      type: "user-message";
+      text: string;
+      delivery: HarnessSteerDelivery;
+      phase: "queued" | "delivered";
+    }
   | { type: "finish"; reason: HarnessStopReason; text: string; usage: HarnessUsage }
   | { type: "error"; error: unknown };
 
@@ -153,4 +168,31 @@ export type HarnessRun = {
   /** Typed event stream — drive UIs / JSONL logs from this. */
   events: AsyncIterable<HarnessEvent>;
   result: Promise<HarnessRunResult>;
+
+  /**
+   * Send a message while the run is in flight. It is appended to the transcript
+   * at the next step boundary — after the current step's tool calls settle, and
+   * before the next model request — so the in-flight call is never cut off
+   * mid-token. Returns false if the run has already settled.
+   *
+   * Steers jump ahead of follow-ups.
+   */
+  steer(text: string): boolean;
+
+  /**
+   * Send a message that is delivered only if the run would otherwise finish.
+   * Use this for "also, once you're done, ..." so a mid-run nudge does not
+   * derail the task already in flight.
+   */
+  followUp(text: string): boolean;
+
+  /**
+   * Abort the run (the equivalent of pressing Escape). Unlike steering this
+   * *does* cut off the in-flight model call and any running tool. Queued
+   * messages are left intact so the caller can decide whether to replay them.
+   */
+  interrupt(): void;
+
+  /** Currently queued messages, for rendering a pending indicator. */
+  pending(): { steer: readonly string[]; followUp: readonly string[] };
 };

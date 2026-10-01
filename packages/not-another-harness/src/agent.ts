@@ -7,6 +7,7 @@ import type {
   HarnessRun,
   HarnessRunOptions,
   HarnessRunResult,
+  HarnessSteerDelivery,
   HarnessStopReason,
   HarnessUsage,
 } from "./types.js";
@@ -63,6 +64,28 @@ const isAbortError = (e: unknown): boolean => {
   return name === "AbortError" || name === "TimeoutError";
 };
 
+/**
+ * Combine the caller's signal with the run's own interrupt signal.
+ * Hand-rolled because `AbortSignal.any` is not in the ES2022 lib.
+ */
+const linkSignals = (...signals: Array<AbortSignal | undefined>): AbortSignal | undefined => {
+  const present = signals.filter((s): s is AbortSignal => Boolean(s));
+  if (present.length === 0) return undefined;
+  if (present.length === 1) return present[0];
+  const combined = new AbortController();
+  const abort = (reason: unknown) => {
+    if (!combined.signal.aborted) combined.abort(reason);
+  };
+  for (const signal of present) {
+    if (signal.aborted) {
+      abort(signal.reason);
+      break;
+    }
+    signal.addEventListener("abort", () => abort(signal.reason), { once: true });
+  }
+  return combined.signal;
+};
+
 class EventQueue {
   private queue: HarnessEvent[] = [];
   private waiters: Array<() => void> = [];
@@ -99,9 +122,30 @@ class EventQueue {
  * One `streamText` call per step (Pi-style), real events between steps, hard
  * step/token budgets, and mid-run compaction when the transcript grows past
  * `compactAtTokens`. No hidden magic: what you see in `events` is the loop.
+ *
+ * The run is steerable: `run.steer()` appends a user message at the next step
+ * boundary. A steer never interrupts the model call in flight — it lands after
+ * that step's tools settle, and it grants a fresh step window so a long task
+ * cannot lose a pending message to `maxSteps`.
  */
 export const runAgent = (options: HarnessRunOptions): HarnessRun => {
   const events = new EventQueue();
+
+  const interruptController = new AbortController();
+  const signal = linkSignals(options.abortSignal, interruptController.signal);
+  const steerQueue: string[] = [];
+  const followUpQueue: string[] = [];
+  let settled = false;
+
+  const enqueue = (queue: string[], text: string, delivery: HarnessSteerDelivery): boolean => {
+    const trimmed = text.trim();
+    if (!trimmed || settled) {
+      return false;
+    }
+    queue.push(trimmed);
+    events.push({ type: "user-message", text: trimmed, delivery, phase: "queued" });
+    return true;
+  };
 
   const resultPromise = (async (): Promise<HarnessRunResult> => {
     const maxSteps = Math.max(1, Math.floor(options.maxSteps ?? DEFAULT_MAX_STEPS));
@@ -133,14 +177,39 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 
     events.push({ type: "run-start", stepBudget: maxSteps, tokenBudget: maxTokens });
 
+    /**
+     * Append queued messages for `delivery` to the transcript. Returns how many
+     * landed. Runs before the next model request is assembled, which is what
+     * makes a steer invisible to the step already in flight.
+     */
+    const promote = (delivery: HarnessSteerDelivery): number => {
+      const queue = delivery === "steer" ? steerQueue : followUpQueue;
+      const pending = queue.splice(0);
+      for (const text of pending) {
+        messages.push({ role: "user", content: text });
+        events.push({ type: "user-message", text, delivery, phase: "delivered" });
+      }
+      return pending.length;
+    };
+
     try {
-      for (let step = 1; step <= maxSteps; step += 1) {
-        if (options.abortSignal?.aborted) {
+      let step = 0;
+      let stepLimit = maxSteps;
+      while (step < stepLimit) {
+        step += 1;
+        if (signal?.aborted) {
           reason = "aborted";
           break;
         }
 
         const remainingTokens = maxTokens > 0 ? maxTokens - usage.totalTokens : Number.POSITIVE_INFINITY;
+        // Steers land here: after the previous step's tools settled, before this
+        // request is assembled, so nothing is ever cut off mid-token.
+        if (steerQueue.length > 0 && promote("steer") > 0) {
+          // A human just gave the agent more work. Grant a fresh step window so
+          // `maxSteps` cannot silently drop a message they deliberately sent.
+          stepLimit = step + maxSteps;
+        }
         const requestMessages = messages;
         const estimatedInputTokens = estimateRequestTokens(options.system, requestMessages);
         if (maxTokens > 0 && remainingTokens <= estimatedInputTokens) {
@@ -161,7 +230,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           system: options.system,
           messages: requestMessages,
           tools: options.tools as ToolSet,
-          abortSignal: options.abortSignal,
+          abortSignal: signal,
           maxOutputTokens: stepOutputLimit,
           // One model round-trip (+ its tool executions) per loop iteration —
           // stop conditions, compaction, and events live in *this* loop.
@@ -235,10 +304,18 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           break;
         }
         if (!stepHadToolCalls(response.messages)) {
+          // The model produced its final answer — but a human may already have
+          // queued something while that was streaming. Dropping it here would
+          // silently discard the message, so deliver the follow-ups and keep
+          // going instead of finishing.
+          if (followUpQueue.length > 0 && promote("follow-up") > 0) {
+            stepLimit = step + maxSteps;
+            continue;
+          }
           reason = "completed";
           break;
         }
-        if (step === maxSteps) {
+        if (step >= stepLimit) {
           reason = "max-steps";
           break;
         }
@@ -273,9 +350,10 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
         }
       }
     } catch (e) {
-      if (isAbortError(e) || options.abortSignal?.aborted) {
+      if (isAbortError(e) || signal?.aborted) {
         events.push({ type: "finish", reason: "aborted", text: streamedText, usage: { ...usage } });
         events.close();
+        settled = true;
         return {
           text: streamedText,
           reason: "aborted",
@@ -288,12 +366,14 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
       events.push({ type: "error", error: e });
       events.push({ type: "finish", reason: "error", text: "", usage: { ...usage } });
       events.close();
+      settled = true;
       throw e;
     }
 
     const text = reason === "aborted" ? streamedText : lastAssistantText(messages);
     events.push({ type: "finish", reason, text, usage: { ...usage } });
     events.close();
+    settled = true;
     return {
       text,
       reason,
@@ -304,5 +384,16 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
     };
   })();
 
-  return { events: events.iterate(), result: resultPromise };
+  return {
+    events: events.iterate(),
+    result: resultPromise,
+    steer: (text: string) => enqueue(steerQueue, text, "steer"),
+    followUp: (text: string) => enqueue(followUpQueue, text, "follow-up"),
+    interrupt: () => {
+      if (!interruptController.signal.aborted) {
+        interruptController.abort(new Error("interrupted"));
+      }
+    },
+    pending: () => ({ steer: [...steerQueue], followUp: [...followUpQueue] }),
+  };
 };

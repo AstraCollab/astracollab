@@ -38,6 +38,7 @@ export type {
   HarnessRun,
   HarnessRunOptions,
   HarnessRunResult,
+  HarnessSteerDelivery,
   HarnessStopReason,
   HarnessUsage,
   ToolEnvironment,
