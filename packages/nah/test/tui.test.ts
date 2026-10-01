@@ -311,20 +311,26 @@ describe("alternate-screen host layout", () => {
     await waitFor(() => lastFrame(terminal).includes("actually use TypeScript"));
 
     release();
-    // The turn finishes and paints its summary.
-    await waitFor(() => lastFrame(terminal).includes("completed"));
+    // Wait for a frame satisfying every condition at once. Waiting for them in
+    // sequence could latch onto an intermediate frame that had the summary but
+    // not yet repainted the editor, which is what made this flaky.
+    // The claim under test: one frame showing transcript output *and* the
+    // un-submitted editor text. Only those two — the reply itself scrolls out of
+    // a 20-row frame once the finish line lands, so it is asserted over the
+    // whole stream rather than the final frame.
+    const settled = await waitFor(() => {
+      const current = lastFrame(terminal);
+      return current.includes("completed") && current.includes("actually use TypeScript");
+    });
+    expect(settled, "no frame showed transcript output and half-typed input together").toBe(true);
 
     const frame = lastFrame(terminal);
-    // The transcript renders its newest content (the scroll view follows the
-    // end, so the original prompt has scrolled off by now)...
-    expect(frame).toContain("all done");
     expect(frame).toContain("completed");
-    // ...and, critically, the un-submitted editor text is still on screen in the
-    // same frame. Under the old line renderer this was impossible: streamed
-    // output landed on the very line being typed.
     expect(frame).toContain("actually use TypeScript");
-    // The prompt was rendered at some point during the run.
-    expect(strip(terminal.written)).toContain("find the bug");
+    // Both were rendered at some point during the run.
+    const stream = strip(terminal.written);
+    expect(stream).toContain("all done");
+    expect(stream).toContain("find the bug");
 
     terminal.onInput?.("\x03");
     await host;
