@@ -17,7 +17,10 @@ node_modules
 # asked to remember something. Nothing in this repo reads them, so committing one
 # only risks putting agent chatter into history. Force-add if you ever adopt the
 # convention deliberately.
-.claude/memory/
+# The leading ** is required: a pattern containing a slash is anchored to the
+# directory holding this file, so a bare `.claude/memory/` would only ever match
+# the repository root and let packages/*/.claude/memory/ through.
+**/.claude/memory/
 
 # Testing
 coverage
