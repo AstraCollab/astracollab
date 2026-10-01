@@ -29,7 +29,7 @@ import { defaultSessionFile, withFileInclusions } from "../context.js";
 import { c } from "../render.js";
 import { exclusiveCommands, renderCommandHelp, SLASH_COMMANDS } from "../commands.js";
 
-import { TurnOutput } from "./output.js";
+import { TurnOutput, userText } from "./output.js";
 import { ContextSidebar, type SidebarData } from "./sidebar.js";
 import { createClipboardWriter } from "./clipboard.js";
 import { createSlashCommandProvider } from "./slash-autocomplete.js";
@@ -95,6 +95,20 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
   };
   const status = new Text("", 1, 0);
   const editor = new Editor(screen, editorTheme, { paddingX: 1 });
+
+  /**
+   * Seed recall from the resumed transcript.
+   *
+   * Oldest first, because the editor prepends: the most recent prompt has to
+   * end up first for Up to find it. Bounded so resuming a very long session
+   * cannot spend the whole scrollback on the prompt box.
+   */
+  const RESUMED_HISTORY = 50;
+  for (const message of state.messages.slice(-RESUMED_HISTORY * 2)) {
+    if (message.role !== "user") continue;
+    const text = userText(message.content);
+    if (text) editor.addToHistory(text);
+  }
 
   const scroll = new ScrollView(output, { follow: "end", primary: true });
 
@@ -372,6 +386,16 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
       screen.requestRender();
       return;
     }
+
+    /**
+     * Shell-style recall. pi-tui's editor already walks history on Up/Down and
+     * gates it to the first visual line, so this only has to feed it.
+     *
+     * Recorded after the approval branch so a `y` answering a tool prompt never
+     * lands in history, and only for real messages: recalling a `/command` and
+     * pressing Enter would re-run it. A steered message counts - it was sent.
+     */
+    if (!input.startsWith("/")) editor.addToHistory(input);
 
     if (run.turn) {
       if (input.startsWith("/")) {

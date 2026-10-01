@@ -131,7 +131,7 @@ const clipLine = (text: string, max: number): string => {
  * accepting only `typeof content === "string"` silently dropped every prompt
  * that carried one.
  */
-const userText = (content: unknown): string => {
+export const userText = (content: unknown): string => {
   if (typeof content === "string") return content;
   const parts = partsOf(content);
   const text = parts
