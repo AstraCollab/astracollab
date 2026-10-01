@@ -159,6 +159,18 @@ export type HarnessRunOptions = {
   cacheProvider?: string;
   /** Cache lifetime for breakpoints. 5m is cheaper, 1h holds across longer runs. */
   cacheTtl?: "5m" | "1h";
+  /**
+   * Server-side context editing: ask the API to clear old tool results and
+   * replace them with placeholders. Applied only for providers that support it.
+   */
+  contextEditing?: {
+    /** Input tokens that trigger clearing. Default 40_000. */
+    triggerTokens?: number;
+    /** Recent tool rounds kept intact. Default 6. */
+    keepToolUses?: number;
+    /** Tools whose results are never cleared. */
+    excludeTools?: readonly string[];
+  };
   /** Optional awaited callbacks at each model step boundary. */
   onStepStart?: (step: number, messages: ModelMessage[]) => void | Promise<void>;
   onStepFinish?: (step: number, messages: ModelMessage[]) => void | Promise<void>;

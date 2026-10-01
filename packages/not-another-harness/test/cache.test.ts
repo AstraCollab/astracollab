@@ -3,7 +3,12 @@ import { MockLanguageModelV2 } from "ai/test";
 import { simulateReadableStream } from "ai";
 import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
 
-import { cacheOptions, supportsCaching, withCachedToolSchemas } from "../src/cache.js";
+import {
+  cacheOptions,
+  contextManagementOptions,
+  supportsCaching,
+  withCachedToolSchemas,
+} from "../src/cache.js";
 import { runAgent } from "../src/agent.js";
 
 const USAGE = { inputTokens: 10, outputTokens: 2, totalTokens: 12 };
@@ -100,13 +105,69 @@ describe("caching reaches the model call", () => {
 
   it("sends breakpoints when the provider supports them", async () => {
     const seen = await capture("anthropic");
-    expect(seen[0]!.providerOptions).toEqual({
-      anthropic: { cacheControl: { type: "ephemeral", ttl: "5m" } },
-    });
+    const anthropic = (seen[0]!.providerOptions as { anthropic: Record<string, unknown> }).anthropic;
+    // Context editing rides in the same provider block as the cache breakpoint.
+    const edits = (anthropic.contextManagement as { edits: Array<{ type: string }> }).edits;
+    expect(edits[0]!.type).toBe("clear_tool_uses_20250919");
   });
 
   it("sends none for a provider that would ignore them", async () => {
     const seen = await capture("openai");
     expect(seen[0]!.providerOptions).toBeUndefined();
+  });
+});
+
+describe("server-side context editing", () => {
+  it("asks the API to clear old tool results, keeping recent rounds", () => {
+    const options = contextManagementOptions("anthropic") as {
+      anthropic: {
+        contextManagement: { edits: Array<Record<string, unknown>> };
+        anthropicBeta: string[];
+      };
+    };
+    const edit = options.anthropic.contextManagement.edits[0]!;
+    expect(edit.type).toBe("clear_tool_uses_20250919");
+    expect(edit.trigger).toEqual({ type: "input_tokens", value: 40_000 });
+    expect(edit.keep).toEqual({ type: "tool_uses", value: 6 });
+    // Results only — the model should still see what it asked for.
+    expect(edit.clearToolInputs).toBe(false);
+    expect(options.anthropic.anthropicBeta).toContain("context-management-2025-06-27");
+  });
+
+  it("pins read/edit/write so the agent keeps what it read and changed", () => {
+    const options = contextManagementOptions("anthropic") as {
+      anthropic: { contextManagement: { edits: Array<{ excludeTools?: string[] }> } };
+    };
+    expect(options.anthropic.contextManagement.edits[0]!.excludeTools).toEqual([
+      "read",
+      "edit",
+      "write",
+    ]);
+  });
+
+  it("triggers far below the API default, because our transcripts never get that big", () => {
+    const options = contextManagementOptions("anthropic") as {
+      anthropic: { contextManagement: { edits: Array<{ trigger: { value: number } }> } };
+    };
+    // A measured run burned 383k input across 22 steps with no single request
+    // above ~35k, so the 100k default would never have fired.
+    expect(options.anthropic.contextManagement.edits[0]!.trigger.value).toBeLessThan(100_000);
+  });
+
+  it("honours explicit overrides", () => {
+    const options = contextManagementOptions("anthropic", {
+      triggerTokens: 12_000,
+      keepToolUses: 2,
+      excludeTools: ["grep"],
+    }) as { anthropic: { contextManagement: { edits: Array<Record<string, unknown>> } } };
+    const edit = options.anthropic.contextManagement.edits[0]!;
+    expect(edit.trigger).toEqual({ type: "input_tokens", value: 12_000 });
+    expect(edit.keep).toEqual({ type: "tool_uses", value: 2 });
+    expect(edit.excludeTools).toEqual(["grep"]);
+  });
+
+  it("sends nothing for providers that do not support it", () => {
+    expect(contextManagementOptions("openai")).toBeUndefined();
+    expect(contextManagementOptions(undefined)).toBeUndefined();
   });
 });

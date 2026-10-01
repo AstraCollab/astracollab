@@ -161,6 +161,14 @@ export const runTurn = (
     // signatures stay valid.
     cacheProvider: state.model.provider,
     cacheTtl: "5m",
+    // Let the API clear old tool results for us. Triggers well below our own
+    // compaction threshold, because the cost is the repeated replay of a
+    // transcript that never grows large enough to trip that threshold.
+    contextEditing: {
+      triggerTokens: 40_000,
+      keepToolUses: 6,
+      excludeTools: ["read", "edit", "write"],
+    },
     system: `${state.system}\n\n${taskContext}`,
     prompt,
     messages: state.messages,

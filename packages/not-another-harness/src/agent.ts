@@ -1,7 +1,8 @@
 import { streamText, stepCountIs, type ModelMessage, type ToolSet } from "ai";
+import type { SharedV2ProviderOptions } from "@ai-sdk/provider";
 
 import { compactMessages } from "./compaction.js";
-import { cacheOptions, withCachedToolSchemas } from "./cache.js";
+import { cacheOptions, contextManagementOptions, withCachedToolSchemas } from "./cache.js";
 import { createStepDedupe } from "./dedupe.js";
 import { estimateMessageTokens, estimateRequestTokens } from "./estimate.js";
 import type {
@@ -188,7 +189,15 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
     // not, because editing a prior tool_result invalidates Anthropic's
     // thinking-block signatures.
     const cachedTools = withCachedToolSchemas(dedupe.tools, options.cacheProvider, options.cacheTtl);
-    const providerOptions = cacheOptions(options.cacheProvider, options.cacheTtl);
+    const editing = contextManagementOptions(options.cacheProvider, options.contextEditing);
+    const providerOptions = {
+      ...(cacheOptions(options.cacheProvider, options.cacheTtl) ?? {}),
+      ...(editing ?? {}),
+    };
+    const effectiveProviderOptions: SharedV2ProviderOptions | undefined =
+      Object.keys(providerOptions).length > 0
+        ? (providerOptions as SharedV2ProviderOptions)
+        : undefined;
 
     /**
      * Append queued messages for `delivery` to the transcript. Returns how many
@@ -244,7 +253,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           system: options.system,
           messages: requestMessages,
           tools: cachedTools as ToolSet,
-          ...(providerOptions ? { providerOptions } : {}),
+          ...(effectiveProviderOptions ? { providerOptions: effectiveProviderOptions } : {}),
           abortSignal: signal,
           maxOutputTokens: stepOutputLimit,
           // One model round-trip (+ its tool executions) per loop iteration —

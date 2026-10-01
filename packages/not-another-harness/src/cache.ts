@@ -84,3 +84,62 @@ export const withCachedToolSchemas = <T extends Record<string, unknown>>(
  * grow its own at the tail.
  */
 export const TAIL_CACHE_BREAKPOINTS = 2;
+
+/**
+ * Tools whose results stay resident.
+ *
+ * The agent needs to remember what it read and what it changed in order to work
+ * sensibly, so those are pinned. The bulky, reproducible output is what gets
+ * cleared: directory listings, greps, and command output can all be re-fetched.
+ */
+export const DEFAULT_PINNED_TOOLS = ["read", "edit", "write"] as const;
+
+export type ContextEditingOptions = {
+  /** Input-token size that triggers clearing. */
+  triggerTokens?: number;
+  /** How many recent tool use/result pairs to keep intact. */
+  keepToolUses?: number;
+  /** Never clear these tools' results. */
+  excludeTools?: readonly string[];
+};
+
+/**
+ * Ask the API to clear old tool results server-side.
+ *
+ * This is the safe version of transcript pruning. The API replaces each cleared
+ * result with placeholder text and — crucially — does *not* treat the edit as a
+ * client edit, so the thinking-block signatures bound to the prefix stay valid.
+ * Doing the same thing client-side is what Anthropic documents as invalid for
+ * every later thinking block.
+ *
+ * The default trigger is deliberately far below the API's own 100k default. A
+ * measured run spent 383k input tokens across 22 steps while no single request
+ * exceeded roughly 35k, so a 100k trigger would never have fired and the cost
+ * would be entirely the repeated replay of a transcript that never looked big
+ * enough to compact.
+ */
+export const contextManagementOptions = (
+  provider: string | undefined,
+  options: ContextEditingOptions = {},
+): Record<string, Record<string, unknown>> | undefined => {
+  if (!supportsCaching(provider)) return undefined;
+  const excludeTools = options.excludeTools ?? DEFAULT_PINNED_TOOLS;
+  return {
+    anthropic: {
+      contextManagement: {
+        edits: [
+          {
+            type: "clear_tool_uses_20250919",
+            trigger: { type: "input_tokens", value: options.triggerTokens ?? 40_000 },
+            keep: { type: "tool_uses", value: options.keepToolUses ?? 6 },
+            // Results only; the tool_use inputs stay visible so the model still
+            // remembers what it asked for.
+            clearToolInputs: false,
+            ...(excludeTools.length > 0 ? { excludeTools: [...excludeTools] } : {}),
+          },
+        ],
+      },
+      anthropicBeta: ["context-management-2025-06-27"],
+    },
+  } as Record<string, Record<string, unknown>>;
+};

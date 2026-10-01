@@ -90,7 +90,30 @@ const run = runAgent({ model, prompt, system, tools, cacheProvider: "anthropic",
 
 `cacheProvider` is opt-in rather than detected from the model, because a marker sent to a provider that ignores it is wasted work at best. It applies to `anthropic` and `openrouter`.
 
-This only *marks* the prefix. It never rewrites earlier content, which matters: editing a prior `tool_result` invalidates the thinking-block signatures Anthropic binds to that prefix, and hard-fails the request. Trimming transcript content is therefore deliberately not done here.
+This only *marks* the prefix. It never rewrites earlier content, which matters: editing a prior `tool_result` invalidates the thinking-block signatures Anthropic binds to that prefix, and hard-fails the request.
+
+### Server-side context editing
+
+For providers that support it, you can also ask the API to clear old tool results and replace them with placeholders, so a long run does not keep replaying output the agent no longer needs.
+
+```ts
+const run = runAgent({
+  model, prompt, system, tools,
+  cacheProvider: "anthropic",
+  contextEditing: {
+    triggerTokens: 40_000,
+    keepToolUses: 6,
+    excludeTools: ["read", "edit", "write"],
+  },
+});
+```
+
+Two things to know:
+
+- **Trigger well below the API's own 100k default.** The cost of a long run is the repeated replay of a growing transcript, so a run can total hundreds of thousands of input tokens while no single request ever approaches the default trigger. Default here is 40k.
+- **`excludeTools` pins what the agent needs to remember** — what it read and what it changed. Bulky, re-fetchable output (listings, greps, command output) is what gets cleared.
+
+This runs server-side, so it is not treated as a client edit and thinking-block signatures stay valid. Doing the same trimming locally is what Anthropic documents as invalid for every later thinking block.
 
 ## Budgets and compaction
 
