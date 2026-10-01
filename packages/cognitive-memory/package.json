@@ -1,6 +1,6 @@
 {
   "name": "@astracollab/cogmem",
-  "version": "0.1.0",
+  "version": "0.0.1-beta.0",
   "description": "Cognitive Memory for agents: a typed client for the service, plus the deterministic cognitive layer to run in-process. No model in the retrieval path.",
   "license": "MIT",
   "type": "module",
