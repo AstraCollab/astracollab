@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile as fsWriteFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile as fsWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -51,17 +51,32 @@ describe("coding tools (node environment)", () => {
       expect(out).toContain("2|needle line");
     });
 
-    it("pages with offset/limit and tells the model how to fetch the rest", async () => {
+    it("pages with offset/limit and names the exact next call", async () => {
+      // The notice has to carry the literal next `offset`. The previous wording
+      // ("page with offset/limit") named the parameters but not the values, and
+      // agents responded by shelling out to `sed -n '180,300p'` — paying for the
+      // same lines a second time in a form nothing could page.
       await run("write", { path: "long.txt", content: "l1\nl2\nl3\nl4\nl5\n" });
       const out = await run("read", { path: "long.txt", offset: 3, limit: 2 });
       expect(out).toContain("3|l3");
       expect(out).toContain("4|l4");
       expect(out).not.toContain("5|l5");
-      expect(out).toContain("[file has 5 lines total");
+      // Range shown, and where to resume from — both relative to this offset.
+      expect(out).toContain("lines 3-4 of 5");
+      expect(out).toContain("offset=5");
     });
 
     it("does not offer paging when the whole file was returned", async () => {
-      expect(await run("read", { path: "notes.md" })).not.toContain("page with offset/limit");
+      expect(await run("read", { path: "notes.md" })).not.toContain("truncated:");
+    });
+
+    it("does not invent a resume point when the offset is past the end", async () => {
+      // `totalLines` alone cannot distinguish "read to the end" from "started
+      // past the end"; without clamping, this would tell the model to page to a
+      // line that does not exist.
+      const out = await run("read", { path: "notes.md", offset: 9_999 });
+      expect(out).not.toContain("truncated:");
+      expect(out).not.toContain("offset=");
     });
 
     it("reports a missing file as a tool error rather than throwing", async () => {
@@ -159,13 +174,61 @@ describe("coding tools (node environment)", () => {
   });
 
   describe("grep", () => {
-    it("finds matches as path:line and reports misses", async () => {
-      expect(await run("grep", { pattern: "needle" })).toContain("notes.md:2: needle line");
+    it("returns file paths by default and reports misses", async () => {
+      // Paths-only is the default because it is ~9x cheaper on a real
+      // monorepo-wide search, and most searches are triage: the agent wants to
+      // know which files to look at, not every line of all of them.
+      const out = await run("grep", { pattern: "needle" });
+      expect(out).toContain("notes.md");
+      expect(out).not.toContain("needle line");
       expect(await run("grep", { pattern: "definitely-not-here" })).toContain("No matches");
     });
 
+    it("returns matching lines when content is asked for", async () => {
+      expect(await run("grep", { pattern: "needle", outputMode: "content" })).toContain(
+        "notes.md:2: needle line",
+      );
+    });
+
+    it("tallies per file in count mode", async () => {
+      const out = await run("grep", { pattern: "needle", outputMode: "count" });
+      expect(out).toMatch(/match(es)? in \d+ file/);
+      expect(out).toContain("notes.md");
+    });
+
+    it("names the exact call for getting the lines", async () => {
+      // Paths-only only pays off if the follow-up is obvious. When exactly one
+      // file matched, the next call is fully determined and worth spelling out.
+      const out = await run("grep", { pattern: "needle" });
+      expect(out).toContain('outputMode:"content"');
+    });
+
+    it("deduplicates a file that matched many times", async () => {
+      // A file matching 40 times is still one file to go and read.
+      await fsWriteFile(nodePath.join(dir, "many.md"), `${"needle\n".repeat(40)}`);
+      const out = await run("grep", { pattern: "needle" });
+      expect(out.match(/^many\.md$/gm)?.length).toBe(1);
+    });
+
+    it("splits the file off on the first colon only", async () => {
+      // The line number is never ambiguous; a filename may legitimately contain
+      // a colon, so splitting on the first one is the only safe direction.
+      await fsWriteFile(nodePath.join(dir, "od:d.ts"), "needle\n");
+      const out = await run("grep", { pattern: "needle" });
+      expect(out).toContain("od:d.ts");
+    });
+
+    it("caps files in the default mode and says how many were withheld", async () => {
+      for (let i = 0; i < 5; i += 1) {
+        await fsWriteFile(nodePath.join(dir, `f${i}.ts`), "needle\n");
+      }
+      const out = await run("grep", { pattern: "needle", maxResults: 2 });
+      expect(out).toContain("more files");
+      expect(out).toContain("outputMode");
+    });
+
     it("accepts a glob in path", async () => {
-      const out = await run("grep", { pattern: "needle", path: "*.md" });
+      const out = await run("grep", { pattern: "needle", path: "*.md", outputMode: "content" });
       expect(out).toContain("notes.md:2");
       expect(out).not.toContain(".env");
     });
@@ -173,20 +236,48 @@ describe("coding tools (node environment)", () => {
     it("opts into dotfiles with includeHidden", async () => {
       await fsWriteFile(nodePath.join(dir, ".env"), "SECRET=needle\n");
       expect(await run("grep", { pattern: "needle" })).not.toContain(".env");
-      expect(await run("grep", { pattern: "needle", includeHidden: true })).toContain(".env:1");
+      expect(await run("grep", { pattern: "needle", includeHidden: true })).toContain(".env");
     });
   });
 
   describe("workspace containment", () => {
     it("refuses to read or search outside the root", async () => {
-      expect(await run("read", { path: "../outside.txt" })).toContain("escapes workspace root");
-      expect(await run("grep", { pattern: "x", path: "../../" })).toContain("escapes workspace root");
+      expect(await run("read", { path: "../outside.txt" })).toContain("outside the workspace root");
+      expect(await run("grep", { pattern: "x", path: "../../" })).toContain("outside the workspace root");
     });
 
     it("refuses to write outside the root", async () => {
       await expect(run("write", { path: "../evil.ts", content: "pwned" })).rejects.toThrow(
-        /escapes workspace root/,
+        /outside the workspace root/,
       );
+    });
+
+    it("says what to do instead, rather than only what went wrong", async () => {
+      // Two measured runs lost a step here: the agent called `read` on a sibling
+      // package, was told only that the path escaped, and then spent several
+      // steps shelling out to `cd ../..` to find its way around a fence it had
+      // never been told about. A bare refusal gives the model nothing to act on.
+      const message = await run("read", { path: "../outside.txt" });
+      // Names the root, so the model can re-address the path from it.
+      expect(message).toContain(dir);
+      // Says `..` is the wrong approach rather than leaving that as a guess.
+      expect(message).toContain("rather than with \"..\"");
+      // And is honest that bash is not fenced, so it does not go looking for a
+      // path that "cannot possibly work".
+      expect(message).toContain("bash is not confined");
+    });
+
+    it("distinguishes a symlink escape from a plain one", async () => {
+      // Different cause, different fix: no amount of re-addressing helps a path
+      // that leaves the root through a symlink.
+      const outside = await mkdtemp(nodePath.join(tmpdir(), "nah-outside-"));
+      try {
+        await fsWriteFile(nodePath.join(outside, "secret.txt"), "s3cret");
+        await symlink(nodePath.join(outside, "secret.txt"), nodePath.join(dir, "link.txt"));
+        expect(await run("read", { path: "link.txt" })).toContain("through a symlink");
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
     });
   });
 

@@ -1,0 +1,53 @@
+{
+  "name": "cognitive-memory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cognitive Memory \u2014 a memory service for LLM agents. Deterministic four-tier memory exposed as a credentialed storage layer.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:studio": "drizzle-kit studio",
+    "auth:generate": "tsx scripts/generate-auth-schema.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "smoke:http": "tsx scripts/smoke-http.ts",
+    "measure": "tsx scripts/measure.ts"
+  },
+  "dependencies": {
+    "@effect/ai-openai": "4.0.0",
+    "better-auth": "1.7.7",
+    "better-sqlite3": "13.0.3",
+    "drizzle-orm": "0.45.3",
+    "effect": "4.0.0",
+    "next": "16.3.8",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "packageManager": "pnpm@10.13.1",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "@astracollab/cogmem": "workspace:*",
+    "@better-auth/cli": "1.4.22",
+    "@effect/vitest": "4.0.0",
+    "@tailwindcss/postcss": "^4",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "drizzle-kit": "^0.31.11",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.8",
+    "tailwindcss": "^4",
+    "tsx": "^4.20.6",
+    "typescript": "^5",
+    "vitest": "^3.2.4"
+  }
+}

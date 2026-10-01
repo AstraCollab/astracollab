@@ -45,7 +45,20 @@ export type OutlineOptions = {
   maxFiles?: number;
 };
 
-const DEFAULT_MAX_ENTRIES = 400;
+/**
+ * Entries returned when the caller does not ask for a specific number.
+ *
+ * Sized from measurement rather than taste: on a 5,800-line package the full map
+ * runs ~6,200 tokens, which is more than every file the agent went on to read
+ * individually. At 120 it is ~2,100 — enough to orient, cheap enough to call
+ * speculatively.
+ *
+ * A default, not a ceiling: `maxEntries` still overrides it up to
+ * `HARD_MAX_ENTRIES`, so an agent that genuinely needs the whole map can ask.
+ */
+const DEFAULT_MAX_ENTRIES = 120;
+/** Ceiling for an explicit `maxEntries`. Matches the schema's own maximum. */
+const HARD_MAX_ENTRIES = 2000;
 const DEFAULT_MAX_FILES = 400;
 
 /** Collect exported signatures from one file's source. */
@@ -94,11 +107,22 @@ export const createOutlineTool = (env: ToolEnvironment, options: OutlineOptions 
     inputSchema: z.object({
       path: z.string().optional().describe("Directory or file to map (default: workspace root)"),
       query: z.string().optional().describe("Optional terms; matches are ranked to the top"),
-      maxEntries: z.number().int().min(1).max(2000).optional().describe(`Max signatures (default ${DEFAULT_MAX_ENTRIES})`),
+      maxEntries: z
+        .number()
+        .int()
+        .min(1)
+        .max(HARD_MAX_ENTRIES)
+        .optional()
+        .describe(
+          `Max signatures returned (default ${DEFAULT_MAX_ENTRIES}, max ${HARD_MAX_ENTRIES}). Raise it when the map is truncated and you need the rest.`,
+        ),
       includeHidden: z.boolean().optional().describe("Include dot-directories (default false)"),
     }),
     execute: async ({ path, query, maxEntries, includeHidden }) => {
-      const cap = Math.min(maxEntries ?? DEFAULT_MAX_ENTRIES, DEFAULT_MAX_ENTRIES);
+      const cap = Math.min(
+        Math.max(1, Math.floor(maxEntries ?? DEFAULT_MAX_ENTRIES)),
+        HARD_MAX_ENTRIES,
+      );
       const fileCap = options.maxFiles ?? DEFAULT_MAX_FILES;
       const found: Signature[] = [];
       const seen = new Set<string>();
@@ -160,9 +184,17 @@ export const createOutlineTool = (env: ToolEnvironment, options: OutlineOptions 
       const ranked = rank(found, query ?? "").slice(0, cap);
       const lines = ranked.map((s) => `${s.file}:${s.line}  ${s.text}`);
       const byFile = new Set(ranked.map((s) => s.file)).size;
+      /**
+       * Name the call that recovers the rest, rather than saying "narrow".
+       *
+       * `query` used to be suggested here, but it only *ranks* — it reorders the
+       * same entry set and returns the same volume, so following that advice
+       * costs another full map and changes nothing. `path` is the lever that
+       * actually reduces scope; `maxEntries` is the one that returns more.
+       */
       const note =
         found.length > ranked.length
-          ? `\n[${found.length - ranked.length} more signatures omitted; narrow with path or query]`
+          ? `\n[${found.length - ranked.length} more signatures available. To see them: outline with maxEntries=${cap * 2}. To see fewer: outline with path set to a specific directory.]`
           : "";
       const footer = scanned >= fileCap ? `\n[stopped after ${fileCap} files]` : "";
       return `${ranked.length} signatures across ${byFile} files (${scanned} files scanned):\n${lines.join("\n")}${note}${footer}\n\nRead only the ranges you need.`;

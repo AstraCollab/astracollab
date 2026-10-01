@@ -3,23 +3,35 @@
  *
  * Every model step replays the transcript, so a large result is paid for again on
  * every later step. But a cap is only a saving if the agent does not go and
- * recover what was cut.
+ * recover what the cut removed.
  *
  * `read` is truncated aggressively: when it does cut, the fix is paging with
  * `offset`/`limit`, which fetches *different* lines, so the truncated bytes are
  * never re-requested.
  *
- * `bash` is deliberately left roomy. Its truncation notice tells the agent to
- * re-run the command with `| tail -n N`, which pays for the same output twice.
- * A live audit run cut at 120 lines did exactly that and cost more than the
- * original. An agent doing real investigation needs whole command output.
+ * `bash` is the hard case, because its output cannot be paged — there is no
+ * offset. A cut at 120 lines once caused the agent to re-run the whole command
+ * piped to `| tail -n N`, paying for the identical output twice and costing more
+ * than the original (noted in an audit run; that is why it used to sit at 40k).
+ *
+ * So the cap is set where the reference implementation sets it — 30k characters
+ * for a successful command — and the failure path is much tighter at 10k, because
+ * a failing command is the one whose output nobody needs in full. What changed
+ * instead of the cap is the notice: it no longer invites a re-run, because that
+ * was the actual mechanism of the regression.
+ *
+ * `grep` defaults to file paths rather than matching lines, which is worth more
+ * than any of these caps on an exploratory workload.
  */
 export const DEFAULT_CAPS = {
   read: { maxLines: 250, maxChars: 20_000 },
   list: { maxLines: 350, maxChars: 14_000 },
-  bash: { maxLines: 400, maxChars: 40_000 },
+  /** Successful command. */
+  bash: { maxLines: 400, maxChars: 30_000 },
+  /** Non-zero exit. Errors live at the end, so this is a tail. */
+  bashFailure: { maxLines: 120, maxChars: 10_000 },
   grep: { maxMatches: 60, maxPerFile: 30, lineMaxChars: 200 },
-  glob: { maxMatches: 200 },
+  glob: { maxMatches: 100 },
 } as const;
 
 export type OutputCaps = typeof DEFAULT_CAPS;
@@ -84,12 +96,19 @@ export const capTail = (
   return `[output truncated — ${totalLines} lines total, showing the last ${shown}. ${hint}]\n\n${out}`;
 };
 
-/** Cap a full file body into `offset`/`limit` line windows with 1-based numbers. */
+/**
+ * Cap a full file body into `offset`/`limit` line windows with 1-based numbers.
+ *
+ * Also returns the window that was actually covered (`start`..`end`), because
+ * the caller has to tell the model where to resume and cannot work that out
+ * from `totalLines` alone — a read that started at line 180 covers a different
+ * range from one that started at line 1.
+ */
 export const sliceFileLines = (
   text: string,
   offset?: number,
   limit?: number,
-): { body: string; totalLines: number } => {
+): { body: string; totalLines: number; start: number; end: number } => {
   const lines = toLines(text);
   const start = offset !== undefined && offset > 1 ? Math.floor(offset) : 1;
   const cappedLimit = Math.min(limit ?? DEFAULT_CAPS.read.maxLines, DEFAULT_CAPS.read.maxLines);
@@ -97,5 +116,9 @@ export const sliceFileLines = (
   return {
     body: slice.map((line, i) => `${start + i}|${line}`).join("\n"),
     totalLines: lines.length,
+    start,
+    // Clamped to the real file: an offset past EOF must not invite a resume
+    // point beyond the end.
+    end: Math.min(start - 1 + slice.length, lines.length),
   };
 };

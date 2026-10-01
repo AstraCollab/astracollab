@@ -96,12 +96,98 @@ const DATA: SidebarData = {
   inputTokens: 84_200,
   outputTokens: 3_100,
   totalTokens: 87_300,
+  cacheReadTokens: 1_840_000,
+  cacheWriteTokens: 40_000,
+  cacheHitRate: 0.94,
+  spendUsd: 0.61,
+  spendLimitUsd: 2,
   turns: 12,
   permissions: "yolo",
   providerStatus: null,
   undoDepth: 2,
   planSteps: 4,
+  workspaceRoot: null,
 };
+
+describe("workspace root", () => {
+  const at = (over: Partial<SidebarData>) => strip(formatSidebar({ ...DATA, ...over }, 60).join("\n"));
+
+  it("shows the root when it differs from the working directory", () => {
+    // In a monorepo the root is usually one level up. An agent refused a sibling
+    // package should be able to see why without having to ask.
+    expect(at({ workspaceRoot: "/Users/x/repo" })).toContain("root …/x/repo");
+  });
+
+  it("stays quiet when the root is the working directory", () => {
+    expect(at({ workspaceRoot: null })).not.toContain("root");
+  });
+});
+
+describe("cache hit rate", () => {
+  const at = (over: Partial<SidebarData>) => strip(formatSidebar({ ...DATA, ...over }, 60).join("\n"));
+
+  it("shows the rate once there is enough input for it to mean anything", () => {
+    expect(at({})).toContain("94% cached");
+  });
+
+  it("stays quiet on turn one, where the rate is legitimately zero", () => {
+    // The first request of a run is nearly all cache *write*. Rendering "0%" in
+    // red before any read is possible would be a false alarm.
+    expect(at({ cacheHitRate: 0, cacheReadTokens: 0, inputTokens: 1_500 })).not.toContain("cached");
+  });
+
+  it("stays quiet below the volume threshold", () => {
+    expect(
+      at({ cacheHitRate: 0.5, cacheReadTokens: 100, cacheWriteTokens: 0, inputTokens: 100 }),
+    ).not.toContain("cached");
+  });
+
+  it("surfaces a healthy rate plainly", () => {
+    expect(at({ cacheHitRate: 0.94 })).toContain("94% cached");
+  });
+
+  it("shows a poor rate too — that is the whole point of the readout", () => {
+    // Below ~80% the run rewrites its prefix rather than reading it back, costing
+    // roughly 10x per step. Nothing else on this panel reveals that.
+    expect(at({ cacheHitRate: 0.12 })).toContain("12% cached");
+  });
+
+  it("does not crash when the cache counters are missing", () => {
+    // The panel renders every frame and these come from a session file that may
+    // predate the fields. A NaN here would throw inside the render loop.
+    const broken = strip(
+      formatSidebar(
+        {
+          ...DATA,
+          cacheReadTokens: undefined as unknown as number,
+          cacheWriteTokens: undefined as unknown as number,
+          cacheHitRate: Number.NaN,
+          spendUsd: undefined as unknown as number,
+        },
+        60,
+      ).join("\n"),
+    );
+    expect(broken).toContain("12.4k used");
+    expect(broken).not.toContain("NaN");
+  });
+});
+
+describe("spend against the rail", () => {
+  const at = (over: Partial<SidebarData>) => strip(formatSidebar({ ...DATA, ...over }, 60).join("\n"));
+
+  it("shows spend against the ceiling", () => {
+    // A budget nobody can see is a budget that looks arbitrary when it fires.
+    expect(at({})).toContain("$0.610 / $2.00");
+  });
+
+  it("shows spend alone when no ceiling applies", () => {
+    expect(at({ spendLimitUsd: null })).toContain("$0.610 spent");
+  });
+
+  it("keeps three decimals, because a cheap turn must not read as zero", () => {
+    expect(at({ spendUsd: 0.0824 })).toContain("$0.082");
+  });
+});
 
 describe("formatSidebar", () => {
   const text = (data: Partial<SidebarData> = {}) =>

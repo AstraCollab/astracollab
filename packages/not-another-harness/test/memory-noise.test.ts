@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CognitiveMemory, isInteractionScoped } from "../src/cognitive-memory/cognitive-memory.js";
+import { CognitiveMemory, isInteractionScoped } from "../src/cognitive-memory/index.js";
 
 const learn = async (contents: string[], turns = 3): Promise<string[]> => {
   const m = new CognitiveMemory({

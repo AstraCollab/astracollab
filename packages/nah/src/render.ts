@@ -39,6 +39,16 @@ export const c = {
    * colour. Tinting the surface is the way to mark a failure here.
    */
   backgroundError: wrap("\u001b[38;5;255;48;5;52m", "\u001b[0m"),
+  /**
+   * Approval fill: near-white on a dark amber, the third surface in the same
+   * family as `background` and `backgroundError`.
+   *
+   * Amber rather than bright yellow because the row carries near-white text, and
+   * the alternatives are either unreadable (white on yellow) or invisible (the
+   * `c.yellow("!")` marker that used to be the only attention cue disappears the
+   * moment the surface behind it is yellow).
+   */
+  backgroundWarn: wrap("\u001b[38;5;255;48;5;94m", "\u001b[0m"),
   magenta: wrap("[35m", "[0m"),
 };
 
