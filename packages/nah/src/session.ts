@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage } from "ai";
+import { detectMemoryTriggers } from "./memory-injection.js";
 import {
   createCodingTools,
   createJsonlSessionStore,
@@ -50,6 +51,8 @@ export type SessionState = {
    * it in raw mode, and the unanswered prompt hangs the whole run.
    */
   setApprovalPrompt?: (prompt: ApprovalPrompt | null) => void;
+  /** Rolling record of what memory injected into each turn's prompt. */
+  memoryInjectionLog?: import("./memory-injection.js").MemoryInjectionLog;
   /** Display label for the working dir (e.g. remote sandbox name). */
   sandboxCwd?: string;
   /** Tear down a remote sandbox (no-op for local sessions). */
@@ -126,6 +129,16 @@ export const runTurn = (
   let activeStep: ActiveStepSnapshot | null = null;
   state.activeFileChanges = fileChanges;
   state.activeShellCommands = null;
+  // Memory injection is decided here, not by the model: an identifier the user
+  // named that is absent from the transcript earns its memory's full body, and
+  // everything else appears as a one-line index entry.
+  const forcedMemory = detectMemoryTriggers(state.cognitiveMemory, prompt, state.messages);
+  const injection = state.cognitiveMemory
+    ? state.cognitiveMemory.planInjection({ userMessage: prompt, forceFull: forcedMemory })
+    : { text: "", entries: [], totalTokens: 0, truncated: false };
+  const injectionText = injection.text;
+  state.memoryInjectionLog?.record(injection);
+
   const taskContext = [
     "Task tracking: For substantial multi-step work, call task_ledger discover_checks before editing. Save a plan using exact discovered executable acceptance commands. Update progress as you work, run each check through task_ledger run_check, repair failures and rerun, and mark completed only when all steps are complete and every check has an actual zero exit code. The task_ledger tool result is the latest source of task status during this run.",
     state.tools.delegate_task
@@ -134,7 +147,7 @@ export const runTurn = (
     state.taskLedger && state.taskLedger.status !== "completed"
       ? `Current durable task ledger:\n${formatTaskLedger(state.taskLedger)}`
       : "",
-    state.cognitiveMemory ? state.cognitiveMemory.getPromptContext(prompt) : "",
+    injectionText,
   ].filter(Boolean).join("\n\n");
   const run = runAgent({
     model: state.model.model,

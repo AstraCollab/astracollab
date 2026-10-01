@@ -16,6 +16,7 @@ import { renderCommandHelp } from "./commands.js";
 import { listSessionIds } from "./context.js";
 import { createTurnExtractor, prepareMemory } from "./memory.js";
 import { createRecallTool } from "./memory-tool.js";
+import { MemoryInjectionLog } from "./memory-injection.js";
 import { runTurn, type SessionState, type StepRecovery } from "./session.js";
 import { createTaskLedgerTool, formatTaskLedger } from "./task-ledger.js";
 import { createDelegationTool } from "./delegation.js";
@@ -688,6 +689,31 @@ export const handleSlashCommand = async (
       out.write(`  L2 Warm store items: ${snapshot.l2.length}\n`);
       out.write(`  L3 Cold archive items: ${snapshot.l3.length}\n\n`);
 
+      // What memory actually cost each turn, and why. There is no public
+      // benchmark for pre-inject vs on-demand here, so this is the signal for
+      // tuning the budget and the trigger threshold.
+      const log = state.memoryInjectionLog;
+      if (log && log.entries.length > 0) {
+        const summary = log.summary();
+        out.write(`${c.bold("Prompt injection log")} ${c.dim("(what memory added, and why)")}\n`);
+        out.write(
+          `  ${summary.turns} turn(s) · avg ${summary.avgTokens} tokens · max ${summary.maxTokens}` +
+            `${summary.truncatedTurns > 0 ? c.yellow(` · ${summary.truncatedTurns} truncated by budget`) : ""}\n`,
+        );
+        const reasons = Object.entries(summary.byReason)
+          .map(([reason, count]) => `${reason}=${count}`)
+          .join("  ");
+        if (reasons) out.write(`  ${c.dim(reasons)}\n`);
+        for (const turn of log.entries.slice(-5)) {
+          out.write(`  ${c.dim(`turn ${turn.turn}:`)} ${turn.totalTokens} tokens\n`);
+          for (const item of turn.items) {
+            const body = item.hasBody ? c.green("body") : c.dim("index");
+            out.write(`    ${body} ${c.dim(`[${item.reason}/${item.tier}]`)} ${item.gist.slice(0, 70)}\n`);
+          }
+        }
+        out.write("\n");
+      }
+
       if (snapshot.l1.length > 0) {
         out.write(`${c.bold("L1 Pre-staged Hot Cache:")}\n`);
         for (const item of snapshot.l1) {
@@ -1105,6 +1131,7 @@ export const makeState = async (opts: {
     sandboxCwd: cwdLabel,
     destroySandbox,
     cognitiveMemory: prepared.memory,
+    memoryInjectionLog: new MemoryInjectionLog(),
   };
   model?.setStatusHandler((status) => { state.providerStatus = status; });
   const approve = createApprover(() => state.permissions);

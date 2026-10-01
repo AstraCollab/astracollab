@@ -159,6 +159,30 @@ nah --cwd /path/to/project "Explain this code"
 
 Print and JSON modes allow mutating tools by default because they cannot prompt interactively. Pass `--permissions readonly` when a non-interactive run must not make changes.
 
+## Memory
+
+Nah keeps a small cognitive memory per working directory, so facts you teach it
+survive into later sessions.
+
+- Facts, preferences and conventions are extracted from each turn with the same
+  model that runs the turn, plus deterministic pattern matching so a plainly
+  stated fact is captured even if the model refuses or hedges.
+- Memories live in `~/.nah/memory/<cwd-hash>.json` and reload on the next run.
+- Each turn gets a one-line **index** of remembered items. A full body is only
+  spent when a deterministic trigger earns it: you name an identifier (URL, path,
+  code, camelCase token) that is not in the visible transcript and a memory
+  matches it. This is the index/body split Claude Code and Letta use, so recall
+  stays cheap and the prompt is not stuffed with distractors.
+- The agent also has a `recall` tool to search memory on demand when the index
+  is not enough. Ranking is deterministic and in-process, so recall does not
+  depend on which model you use.
+- `/memory` shows what was injected on each turn, why, and at what token cost.
+- Nothing is learned from a turn where you asked a question, and paraphrases of a
+  known fact are discarded rather than duplicated.
+
+`NAH_MEMORY_NOPERSIST=1` disables persistence; `NAH_MEMORY_DEBUG=1` traces
+extraction and promotion per turn.
+
 ## Run from the monorepo
 
 ```sh

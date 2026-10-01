@@ -14,6 +14,7 @@ import { resolveModel } from "./src/model.js";
 import { runTurn, type SessionState } from "./src/session.js";
 import { createTurnExtractor, prepareMemory, memoryFileFor, setMemoryPersistedHook } from "./src/memory.js";
 import { createRecallTool } from "./src/memory-tool.js";
+import { MemoryInjectionLog } from "./src/memory-injection.js";
 
 const MODEL = process.env.NAH_EVAL_MODEL ?? "openrouter:stealth/space-bunny-alpha";
 const CWD = process.env.NAH_EVAL_CWD ?? process.cwd();
@@ -93,6 +94,7 @@ const state = {
   turns: 0,
   permissions: "yolo",
   cognitiveMemory: prepared.memory,
+  memoryInjectionLog: new MemoryInjectionLog(),
 } as unknown as SessionState;
 
 const ask = async (prompt: string, label: string) => {
@@ -174,6 +176,18 @@ const checks: Array<[string, string, boolean]> = [
   ["kebab-case preference", conventionAnswer, /kebab/i.test(conventionAnswer)],
   ["build id (tool-only path)", indirectAnswer, indirectAnswer.includes("ZQ7X4M2K")],
 ];
+
+console.log("\n########## INJECTION LOG ##########");
+const summary = state.memoryInjectionLog!.summary();
+console.log(
+  `  ${summary.turns} turns · avg ${summary.avgTokens} tokens · max ${summary.maxTokens} · reasons ${JSON.stringify(summary.byReason)}`,
+);
+for (const turn of state.memoryInjectionLog!.entries.slice(-3)) {
+  console.log(`  turn ${turn.turn}: ${turn.totalTokens} tokens`);
+  for (const item of turn.items) {
+    console.log(`    ${item.hasBody ? "BODY" : "index"} [${item.reason}] ${item.gist.slice(0, 60)}`);
+  }
+}
 
 console.log("\n########## VERDICT (empty transcript, so only memory can answer) ##########");
 for (const [name, answer, ok] of checks) {
