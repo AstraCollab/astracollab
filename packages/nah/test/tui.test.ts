@@ -234,6 +234,26 @@ describe("alternate-screen host layout", () => {
     return strip(frames[frames.length - 1] ?? "");
   };
 
+  /**
+   * Wait for a condition instead of guessing a sleep.
+   *
+   * These renders are driven by a streamed model response, so a fixed delay is
+   * a coin flip: long enough and the test is slow, short enough and it reads a
+   * half-painted frame and fails intermittently. Returns whether it settled, so
+   * a genuine failure still fails on the assertion rather than hanging.
+   */
+  const waitFor = async (
+    predicate: () => boolean,
+    timeoutMs = 10_000
+  ): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return predicate();
+  };
+
   it("keeps reporting file changes on later turns", () => {
     // `activeFileChanges` is replaced with a fresh array each turn. A counter
     // carried across turns would exceed the new array and silently stop.
@@ -279,18 +299,20 @@ describe("alternate-screen host layout", () => {
     const state = makeState(model);
 
     const host = startTuiHost({ state, terminal });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => lastFrame(terminal).length > 0);
 
     terminal.type("find the bug");
     terminal.enter();
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    // The turn has started and the model call is parked on the gate.
+    await waitFor(() => strip(terminal.written).includes("find the bug"));
 
     // Type a correction but do NOT submit it — it must sit in the editor.
     terminal.type("actually use TypeScript");
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await waitFor(() => lastFrame(terminal).includes("actually use TypeScript"));
 
     release();
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    // The turn finishes and paints its summary.
+    await waitFor(() => lastFrame(terminal).includes("completed"));
 
     const frame = lastFrame(terminal);
     // The transcript renders its newest content (the scroll view follows the
