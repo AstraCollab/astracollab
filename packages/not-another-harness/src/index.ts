@@ -17,6 +17,7 @@ export {
   extractIdentifiers,
   relevanceTokens,
   overlapScore,
+  isInteractionScoped,
   runFastGate,
   extractDomains,
   createModelArbiter,

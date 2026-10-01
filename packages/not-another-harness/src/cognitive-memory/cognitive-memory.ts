@@ -61,6 +61,18 @@ const PROMOTE_THRESHOLD = 0.12;
 /** L1 only starts evicting past this size. */
 const DEMOTE_ABOVE = 5;
 
+/** Overlap at which two memories are considered the same fact. */
+const DUPLICATE_THRESHOLD = 0.65;
+
+/** Words that appear in every restatement and so carry no identity. */
+const FILLER_TOKENS = new Set([
+  "this", "that", "these", "those", "there", "here", "with", "from", "into", "must",
+  "should", "always", "never", "under", "over", "about", "after", "before", "when",
+  "where", "which", "what", "your", "their", "them", "they", "then", "than", "also",
+  "just", "only", "each", "every", "some", "such", "very", "more", "most", "same",
+  "file", "files", "name", "names", "project", "repository", "repo", "note",
+]);
+
 
 /** Rough token cost of a string. */
 const estimateTokens = (value: string): number => Math.ceil(value.length / 4);
@@ -94,6 +106,30 @@ const gistOf = (item: MemoryItem): string => {
   const trimmed = first.trim();
   return trimmed.length > 90 ? `${trimmed.slice(0, 90)}…` : trimmed;
 };
+
+
+/**
+ * Instructions about *this conversation* rather than durable facts about the
+ * project. "Do not verify the staging build ID against the repository" and "Just
+ * remember this" describe how to behave right now, so storing them produces
+ * noise that later looks like a project constraint.
+ *
+ * Deliberately explicit patterns rather than a "is this specific enough?"
+ * heuristic — over-filtering would silently lose real memories, which is the
+ * worse failure.
+ */
+const INTERACTION_SCOPED = [
+  /\b(?:do not|don'?t|never|no need to)\s+(?:verify|check|confirm|look\s?up|search|investigate|browse|resolve)\b/i,
+  /\bjust\s+(?:remember|note|acknowledge|retain|treat)\b/i,
+  /\b(?:held|noted|stored|remembered)\s+(?:in|for)\s+(?:this|the)\s+conversation\b/i,
+  /\bnot\s+verified\b/i,
+  /\bwithout\s+verifying\b/i,
+  /\bfor\s+this\s+(?:conversation|session|turn|reply|response)\s+only\b/i,
+  /^(?:ok|okay|noted|got it|sure|thanks)\b[.!]?$/i,
+];
+
+export const isInteractionScoped = (content: string): boolean =>
+  INTERACTION_SCOPED.some((pattern) => pattern.test(content));
 
 export class CognitiveMemory {
   // L0: Pinned core state (identity, self-model, active tensions)
@@ -426,6 +462,7 @@ export class CognitiveMemory {
     for (const memory of result.memories) {
       const content = memory.content.trim();
       if (content.length < 8 || content.length > 600) continue;
+      if (isInteractionScoped(content)) continue;
       if (this.hasContent(content)) continue;
       const now = Date.now();
       const id = `mem-${now}-${Math.random().toString(36).slice(2, 7)}`;
@@ -468,22 +505,30 @@ export class CognitiveMemory {
   /**
    * True when an equivalent statement is already stored in any tier.
    *
-   * Matching on the normalised *string* missed paraphrases, so the tier filled
-   * with near-copies of itself ("The staging build ID is X" next to "The staging
-   * build ID X must be treated as user-provided"). Comparing the distinctive
-   * token *sets* catches those: if everything memorable about a statement is
-   * already present in a stored one, it is the same fact.
+   * Two things this had to learn. Matching normalised *strings* missed
+   * paraphrases outright. Then matching distinctive token *sets* still missed
+   * them, because the deterministic extractor's own label ("User requirement
+   * (always): …") was being compared as if it were part of the fact — stripping
+   * those labels first, and loosening the threshold, is what finally collapsed
+   * "always use kebab-case" and "file names must use kebab-case" into one entry.
    */
   private hasContent(content: string): boolean {
-    const words = (value: string): string[] =>
+    // Labels the extractors prepend describe provenance, not identity.
+    const stripLabel = (value: string): string =>
       value
-        .toLowerCase()
-        .replace(/['']/g, "")
-        .split(/[^a-z0-9]+/)
-        .filter(Boolean);
-    // Identifiers, numbers and codes carry the identity of a fact; prose does not.
+        .replace(/^\s*user (?:requirement \(\w+\)|provided url|referenced path)\s*:?\s*/i, "")
+        .trim();
     const distinctive = (value: string): Set<string> =>
-      new Set(words(value).filter((w) => /\d/.test(w) || w.length >= 4));
+      new Set(
+        stripLabel(value)
+          .toLowerCase()
+          .replace(/['']/g, "")
+          .split(/[^a-z0-9]+/)
+          .filter(Boolean)
+          // Identifiers, numbers and codes carry a fact's identity; filler does not.
+          .filter((w) => /\d/.test(w) || w.length >= 4)
+          .filter((w) => !FILLER_TOKENS.has(w)),
+      );
 
     const needle = distinctive(content);
     if (needle.size === 0) return false;
@@ -497,9 +542,9 @@ export class CognitiveMemory {
       if (have.size === 0) return false;
       let shared = 0;
       for (const word of needle) if (have.has(word)) shared += 1;
-      const smaller = Math.min(needle.size, have.size);
-      // One side's distinctive vocabulary is a subset of the other's.
-      return shared / smaller >= 0.8;
+      // Compare against the smaller side so a terse restatement of a verbose
+      // memory still registers as the same fact.
+      return shared / Math.min(needle.size, have.size) >= DUPLICATE_THRESHOLD;
     });
   }
 
@@ -742,6 +787,7 @@ export class CognitiveMemory {
     if (preferenceMatch && preferenceMatch[1]) {
       const id = `mem-pref-${Date.now()}`;
       const statement = preferenceMatch[1].trim();
+      if (isInteractionScoped(`User preference: ${statement}`)) return;
       this.addMemory({
         id,
         content: `User preference: ${statement}`,

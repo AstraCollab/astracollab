@@ -3,6 +3,7 @@ export {
   extractIdentifiers,
   relevanceTokens,
   overlapScore,
+  isInteractionScoped,
 } from "./cognitive-memory.js";
 export { runFastGate, extractDomains, type FastGateResult } from "./fast-gate.js";
 export { createModelArbiter, type CreateModelArbiterOptions } from "./arbiter.js";
