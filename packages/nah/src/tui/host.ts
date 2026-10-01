@@ -7,8 +7,10 @@
  * land on the line the user is typing. Submitting while a turn runs steers it
  * instead of queueing a new one.
  */
+import * as nodePath from "node:path";
 import {
   Editor,
+  HStack,
   Key,
   ScrollView,
   Text,
@@ -23,11 +25,12 @@ import { resolveModel } from "../model.js";
 import { saveLastModel } from "../model-preferences.js";
 import { runTurn, type SessionState } from "../session.js";
 import { handleSlashCommand, setActiveModel, setupProvider } from "../repl.js";
-import { withFileInclusions } from "../context.js";
+import { defaultSessionFile, withFileInclusions } from "../context.js";
 import { c } from "../render.js";
 import { exclusiveCommands, renderCommandHelp, SLASH_COMMANDS } from "../commands.js";
 
 import { TurnOutput } from "./output.js";
+import { ContextSidebar, type SidebarData } from "./sidebar.js";
 import { createClipboardWriter } from "./clipboard.js";
 import { createSlashCommandProvider } from "./slash-autocomplete.js";
 import { editorTheme } from "./theme.js";
@@ -94,8 +97,71 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
   const editor = new Editor(screen, editorTheme, { paddingX: 1 });
 
   const scroll = new ScrollView(output, { follow: "end", primary: true });
-  const root = new VStack([scroll, status, editor]);
+
+  /**
+   * Session state, read fresh on every repaint.
+   *
+   * A snapshot would need invalidating from every mutation site; a getter costs
+   * one object literal per frame and cannot go stale.
+   */
+  const sidebarData = (): SidebarData => {
+    const base = state.sessionBasePath ?? defaultSessionFile(state.cwd);
+    return {
+      // The session file's stem is its id: `/resume` and the files on disk both
+      // key off it, so printing it is what makes a bug report actionable.
+      sessionId: nodePath.basename(base, ".jsonl"),
+      cwd: state.sandboxCwd ?? state.cwd,
+      modelProvider: state.model?.provider ?? "none",
+      modelId: state.model?.modelId ?? "not configured",
+      contextUsedTokens: state.contextUsedTokens,
+      contextEstimated: state.contextUsageEstimated,
+      inputTokens: state.totalUsage.inputTokens,
+      outputTokens: state.totalUsage.outputTokens,
+      totalTokens: state.totalUsage.totalTokens,
+      turns: state.turns,
+      permissions: state.permissions,
+      providerStatus: state.providerStatus,
+      undoDepth: state.undoHistory.length,
+      planSteps: state.taskLedger?.steps?.length ?? null,
+    };
+  };
+  const sidebar = new ContextSidebar(sidebarData, () => terminal.rows);
+
+  // Below 96 columns the transcript cannot hold a line of prose beside a panel,
+  // so the sidebar is dropped rather than squeezing the editor to nothing.
+  const SIDEBAR_WIDTH = 30;
+  const withSidebar = (width: number): boolean => width >= 96;
+  let sidebarShown = withSidebar(terminal.columns);
+
+  const layoutRoot = () => {
+    const main = new VStack([scroll, status, editor]);
+    if (sidebarShown) {
+      return new HStack([
+        { component: main, grow: 1, minSize: 48 },
+        { component: sidebar, basis: SIDEBAR_WIDTH },
+      ]);
+    }
+    return main;
+  };
+  let root = layoutRoot();
   screen.setLayoutRoot(root);
+
+  /**
+   * Add or drop the panel as the terminal changes size.
+   *
+   * pi-tui owns the repaint on SIGWINCH but exposes no resize callback, so the
+   * host listens on the stream itself. Only a change of visibility rebuilds the
+   * root; a resize that leaves the decision alone is left to the layout engine,
+   * which re-allocates columns on its own.
+   */
+  const syncSidebar = () => {
+    const next = withSidebar(terminal.columns);
+    if (next === sidebarShown) return;
+    sidebarShown = next;
+    root = layoutRoot();
+    screen.setLayoutRoot(root);
+  };
+  process.stdout.on("resize", syncSidebar);
   screen.setFocus(editor);
 
   /**
@@ -425,6 +491,7 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
       screen.requestRender(true);
     });
   } finally {
+    process.stdout.off("resize", syncSidebar);
     if (run.abort) run.abort.abort();
     try {
       screen.stop();

@@ -20,6 +20,8 @@ export const c = {
   italic: wrap("\u001b[3m", "\u001b[23m"),
   strikethrough: wrap("\u001b[9m", "\u001b[29m"),
   underline: wrap("\u001b[4m", "\u001b[24m"),
+  /** Panel fill. 236 is a near-black grey that reads as a surface, not a block. */
+  background: wrap("\u001b[48;5;236m", "\u001b[49m"),
   magenta: wrap("[35m", "[0m"),
 };
 
@@ -61,6 +63,21 @@ export const renderWelcome = (opts: {
     `\u001b[${top + 9};1H`,
   ];
   return `\u001b[2J\u001b[H${lines.join("")}`;
+};
+
+/**
+ * The full terminal command behind a `bash` call, or null if this is not one.
+ *
+ * `toolLabel` clips to 50 characters because its other callers - the approval
+ * prompt, the readonly-mode notice, the readline fallback - are all single-line
+ * surfaces with no room for a block. The TUI transcript has room, so it asks
+ * for the command directly instead of unpicking a clipped label.
+ */
+export const bashCommand = (input: unknown): string | null => {
+  const args = (input ?? {}) as Record<string, unknown>;
+  if (typeof args.command !== "string") return null;
+  const command = args.command.trim();
+  return command.length > 0 ? command : null;
 };
 
 /** Tool-call → one-line label (mirrors the harness's Ui discipline). */

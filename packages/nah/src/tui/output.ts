@@ -15,7 +15,15 @@
 import { Text, type Component } from "@earendil-works/pi-tui";
 import type { HarnessEvent } from "@astracollab/not-another-harness";
 
-import { c, formatFileChange, stripAnsi, summarizeToolResult, toolLabel, type RenderableFileChange } from "../render.js";
+import {
+  bashCommand,
+  c,
+  formatFileChange,
+  stripAnsi,
+  summarizeToolResult,
+  toolLabel,
+  type RenderableFileChange,
+} from "../render.js";
 import { markdownBlock } from "./theme.js";
 
 /**
@@ -38,6 +46,24 @@ export const stripMouseReportText = (text: string): string => text.replace(MOUSE
 /** `◆ label`, with a `×N` suffix once a run of identical calls collapses. */
 const toolCallLine = (label: string, count: number): string =>
   `  ${c.cyan("◆")} ${label}${count > 1 ? c.dim(` ${"\u00d7"}${count}`) : ""}`;
+
+/**
+ * A shell command, in full, on its own background block.
+ *
+ * `toolLabel` clips a command at 50 characters, which is right for a status line
+ * and wrong for the transcript: a truncated `npm run` says nothing about which
+ * script ran, and a multi-line invocation lost its continuations entirely. The
+ * command is the most load-bearing line in a coding session, so it gets the
+ * transcript to itself rather than sharing a row with everything else.
+ *
+ * Continuation lines keep their leading `$` column blank rather than repeating
+ * the prompt, so the shape of a multi-line invocation stays readable.
+ */
+const commandBlock = (command: string, count: number): string =>
+  [
+    ...command.split("\n").map((line, index) => `  ${index === 0 ? c.cyan("$") : " "} ${line}`),
+    ...(count > 1 ? [`  ${c.dim(`\u00d7${count} identical`)}`] : []),
+  ].join("\n");
 
 type MessagePart = Record<string, unknown>;
 
@@ -159,7 +185,7 @@ export class TurnOutput implements Component {
   }
 
   /** Current run of identical consecutive tool calls, collapsed to one line. */
-  private group: { label: string; count: number; block: Text } | null = null;
+  private group: { label: string; key: string; count: number; block: SettableBlock } | null = null;
   /** Input of the most recent call, so its result can be summarised in context. */
   private groupInput: unknown = null;
 
@@ -169,7 +195,7 @@ export class TurnOutput implements Component {
         this.appendStream(event.text);
         return;
       case "tool-call":
-        this.addToolCall(toolLabel(event.toolName, event.input), event.input);
+        this.addToolCall(event.toolName, event.input);
         return;
       case "tool-result": {
         const summary = summarizeToolResult(event.toolName, this.groupInput, event.output, event.isError);
@@ -278,7 +304,7 @@ export class TurnOutput implements Component {
         }
         if (part.type === "tool-call" && typeof part.toolName === "string") {
           toolCalls += 1;
-          this.addToolCall(toolLabel(part.toolName, part.input), part.input);
+          this.addToolCall(part.toolName, part.input);
         }
       }
     }
@@ -314,21 +340,53 @@ export class TurnOutput implements Component {
    * successive bookkeeping calls used to print six near-identical lines, which
    * pushed the actual work out of view.
    */
-  private addToolCall(label: string, input: unknown): void {
+  private addToolCall(toolName: string, input: unknown): void {
     this.stream = null;
     this.streamBuffer = "";
     this.groupInput = input;
 
-    if (this.group && this.group.label === label) {
+    const label = toolLabel(toolName, input);
+    const command = toolName === "bash" ? bashCommand(input) : null;
+
+    // Keyed on the untruncated command. The display label clips at 50
+    // characters, so two genuinely different invocations that share a prefix
+    // would otherwise collapse into a single misleading `×2` line.
+    const key = command === null ? `${toolName}:${label}` : `bash:${command}`;
+    if (this.group && this.group.key === key) {
       this.group.count += 1;
-      this.group.block.setText(toolCallLine(label, this.group.count));
+      this.group.block.setText(
+        command === null ? toolCallLine(label, this.group.count) : commandBlock(command, this.group.count),
+      );
       return;
     }
-    this.group = { label, count: 1, block: this.push(toolCallLine(label, 1)) };
+
+    this.group = {
+      label,
+      key,
+      count: 1,
+      block:
+        command === null
+          ? this.push(toolCallLine(label, 1))
+          : // paddingX/paddingY 0: the block spans the pane edge to edge, so the
+            // surface reads as a panel rather than an indented quote.
+            this.pushPanel(commandBlock(command, 1)),
+    };
   }
 
   private push(text: string): Text {
     const block = new Text(text, 1, 0);
+    this.blocks.push(block);
+    return block;
+  }
+
+  /**
+   * A block painted edge to edge.
+   *
+   * pi-tui pads each line to the pane width before handing it to `bgFn`, so the
+   * function only has to wrap the padded line in the background escapes.
+   */
+  private pushPanel(text: string): SettableBlock {
+    const block = new Text(text, 0, 0, (line) => c.background(line));
     this.blocks.push(block);
     return block;
   }
