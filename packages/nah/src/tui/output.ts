@@ -58,11 +58,19 @@ const toolCallLine = (label: string, count: number): string =>
  *
  * Continuation lines keep their leading `$` column blank rather than repeating
  * the prompt, so the shape of a multi-line invocation stays readable.
+ *
+ * **No colour inside these lines.** The panel is padded to the full pane width
+ * and then composited into a narrower column beside the sidebar, which clamps
+ * the row to the terminal width. A nested SGR sequence makes the row longer in
+ * bytes than it is in columns, so the clamp cuts the trailing `\u001b[49m` off
+ * mid-escape and the background stays on for the next line - the band appeared
+ * one row too low, and the first line looked unhighlighted. Plain text keeps the
+ * row's byte length equal to its column count.
  */
 const commandBlock = (command: string, count: number): string =>
   [
-    ...command.split("\n").map((line, index) => `  ${index === 0 ? c.cyan("$") : " "} ${line}`),
-    ...(count > 1 ? [`  ${c.dim(`\u00d7${count} identical`)}`] : []),
+    ...command.split("\n").map((line, index) => `  ${index === 0 ? "$" : " "} ${line}`),
+    ...(count > 1 ? [`  \u00d7${count} identical`] : []),
   ].join("\n");
 
 type MessagePart = Record<string, unknown>;

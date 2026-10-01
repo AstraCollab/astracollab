@@ -135,6 +135,24 @@ describe("bash commands render in full on a background", () => {
     expect(stripAnsi(line)).toHaveLength(60);
   });
 
+  it("keeps nested colour out of the panel so a row cannot overflow its column", () => {
+    const output = new TurnOutput();
+    // Two calls, so the `×N identical` line is inside the panel too.
+    bash(output, "npx tsc --noEmit \\\n  && npx vite build");
+    bash(output, "npx tsc --noEmit \\\n  && npx vite build");
+
+    const panel = output.render(60).filter((line) => line.includes("\u001b[48;5;236m"));
+    // Guards against the whole test going vacuous if colour is disabled.
+    expect(panel.length).toBeGreaterThan(0);
+    for (const line of panel) {
+      const withoutFill = line.replaceAll("\u001b[48;5;236m", "").replaceAll("\u001b[49m", "");
+      // A nested SGR sequence makes the row longer in bytes than it is in
+      // columns, so the layout's width clamp cuts the closing `\u001b[49m` off
+      // mid-escape and the background bleeds onto the following line.
+      expect(withoutFill, "panel rows must not carry their own colour").not.toContain("\u001b");
+    }
+  });
+
   it("collapses identical consecutive commands but not merely similar ones", () => {
     const output = new TurnOutput();
     bash(output, "pnpm vitest run");
