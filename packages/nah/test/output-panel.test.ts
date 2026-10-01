@@ -196,6 +196,34 @@ describe("usage figures", () => {
     expect(line).toContain("31.2k in last request");
   });
 
+  it("shows the fresh/cached split the bill is built from", () => {
+    const output = new TurnOutput();
+    output.apply({
+      type: "step-finish",
+      request: { totalInputTokens: 36_600, cachedInputTokens: 34_900, cacheCreationInputTokens: 0, freshInputTokens: 1_700, hitRate: 0.95 },
+    } as never);
+    finish(output, 553_500);
+    const line = strip(output.render(100).join("\n"));
+    // "processed" overstates the bill by roughly the cache share, so the split
+    // is the part that tells the user what they are paying for.
+    expect(line).toContain("553.5k processed");
+    expect(line).toContain("1.7k fresh");
+    expect(line).toContain("34.9k cached (95%)");
+  });
+
+  it("omits the cache split when nothing was cached", () => {
+    const output = new TurnOutput();
+    output.apply({
+      type: "step-finish",
+      request: { totalInputTokens: 2_000, cachedInputTokens: 0, cacheCreationInputTokens: 0, freshInputTokens: 2_000, hitRate: 0 },
+    } as never);
+    finish(output, 4_000);
+    const line = strip(output.render(100).join("\n"));
+    expect(line).toContain("4.0k processed");
+    // Nothing cached means nothing to say about a split.
+    expect(line).not.toContain("cached");
+  });
+
   it("omits the request figure when no step has finished", () => {
     const output = new TurnOutput();
     finish(output, 1100);

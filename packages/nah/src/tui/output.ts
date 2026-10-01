@@ -192,6 +192,9 @@ export class TurnOutput implements Component {
    * can never match.
    */
   private lastRequestTokens = 0;
+  /** Cache composition of the last request, which is what billing turns on. */
+  private lastHitRate = 0;
+  private lastCachedTokens = 0;
 
   constructor(
     private readonly getFileChanges: () => RenderableFileChange[] = () => [],
@@ -250,6 +253,8 @@ export class TurnOutput implements Component {
     this.lastChanges = null;
     this.lastKind = null;
     this.lastRequestTokens = 0;
+    this.lastHitRate = 0;
+    this.lastCachedTokens = 0;
   }
 
   /** Blank line separator. */
@@ -351,6 +356,8 @@ export class TurnOutput implements Component {
         // renderer that throws on a malformed event takes the whole pane with
         // it, so the figure is treated as best-effort.
         this.lastRequestTokens = event.request?.totalInputTokens ?? 0;
+        this.lastHitRate = event.request?.hitRate ?? 0;
+        this.lastCachedTokens = event.request?.cachedInputTokens ?? 0;
         this.flushFileChanges();
         return;
       case "finish":
@@ -364,13 +371,22 @@ export class TurnOutput implements Component {
          * disagreement, so it now says what it is and carries the last
          * request's size next to it.
          */
+        const request =
+          this.lastRequestTokens > 0 ? ` · ${formatTokens(this.lastRequestTokens)} in last request` : "";
+        const fresh = Math.max(0, this.lastRequestTokens - this.lastCachedTokens);
+        // The split the invoice is actually built from: cached tokens are
+        // billed at a fraction of fresh ones, so "processed" overstates the bill
+        // by roughly the cache share. Reporting the measured split is honest;
+        // turning it into dollars needs rates we do not have for every model.
+        const cache =
+          this.lastCachedTokens > 0
+            ? ` · ${formatTokens(fresh)} fresh ${c.dim("/")} ${formatTokens(this.lastCachedTokens)} cached (${Math.round(this.lastHitRate * 100)}%)`
+            : "";
         this.addLine(
           c.dim(
-            `  ${event.reason} · ${formatTokens(event.usage.totalTokens)} processed${
-              this.lastRequestTokens > 0
-                ? ` · ${formatTokens(this.lastRequestTokens)} in last request`
-                : ""
-            }${event.usage.estimated ? " (estimated)" : ""}`,
+            `  ${event.reason} · ${formatTokens(event.usage.totalTokens)} processed${request}${cache}${
+              event.usage.estimated ? " (estimated)" : ""
+            }`,
           ),
         );
         return;
