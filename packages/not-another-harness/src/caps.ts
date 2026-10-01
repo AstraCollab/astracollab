@@ -1,18 +1,23 @@
 /**
  * Hard output caps for tool results.
  *
- * Every model step replays the whole transcript, so one oversized result is paid
- * for again on every step after it. Measured on the live eval, a single
- * maximum-size `read` (40 KB ≈ 10k tokens) cost roughly 160k tokens across a
- * 16-step run — more than that entire run's total. These caps are sized so the
- * worst case stays proportionate: roughly 5k tokens for the largest tool, which
- * is a few screens of code and still enough to work from. Agents page with
- * `read`'s `offset`/`limit` and narrow shell commands when they need more.
+ * Every model step replays the transcript, so a large result is paid for again on
+ * every later step. But a cap is only a saving if the agent does not go and
+ * recover what was cut.
+ *
+ * `read` is truncated aggressively: when it does cut, the fix is paging with
+ * `offset`/`limit`, which fetches *different* lines, so the truncated bytes are
+ * never re-requested.
+ *
+ * `bash` is deliberately left roomy. Its truncation notice tells the agent to
+ * re-run the command with `| tail -n N`, which pays for the same output twice.
+ * A live audit run cut at 120 lines did exactly that and cost more than the
+ * original. An agent doing real investigation needs whole command output.
  */
 export const DEFAULT_CAPS = {
   read: { maxLines: 250, maxChars: 20_000 },
   list: { maxLines: 350, maxChars: 14_000 },
-  bash: { maxLines: 120, maxChars: 12_000 },
+  bash: { maxLines: 400, maxChars: 40_000 },
   grep: { maxMatches: 60, maxPerFile: 30, lineMaxChars: 200 },
   glob: { maxMatches: 200 },
 } as const;
