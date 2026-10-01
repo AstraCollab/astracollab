@@ -162,6 +162,58 @@ describe("shell commands", () => {
   });
 });
 
+/**
+ * A `step-finish` with a real request breakdown.
+ *
+ * These tests cast events with `as never`, so TypeScript cannot catch a missing
+ * field - the renderer has to survive one anyway.
+ */
+const requestBreakdown = (totalInputTokens: number) => ({
+  totalInputTokens,
+  cachedInputTokens: Math.round(totalInputTokens * 0.8),
+  cacheCreationInputTokens: 0,
+  freshInputTokens: Math.round(totalInputTokens * 0.2),
+  hitRate: 0.8,
+});
+
+const finish = (output: TurnOutput, totalTokens: number) =>
+  output.apply({
+    type: "finish",
+    reason: "completed",
+    text: "",
+    usage: { inputTokens: totalTokens - 100, outputTokens: 100, totalTokens, estimated: false },
+  } as never);
+
+describe("usage figures", () => {
+  it("names the cumulative total as throughput, not as a context size", () => {
+    const output = new TurnOutput();
+    output.apply({ type: "step-finish", request: requestBreakdown(31_200) } as never);
+    finish(output, 315_640);
+    const line = strip(output.render(90).join("\n"));
+    // The two figures that could not be reconciled against a provider's
+    // per-request log are now both present and both labelled.
+    expect(line).toContain("315.6k processed");
+    expect(line).toContain("31.2k in last request");
+  });
+
+  it("omits the request figure when no step has finished", () => {
+    const output = new TurnOutput();
+    finish(output, 1100);
+    const line = strip(output.render(90).join("\n"));
+    expect(line).toContain("1.1k processed");
+    expect(line).not.toContain("in last request");
+  });
+
+  it("survives a step-finish with no request breakdown", () => {
+    const output = new TurnOutput();
+    // The type requires `request`, but a renderer that throws on a malformed
+    // event would take the whole transcript pane down with it.
+    output.apply({ type: "step-finish" } as never);
+    finish(output, 1100);
+    expect(strip(output.render(90).join("\n"))).toContain("1.1k processed");
+  });
+});
+
 describe("vertical rhythm", () => {
   const lines = (output: TurnOutput, width = 60) => output.render(width);
   const isBlank = (line: string) => strip(line).trim().length === 0;
@@ -208,7 +260,7 @@ describe("vertical rhythm", () => {
     ];
     const output = new TurnOutput(() => changes);
     output.apply({ type: "tool-call", toolName: "read", input: { path: "a.ts" } } as never);
-    output.apply({ type: "step-finish" } as never);
+    output.apply({ type: "step-finish", request: requestBreakdown(1000) } as never);
 
     // Asserted on the diff's content rows rather than on blank-line counts: at
     // narrow widths pi-tui renders the box-drawing rules as empty, which is a

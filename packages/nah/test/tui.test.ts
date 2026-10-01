@@ -214,7 +214,10 @@ describe("TurnOutput", () => {
     });
     const text = strip(output.render(80).join("\n"));
     expect(text).toContain("completed");
-    expect(text).toContain("15 tokens");
+    // Labelled as throughput, because this figure sums every request the run
+    // sent; a provider's log shows one request, so "15 tokens" invited a
+    // comparison that could never match.
+    expect(text).toContain("15 processed");
     expect(text).toContain("estimated");
   });
 

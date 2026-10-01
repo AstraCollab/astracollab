@@ -24,6 +24,7 @@ import {
   toolLabel,
   type RenderableFileChange,
 } from "../render.js";
+import { formatTokens } from "./sidebar.js";
 import { markdownBlock } from "./theme.js";
 
 /**
@@ -182,6 +183,15 @@ export class TurnOutput implements Component {
   private lastChanges: RenderableFileChange[] | null = null;
   /** Kind of the last rendered block, so the next one can decide on spacing. */
   private lastKind: BlockKind | null = null;
+  /**
+   * Prompt size of the most recent request, from the last `step-finish`.
+   *
+   * Kept so the finish line can name both figures. `usage.totalTokens` sums
+   * every request in the run, which is throughput and not a context size, so on
+   * its own it invites a comparison against a provider's per-request log that
+   * can never match.
+   */
+  private lastRequestTokens = 0;
 
   constructor(
     private readonly getFileChanges: () => RenderableFileChange[] = () => [],
@@ -239,6 +249,7 @@ export class TurnOutput implements Component {
     this.renderedChanges = 0;
     this.lastChanges = null;
     this.lastKind = null;
+    this.lastRequestTokens = 0;
   }
 
   /** Blank line separator. */
@@ -336,14 +347,30 @@ export class TurnOutput implements Component {
         // A step boundary is the natural end of a run of repeats; the same call
         // in a later step is a separate decision and gets its own line.
         this.group = null;
+        // Optional in practice: the type says it is always present, but a
+        // renderer that throws on a malformed event takes the whole pane with
+        // it, so the figure is treated as best-effort.
+        this.lastRequestTokens = event.request?.totalInputTokens ?? 0;
         this.flushFileChanges();
         return;
       case "finish":
+        /**
+         * Both figures, because they answer different questions.
+         *
+         * `totalTokens` is every request the run sent, summed. A provider
+         * dashboard shows one request, so a 14-step turn reports ~315k here and
+         * ~31k there without either being wrong: each step re-sends the whole
+         * transcript. Labelling the sum "tokens" invited exactly that
+         * disagreement, so it now says what it is and carries the last
+         * request's size next to it.
+         */
         this.addLine(
           c.dim(
-            `  ${event.reason} · ${event.usage.totalTokens} tokens${
-              event.usage.estimated ? " (estimated)" : ""
-            }`,
+            `  ${event.reason} · ${formatTokens(event.usage.totalTokens)} processed${
+              this.lastRequestTokens > 0
+                ? ` · ${formatTokens(this.lastRequestTokens)} in last request`
+                : ""
+            }${event.usage.estimated ? " (estimated)" : ""}`,
           ),
         );
         return;
