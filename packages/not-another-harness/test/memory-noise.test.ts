@@ -74,10 +74,10 @@ describe("dedup under the two-stage contract", () => {
           { content: "The staging build ID is ZQ7X4M2K, supplied by the user for the staging environment." },
         ],
       }),
-      reconcile: async () => ({
-        action: "merge",
+      reconcile: async ({ items }) => items.map(() => ({
+        action: "merge" as const,
         content: "The staging build ID is ZQ7X4M2K, supplied by the user for the staging environment.",
-      }),
+      })),
     });
     await m.postTurnAsync({ userMessage: "go", assistantResponse: "ok" });
     expect(held(m)).toBe(1);

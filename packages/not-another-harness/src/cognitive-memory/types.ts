@@ -193,10 +193,9 @@ export interface CognitiveMemoryOptions {
    * recall; `decide` is the precision step.
    */
   reconcile?: (input: {
-    candidate: string;
-    /** Closest existing memories, best first. May be empty. */
-    remember: string[];
-  }) => Promise<MemoryReconciliation>;
+    /** Every candidate from this turn that resembles something we hold. */
+    items: Array<{ candidate: string; remember: string[] }>;
+  }) => Promise<MemoryReconciliation[]>;
   /**
    * Model-backed turn extractor. Preferred over the built-in regex, which only
    * recognises "always/never/make sure to/remember to" and therefore never

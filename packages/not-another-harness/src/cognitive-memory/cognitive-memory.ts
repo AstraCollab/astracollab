@@ -488,6 +488,8 @@ export class CognitiveMemory {
       actionableQuestion: string;
     }>;
   }): Promise<void> {
+    // Memories held aside for one batched adjudication at the end of the turn.
+    const pending: Array<{ content: string; candidates: MemoryItem[] }> = [];
     for (const memory of result.memories ?? []) {
       const content = memory.content.trim();
       if (content.length < 8 || content.length > 600) continue;
@@ -504,11 +506,13 @@ export class CognitiveMemory {
       if (candidates.length > 0) {
         let verdict: MemoryReconciliation = { action: "add" };
         if (this.reconcile) {
-          try {
-            verdict = await this.reconcile({ candidate: content, remember: candidates.map((c) => c.content) });
-          } catch {
-            verdict = { action: "add" };
-          }
+          // Deferred: one adjudicator call for the whole turn, not one per
+          // memory. Awaiting inside this loop made a five-memory turn cost six
+          // serial model calls.
+          // Added optimistically below, then the batch verdict may reject,
+          // merge or replace it. Storing first keeps memory available even if
+          // the adjudicator is slow or never answers.
+          pending.push({ content, candidates });
         } else if (candidates.some((c) => c.content.trim().toLowerCase() === content.trim().toLowerCase())) {
           // Byte-identical restatement: never worth storing twice.
           verdict = { action: "merge" };
@@ -551,6 +555,33 @@ export class CognitiveMemory {
       );
     }
 
+    // One adjudicator call for the whole turn. Failures fall back to "keep
+    // both", so a flaky model costs duplicates, never lost information.
+    if (pending.length > 0 && this.reconcile) {
+      let verdicts: MemoryReconciliation[] = [];
+      try {
+        verdicts = await this.reconcile({
+          items: pending.map((p) => ({ candidate: p.content, remember: p.candidates.map((c) => c.content) })),
+        });
+      } catch {
+        verdicts = [];
+      }
+      for (const [index, entry] of pending.entries()) {
+        const verdict = verdicts[index];
+        if (!verdict) continue;
+        if (verdict.action === "reject") this.removeByContent(entry.content);
+        else if (verdict.action === "merge") {
+          // Drop the duplicate BEFORE enriching the survivor: they hold the same
+          // text afterwards, so removing by content first would delete both.
+          this.removeByContent(entry.content);
+          if (verdict.content && entry.candidates[0]) this.enrich(entry.candidates[0], verdict.content);
+        } else if (verdict.action === "replace") {
+          this.supersede(entry.candidates.map((c) => c.content));
+          if (verdict.content) this.replaceByContent(entry.content, verdict.content);
+        }
+      }
+    }
+
     for (const tension of result.tensions ?? []) {
       const key = `${tension.claimA}::${tension.claimB}`.toLowerCase();
       if (this.activeTensions.has(key)) continue;
@@ -563,6 +594,26 @@ export class CognitiveMemory {
         taskRelevance: 1,
         actionableQuestion: tension.actionableQuestion,
       });
+    }
+  }
+
+  /** Drop an entry by its exact content. */
+  private removeByContent(content: string): void {
+    const target = content.trim().toLowerCase();
+    for (const map of [this.l1HotCache, this.l2WarmStore, this.l3ColdArchive]) {
+      for (const [id, item] of map) {
+        if (item.content.trim().toLowerCase() === target) map.delete(id);
+      }
+    }
+  }
+
+  /** Rewrite one entry's text in place, matched on its old value. */
+  private replaceByContent(from: string, to: string): void {
+    const target = from.trim().toLowerCase();
+    for (const map of [this.l1HotCache, this.l2WarmStore, this.l3ColdArchive]) {
+      for (const item of map.values()) {
+        if (item.content.trim().toLowerCase() === target) this.enrich(item, to);
+      }
     }
   }
 

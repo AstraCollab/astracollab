@@ -87,10 +87,10 @@ describe("memory extraction", () => {
           { content: "User prefers kebab-case file names for new source files." },
         ],
       }),
-      reconcile: async () => ({
-        action: "merge",
+      reconcile: async ({ items }) => items.map(() => ({
+        action: "merge" as const,
         content: "User prefers kebab-case file names for new source files.",
-      }),
+      })),
     });
     await m.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });
     const stored = [...m.getSnapshot().l1, ...m.getSnapshot().l2].map((i) => i.content);
@@ -105,7 +105,7 @@ describe("memory extraction", () => {
 
     const second = new CognitiveMemory({
       extract: async () => ({ memories: [{ content: "Staging host is h2.example." }] }),
-      reconcile: async () => ({ action: "replace" }),
+      reconcile: async ({ items }) => items.map(() => ({ action: "replace" as const })),
     });
     second.loadSnapshot(first.getSnapshot());
     await second.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });
@@ -125,7 +125,7 @@ describe("memory extraction", () => {
       extract: async () => ({
         memories: [{ content: "The deploy script lives at ops/deploy.sh and runs the release." }],
       }),
-      reconcile: async () => ({ action: "reject" }),
+      reconcile: async ({ items }) => items.map(() => ({ action: "reject" as const })),
     });
     rejected.loadSnapshot(seed.getSnapshot());
     await rejected.postTurnAsync({ userMessage: "teach", assistantResponse: "ok" });

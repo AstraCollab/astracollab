@@ -174,9 +174,14 @@ export const createTurnExtractor = (model: LanguageModel): TurnExtractor => {
 };
 
 const RECONCILE_SCHEMA = z.object({
-  action: z.enum(["add", "merge", "replace", "reject"]),
-  content: z.string().optional().describe("The fuller statement, when merging or replacing"),
-  reason: z.string().optional(),
+  verdicts: z.array(
+    z.object({
+      index: z.number().describe("Which candidate this verdict is for"),
+      action: z.enum(["add", "merge", "replace", "reject"]),
+      content: z.string().optional().describe("The fuller statement, when merging or replacing"),
+      reason: z.string().optional(),
+    }),
+  ),
 });
 
 const RECONCILE_INSTRUCTION = `You maintain durable memory for a coding agent. A new candidate statement may restate something already remembered, add detail to it, or contradict it.
@@ -193,27 +198,46 @@ Rules:
 - Prefer "add" when you are unsure. A duplicate costs one entry; a wrong merge loses information permanently.
 - Never invent information that is in neither the candidate nor the memories you were given.`;
 
-/** Model-backed adjudicator: mem0's ADD/MERGE/REPLACE/REJECT over recalled candidates. */
+/**
+ * Model-backed adjudicator: mem0's ADD/MERGE/REPLACE/REJECT over recalled
+ * candidates, for every candidate in the turn in a single call.
+ */
 export const createMemoryReconciler = (model: LanguageModel) => {
-  return async ({ candidate, remember }: { candidate: string; remember: string[] }) => {
+  return async ({
+    items,
+  }: {
+    items: Array<{ candidate: string; remember: string[] }>;
+  }): Promise<MemoryReconciliation[]> => {
+    const addAll = items.map(() => ({ action: "add" as const }));
+    if (items.length === 0) return addAll;
     try {
       const result = await generateObject({
         model,
         schema: RECONCILE_SCHEMA,
         system: RECONCILE_INSTRUCTION,
-        prompt: [
-          "Already remembered:",
-          ...remember.map((m) => `- ${m}`),
-          "",
-          "New candidate:",
-          candidate,
-        ].join("\n"),
-        maxOutputTokens: 400,
+        prompt: items
+          .map(
+            ({ candidate, remember }, index) =>
+              `${index}. NEW: ${candidate}\n${remember.map((m) => `   remembered: ${m}`).join("\n")}`,
+          )
+          .join("\n\n"),
+        maxOutputTokens: 600,
       });
-      return result.object as MemoryReconciliation;
+      const byIndex = new Map(
+        (result.object.verdicts ?? []).map((v) => [v.index, v] as const),
+      );
+      return items.map((_, index) => {
+        const v = byIndex.get(index);
+        // Missing or unparsable: keep both rather than risk a bad merge.
+        if (!v) return { action: "add" as const };
+        return {
+          action: v.action,
+          ...(v.content ? { content: v.content } : {}),
+          ...(v.reason ? { reason: v.reason } : {}),
+        };
+      });
     } catch {
-      // Unsure, or the model failed: keep both rather than risk a bad merge.
-      return { action: "add" as const };
+      return addAll;
     }
   };
 };
@@ -237,7 +261,9 @@ export type MemoryOptions = {
   /** Omit to build a memory that only uses the built-in regex extraction. */
   extractor?: TurnExtractor | null;
   /** Adjudicates near-duplicate memories. Omit to fall back to exact-match only. */
-  reconciler?: ((input: { candidate: string; remember: string[] }) => Promise<MemoryReconciliation>) | null;
+  reconciler?: ((input: {
+    items: Array<{ candidate: string; remember: string[] }>;
+  }) => Promise<MemoryReconciliation[]>) | null;
   cwd: string;
   /** Set false to skip loading and saving (e.g. --no-session). */
   persist?: boolean;
