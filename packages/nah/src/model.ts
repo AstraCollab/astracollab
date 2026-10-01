@@ -114,6 +114,14 @@ export const resolveModel = async (
         name: "openrouter",
         baseURL: env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
         apiKey,
+        // OpenRouter attributes requests to an app via these headers, which is
+        // what makes usage show up against this app in their dashboard rather
+        // than as anonymous traffic. See the HTTP-Referer / X-OpenRouter-Title
+        // fields in their API reference. Overridable for forks and self-hosts.
+        headers: {
+          "X-Title": env.NAH_APP_NAME ?? "nah",
+          "HTTP-Referer": env.NAH_APP_URL ?? "https://nah.astracollab.com",
+        },
         fetch: transport.fetch,
       });
       return { spec: raw, provider, modelId, model: oi(modelId), setStatusHandler: transport.setStatusHandler };

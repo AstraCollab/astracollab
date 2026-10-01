@@ -156,3 +156,58 @@ describe("undo command", () => {
     expect(fixture.output.join("")).toContain("changed since NAH edited it");
   });
 });
+
+describe("openrouter attribution", () => {
+  const lower = (headers: Record<string, unknown>) =>
+    Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+
+  it("identifies the app so usage is attributed to nah", async () => {
+    let seen: Record<string, unknown> = {};
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (_url: unknown, init: { headers?: Record<string, unknown> }) => {
+      seen = { ...(init?.headers ?? {}) };
+      return new Response("{}", { status: 400 });
+    }) as unknown as typeof fetch;
+    try {
+      const resolved = await resolveModel("openrouter:some-model", { OPENROUTER_API_KEY: "sk-test" } as never);
+      await (resolved.model as unknown as {
+        doGenerate: (args: unknown) => Promise<unknown>;
+      }).doGenerate({ prompt: [{ role: "user", content: [{ type: "text", text: "hi" }] }], tools: {} });
+    } catch {
+      // The stubbed response is rejected; only the outgoing headers matter here.
+    } finally {
+      globalThis.fetch = real;
+    }
+
+    const headers = lower(seen);
+    expect(headers["x-title"]).toBe("nah");
+    expect(headers["http-referer"]).toBe("https://nah.astracollab.com");
+  });
+
+  it("lets a fork rename itself", async () => {
+    let seen: Record<string, unknown> = {};
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (_url: unknown, init: { headers?: Record<string, unknown> }) => {
+      seen = { ...(init?.headers ?? {}) };
+      return new Response("{}", { status: 400 });
+    }) as unknown as typeof fetch;
+    try {
+      const resolved = await resolveModel("openrouter:some-model", {
+        OPENROUTER_API_KEY: "sk-test",
+        NAH_APP_NAME: "nah-fork",
+        NAH_APP_URL: "https://example.test",
+      } as never);
+      await (resolved.model as unknown as {
+        doGenerate: (args: unknown) => Promise<unknown>;
+      }).doGenerate({ prompt: [{ role: "user", content: [{ type: "text", text: "hi" }] }], tools: {} });
+    } catch {
+      // Same: headers only.
+    } finally {
+      globalThis.fetch = real;
+    }
+
+    const headers = lower(seen);
+    expect(headers["x-title"]).toBe("nah-fork");
+    expect(headers["http-referer"]).toBe("https://example.test");
+  });
+});

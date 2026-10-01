@@ -183,6 +183,23 @@ survive into later sessions.
 `NAH_MEMORY_NOPERSIST=1` disables persistence; `NAH_MEMORY_DEBUG=1` traces
 extraction and promotion per turn.
 
+### Identifying the app to OpenRouter
+
+Requests to OpenRouter carry attribution headers, which is what makes usage show
+up against this app in the OpenRouter dashboard rather than as anonymous traffic:
+
+```
+X-Title: nah
+HTTP-Referer: https://nah.astracollab.com
+```
+
+Forks and self-hosts can rename themselves without touching code:
+
+```sh
+export NAH_APP_NAME=nah-fork
+export NAH_APP_URL=https://your-host.example
+```
+
 ## Run from the monorepo
 
 ```sh
