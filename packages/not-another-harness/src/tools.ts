@@ -229,8 +229,19 @@ export const createCodingTools = (
   });
 
   const edit = tool({
+    /**
+     * Anthropic's tool-design guidance calls the description "by far the most
+     * important factor in tool performance", and asks for 3-4 sentences: what it
+     * does, when to use it and when not to, what each parameter means, and the
+     * caveats. This was one sentence, so uniqueness failures and read-first
+     * behaviour were left to guesswork.
+     */
     description:
-      "Replace exact text in a file. old_string must match exactly and be unique (unless replace_all). Read the file first; do not include line-number prefixes in old_string/new_string.",
+      "Replace an exact, contiguous run of text in one file. Use it for a targeted change to an existing file; use `write` for a new file or a full rewrite, and a single scripted `bash` pass when the same mechanical change applies across many files. " +
+      "`old_string` must match the file byte for byte, including indentation, and must appear exactly once unless `replace_all` is true - include a few surrounding lines of context to make it unique. " +
+      "Pass the text WITHOUT the line-number prefixes that `read` adds; the prefixes are for you to navigate with, not part of the file. " +
+      "You do not need to read a file before replacing text in it: if you already know the exact string, edit directly, and if the match fails the error reports how many occurrences were found. " +
+      "Set `replace_all` only when every occurrence in that one file should change - it never reaches other files.",
     inputSchema: z.object({
       path: z.string().min(1),
       old_string: z.string(),
