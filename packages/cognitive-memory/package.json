@@ -1,0 +1,66 @@
+{
+  "name": "@astracollab/cogmem",
+  "version": "0.1.0",
+  "description": "TypeScript client for Cognitive Memory. Deterministic four-tier memory, as a credentialed storage layer.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/cognitive-memory.cjs",
+  "module": "./dist/cognitive-memory.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/cognitive-memory.js",
+      "require": "./dist/cognitive-memory.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "provenance": false
+  },
+  "author": "AstraCollab",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/astracollab/astracollab.git",
+    "directory": "packages/cognitive-memory"
+  },
+  "keywords": [
+    "memory",
+    "llm",
+    "agent",
+    "context",
+    "cogmem",
+    "cognitive-memory",
+    "sdk",
+    "ai"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "check-types": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "ofetch": "^1.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.9",
+    "ofetch": "^1.4.1",
+    "typescript": "^5.8.3",
+    "vite": "^5.4.19",
+    "vite-plugin-dts": "^4.5.4",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
