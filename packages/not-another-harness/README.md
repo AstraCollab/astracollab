@@ -67,6 +67,19 @@ console.error(`\n${result.reason}; ${result.usage.totalTokens} tokens`);
 
 The Node environment is a workspace adapter, not an operating-system sandbox. In particular, shell commands can have effects beyond files the adapter can snapshot. Apply your own process, network, and approval restrictions where required.
 
+## Orienting before reading
+
+`outline` maps a source tree to top-level signatures — `file:line  signature` — with no file bodies. It exists because agents tend to read whole files when nothing tells them what is inside, and one read of 250 lines is replayed on every later step.
+
+```
+outline {}
+outline { path: "src/auth", query: "validate token" }
+```
+
+Matches are ranked to `query`, the result is capped, and `withOutline: false` removes the tool. It is deliberately a *production-time* saving rather than a history edit: rewriting an earlier `tool_result` invalidates the thinking-block signatures Anthropic binds to that prefix, and the SDK sends reasoning back by default, so trimming history after the fact is not available.
+
+Measured on a "find the module exporting runEverything" task over ten modules: one targeted read either way, and the run with `outline` available cost slightly more (6.8k vs 5.8k) because the agent never needed it. It earns its place on tasks that require orientation across a wider tree, not on ones a single grep answers.
+
 ## Finding files
 
 `glob` is the discovery primitive — it answers "where does this kind of file live" without walking the tree level by level. It is registered automatically whenever the environment implements `ToolEnvironment.glob` (the Node environment does).

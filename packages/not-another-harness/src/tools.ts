@@ -2,6 +2,7 @@ import { tool } from "ai";
 import { z } from "zod";
 
 import { DEFAULT_CAPS, capHead, capTail, sliceFileLines } from "./caps.js";
+import { createOutlineTool } from "./outline.js";
 import type { ToolEnvironment } from "./types.js";
 
 export type ApprovalDecision = "allow" | "deny";
@@ -13,6 +14,8 @@ export type CodingToolsOptions = {
   withBash?: boolean;
   /** Include the glob discovery tool when the environment supports it (default true). */
   withGlob?: boolean;
+  /** Include the repository outline tool (default true). */
+  withOutline?: boolean;
   /** Working directory shown in tool descriptions (cosmetic). */
   cwdLabel?: string;
   /**
@@ -355,6 +358,9 @@ export const createCodingTools = (
   });
 
   const tools: Record<string, unknown> = { read, list, grep, edit, write };
+  if (options.withOutline !== false) {
+    tools.outline = createOutlineTool(env);
+  }
   if (options.withBash !== false) {
     tools.bash = bash;
   }
