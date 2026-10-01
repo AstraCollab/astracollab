@@ -17,7 +17,7 @@ import { listSessionIds, resolveSessionFile } from "./context.js";
 import { createTurnExtractor, prepareMemory } from "./memory.js";
 import { createRecallTool } from "./memory-tool.js";
 import { MemoryInjectionLog } from "./memory-injection.js";
-import { runTurn, type SessionState, type StepRecovery } from "./session.js";
+import { adoptUsage, resetUsage, runTurn, type SessionState, type StepRecovery } from "./session.js";
 import { createTaskLedgerTool, formatTaskLedger } from "./task-ledger.js";
 import { createDelegationTool } from "./delegation.js";
 import { loadLastModel, saveLastModel } from "./model-preferences.js";
@@ -458,6 +458,8 @@ export const handleSlashCommand = async (
         state.messages = [];
         state.taskLedger = null;
         state.undoHistory = [];
+        // The counters described the transcript just discarded.
+        await resetUsage(state);
         out.write(c.dim("(transcript cleared)\n"));
       } catch (e) {
         out.write(c.red(`could not clear session: ${e instanceof Error ? e.message : String(e)}\n`));
@@ -601,6 +603,7 @@ export const handleSlashCommand = async (
           state.messages = await store.load();
           state.taskLedger = await store.loadTaskLedger();
           state.undoHistory = [];
+          await adoptUsage(state);
           out.write(`${c.green("switched")} → main ${c.dim(`${state.messages.length} messages`)}\n`);
           state.onSessionSwitch?.(state.messages);
           return "handled";
@@ -617,6 +620,7 @@ export const handleSlashCommand = async (
           state.messages = messages;
           state.taskLedger = await store.loadTaskLedger();
           state.undoHistory = [];
+          await adoptUsage(state);
           out.write(`${c.green("switched")} → ${arg} ${c.dim(`${messages.length} messages`)}\n`);
           state.onSessionSwitch?.(state.messages);
         } catch (e) {
@@ -627,6 +631,8 @@ export const handleSlashCommand = async (
           state.messages = restored;
           state.taskLedger = await forked.loadTaskLedger();
           state.undoHistory = [];
+          // The fork inherits the parent's transcript, so it inherits its spend.
+          await adoptUsage(state);
           out.write(`${c.yellow("created")} branch ${arg} ${c.dim(`from ${restored.length} carried message(s)`)}\n`);
           out.write(c.dim(`  /branch main returns you · /branches lists them\n`));
           state.onSessionSwitch?.(state.messages);
@@ -731,6 +737,10 @@ export const handleSlashCommand = async (
         state.messages = messages;
         state.taskLedger = await state.store.loadTaskLedger();
         state.undoHistory = [];
+        // Counters belong to the transcript that produced them. Carrying the
+        // previous session's totals over made /stats describe a session that
+        // was no longer on screen.
+        await adoptUsage(state);
         const loaded = messages.length === 0
           ? c.dim("(that session is empty)")
           : c.dim(`${messages.length} message${messages.length === 1 ? "" : "s"} restored`);
@@ -746,7 +756,9 @@ export const handleSlashCommand = async (
         state.messages = [];
         state.taskLedger = null;
         state.undoHistory = [];
+        await resetUsage(state);
         out.write(c.dim(`new session → ${p}\n`));
+        state.onSessionSwitch?.(state.messages);
         return "handled";
       }
       out.write(c.dim("usage: /session [list | <id> | new | off]") + "\n");
@@ -817,9 +829,14 @@ export const handleSlashCommand = async (
       }
 
       if (snapshot.l1.length > 0) {
-        out.write(`${c.bold("L1 Pre-staged Hot Cache:")}\n`);
+        out.write(`${c.bold("Memories held (shown in full):")}\n`);
         for (const item of snapshot.l1) {
-          out.write(`  • ${c.cyan(item.bookmark || item.content.slice(0, 80))}\n`);
+          // Show the whole statement. `/memory` exists so a person can check what
+          // was actually learned, and truncating at 80 characters made a
+          // complete memory look like a broken one.
+          const domains = item.metadata.domains.slice(0, 3);
+          const tag = domains.length > 0 ? c.dim(` (${domains.join(", ")})`) : "";
+          out.write(`  • ${item.content}${tag}\n`);
         }
         out.write("\n");
       }

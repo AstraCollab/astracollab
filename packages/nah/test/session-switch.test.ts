@@ -154,6 +154,57 @@ describe("/session <id>", () => {
     expect(state.undoHistory).toEqual([]);
   });
 
+  it("zeroes the counters on /clear, which discards the transcript", async () => {
+    const state = await seedTwoSessions();
+    state.turns = 7;
+    state.totalUsage = { inputTokens: 3000, outputTokens: 400, totalTokens: 3400 };
+    state.contextUsedTokens = 3000;
+
+    await run(state, "/clear");
+
+    expect(state.messages).toEqual([]);
+    expect(state.turns).toBe(0);
+    expect(state.totalUsage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+    expect(state.contextUsedTokens).toBe(0);
+  });
+
+  it("carries the switched-to session's counters, not the previous one's", async () => {
+    const state = await seedTwoSessions();
+    const { defaultSessionFile } = await import("../src/context.js");
+    const first = defaultSessionFile(cwd);
+    // The session being left has spend; the one being opened has none. Keeping
+    // the old totals made /stats describe a transcript that was gone.
+    state.turns = 9;
+    state.totalUsage = { inputTokens: 5000, outputTokens: 900, totalTokens: 5900 };
+
+    await run(state, `/session ${nodePath.basename(first, ".jsonl")}`);
+
+    expect(state.turns).toBe(0);
+    expect(state.totalUsage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+  });
+
+  it("adopts the counters recorded for the session it opens", async () => {
+    const state = await seedTwoSessions();
+    const { defaultSessionFile } = await import("../src/context.js");
+    const second = `${defaultSessionFile(cwd).replace(/\.jsonl$/, "-2.jsonl")}`;
+    await createJsonlSessionStore(second).saveUsage({
+      turns: 3,
+      inputTokens: 4100,
+      outputTokens: 700,
+      totalTokens: 4800,
+      contextUsedTokens: 4100,
+      contextUsageEstimated: false,
+      lastOutputTokens: 120,
+    });
+    state.turns = 9;
+    state.totalUsage = { inputTokens: 5000, outputTokens: 900, totalTokens: 5900 };
+
+    await run(state, `/session ${nodePath.basename(second, ".jsonl")}`);
+
+    expect(state.turns).toBe(3);
+    expect(state.totalUsage).toEqual({ inputTokens: 4100, outputTokens: 700, totalTokens: 4800 });
+  });
+
   it("reports a typo and lists what does exist, instead of opening nothing", async () => {
     const state = await seedTwoSessions();
     await run(state, "/session nope");
@@ -264,6 +315,26 @@ describe("/branch", () => {
     expect(strip(out.join(""))).toContain("created branch work");
     expect(strip(out.join(""))).toContain("/branch main returns you");
     expect(state.store?.path).toContain(".work.jsonl");
+  });
+
+  it("a forked branch starts from the parent's counters, not zero", async () => {
+    const state = await seeded();
+    state.turns = 4;
+    state.totalUsage = { inputTokens: 2000, outputTokens: 500, totalTokens: 2500 };
+    await state.store?.saveUsage({
+      turns: 4,
+      inputTokens: 2000,
+      outputTokens: 500,
+      totalTokens: 2500,
+      contextUsedTokens: 2000,
+      contextUsageEstimated: false,
+      lastOutputTokens: 100,
+    });
+
+    await run(state, "/branch work");
+
+    expect(state.turns).toBe(4);
+    expect(state.totalUsage.totalTokens).toBe(2500);
   });
 
   it("switches back to main and restores its messages", async () => {

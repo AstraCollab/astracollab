@@ -8,7 +8,12 @@ export {
   type CodingToolsOptions,
   type ApprovalDecision,
 } from "./tools.js";
-export { createJsonlSessionStore, type JsonlSessionStore, type SessionTaskLedger } from "./session.js";
+export {
+  createJsonlSessionStore,
+  type JsonlSessionStore,
+  type SessionTaskLedger,
+  type SessionUsage,
+} from "./session.js";
 export { DEFAULT_CAPS, capHead, capTail, sliceFileLines, toLines } from "./caps.js";
 export { globToRegExp, globStaticPrefix, hasGlobMagic } from "./glob.js";
 export { estimateMessageTokens, estimateRequestTokens, estimateTextTokens } from "./estimate.js";

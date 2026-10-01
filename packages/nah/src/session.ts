@@ -237,10 +237,7 @@ export const runTurn = (
       state.undoHistory.push({ steps: stepRecoveries, changes: fileChanges, messages: previousMessages, ledgerBefore });
     }
     state.messages = [...result.messages];
-    state.turns += 1;
-    state.totalUsage.inputTokens += result.usage.inputTokens;
-    state.totalUsage.outputTokens += result.usage.outputTokens;
-    state.totalUsage.totalTokens += result.usage.totalTokens;
+    foldTurnIntoState(state, result);
     if (state.store) {
       if (result.compactions > 0 || result.messages.length < before) {
         await state.store.replace(result.messages);
@@ -248,6 +245,9 @@ export const runTurn = (
         await state.store.append(result.messages.slice(before));
       }
     }
+    // Written after the transcript so a crash between the two leaves counters
+    // that are behind the messages, never ahead of them.
+    await saveUsage(state);
     // Fire CognitiveMemory post-turn async evaluation without blocking
     if (state.cognitiveMemory) {
       const assistantText = result.messages
@@ -269,6 +269,67 @@ export const runTurn = (
     }
   })();
   return { events, done, steer: run.steer, followUp: run.followUp, pending: run.pending };
+};
+
+/**
+ * Point the in-memory counters at whatever session is now active.
+ *
+ * Called after `/session` and `/branch` swap `state.store`. The alternative —
+ * leaving the counters alone — makes `/stats` and the prompt footer report the
+ * session you just navigated away from, against the transcript you are now
+ * looking at.
+ */
+export const adoptUsage = async (state: SessionState): Promise<void> => {
+  const usage = (await state.store?.loadUsage()) ?? null;
+  if (!usage) {
+    await resetUsage(state);
+    return;
+  }
+  state.turns = usage.turns;
+  state.totalUsage = {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens,
+  };
+  state.contextUsedTokens = usage.contextUsedTokens;
+  state.contextUsageEstimated = usage.contextUsageEstimated;
+  state.lastOutputTokens = usage.lastOutputTokens;
+};
+
+/** Reset the cumulative counters and push the zeroed state to the store. */
+export const resetUsage = async (state: SessionState): Promise<void> => {
+  state.turns = 0;
+  state.totalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  state.contextUsedTokens = 0;
+  state.contextUsageEstimated = false;
+  state.lastOutputTokens = 0;
+  await saveUsage(state);
+};
+
+/** Write the current counters so a later process can resume reporting them. */
+export const saveUsage = async (state: SessionState): Promise<void> => {
+  if (!state.store) return;
+  try {
+    await state.store.saveUsage({
+      turns: state.turns,
+      inputTokens: state.totalUsage.inputTokens,
+      outputTokens: state.totalUsage.outputTokens,
+      totalTokens: state.totalUsage.totalTokens,
+      contextUsedTokens: state.contextUsedTokens,
+      contextUsageEstimated: state.contextUsageEstimated,
+      lastOutputTokens: state.lastOutputTokens,
+    });
+  } catch {
+    // Stats are cosmetic next to the transcript, which is already saved. A
+    // failure here must not fail the turn.
+  }
+};
+
+const foldTurnIntoState = (state: SessionState, result: HarnessRunResult): void => {
+  state.turns += 1;
+  state.totalUsage.inputTokens += result.usage.inputTokens;
+  state.totalUsage.outputTokens += result.usage.outputTokens;
+  state.totalUsage.totalTokens += result.usage.totalTokens;
 };
 
 const makeStepRecovery = (
@@ -314,12 +375,30 @@ const makeStepRecovery = (
   };
 };
 
-/** Load prior messages into the session (for --continue / --session). */
+/**
+ * Load prior messages and counters into the session (for --continue / --session).
+ *
+ * Both halves matter. The messages are the transcript the model continues from;
+ * the counters are what `/stats` and the prompt footer report. Loading only the
+ * messages made a resumed session print `0 turns · 0 in · 0 out` next to a
+ * 34-message transcript, which reads as a broken restore rather than a fresh
+ * one.
+ */
 export const resumeSession = async (state: SessionState): Promise<boolean> => {
   if (!state.store) {
     return false;
   }
   state.messages = await state.store.load();
   state.taskLedger = await state.store.loadTaskLedger();
+  const usage = await state.store.loadUsage();
+  state.turns = usage.turns;
+  state.totalUsage = {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens,
+  };
+  state.contextUsedTokens = usage.contextUsedTokens;
+  state.contextUsageEstimated = usage.contextUsageEstimated;
+  state.lastOutputTokens = usage.lastOutputTokens;
   return state.messages.length > 0;
 };

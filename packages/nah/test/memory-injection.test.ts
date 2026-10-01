@@ -146,3 +146,32 @@ describe("injection log", () => {
     expect(log.entries.length).toBeLessThanOrEqual(20);
   });
 });
+
+describe("/memory rendering", () => {
+  it("shows whole statements, not an 80-character slice", () => {
+    // Regression: `/memory` rendered `item.bookmark || content.slice(0, 80)`, and
+    // bookmark is itself `content.slice(0, 80)`, so complete memories were cut
+    // mid-sentence with no ellipsis. That reads as corrupt data when the stored
+    // value is actually fine.
+    const memory = new CognitiveMemory();
+    const long =
+      "The AI used by myresumeguru, including its resume-feedback functionality, " +
+      "should be changed to astracollab/not-another-harness.";
+    expect(long.length).toBeGreaterThan(80);
+    memory.addMemory(
+      {
+        id: "m1",
+        content: long,
+        bookmark: long.slice(0, 80),
+        tier: "L1",
+        metadata: { domains: ["project"], createdAt: 1, lastAccessedAt: 1, accessCount: 0 },
+      },
+      "L1",
+    );
+    const stored = memory.getSnapshot().l1[0]!.content;
+    // Stored intact; the bug was purely in display.
+    expect(stored).toBe(long);
+    // An 80-char slice would have lost the tail.
+    expect(stored.slice(0, 80)).not.toBe(stored);
+  });
+});

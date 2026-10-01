@@ -24,7 +24,61 @@ type ResetEntry = {
   kind: "reset";
 };
 
-type SessionEntry = MessageEntry | ResetEntry;
+/**
+ * Cumulative counters for the session as it stands, written after every turn.
+ *
+ * They live in the transcript file because that is the only thing a resumed
+ * process can read: without them a session that spent 400k tokens comes back
+ * reporting `0 turns · 0 in · 0 out`, which reads as "the run was lost" even
+ * though every message is on disk. A `usage` entry is not a message, so it does
+ * not take part in the branch walk — it is the last such record that counts.
+ */
+export type SessionUsage = {
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  /** Provider-reported input size of the most recent step, i.e. context in use. */
+  contextUsedTokens: number;
+  contextUsageEstimated: boolean;
+  lastOutputTokens: number;
+};
+
+type UsageEntry = SessionUsage & {
+  id: string;
+  at: string;
+  kind: "usage";
+};
+
+type SessionEntry = MessageEntry | ResetEntry | UsageEntry;
+
+const EMPTY_USAGE: SessionUsage = {
+  turns: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  totalTokens: 0,
+  contextUsedTokens: 0,
+  contextUsageEstimated: false,
+  lastOutputTokens: 0,
+};
+
+const counter = (value: unknown): number =>
+  typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+
+const normalizeUsage = (value: unknown): SessionUsage | null => {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Partial<UsageEntry>;
+  if (typeof raw.turns !== "number" || !Number.isFinite(raw.turns) || raw.turns < 0) return null;
+  return {
+    turns: Math.floor(raw.turns),
+    inputTokens: counter(raw.inputTokens),
+    outputTokens: counter(raw.outputTokens),
+    totalTokens: counter(raw.totalTokens),
+    contextUsedTokens: counter(raw.contextUsedTokens),
+    contextUsageEstimated: raw.contextUsageEstimated === true,
+    lastOutputTokens: counter(raw.lastOutputTokens),
+  };
+};
 
 export type SessionTaskLedger = {
   version: 2;
@@ -77,6 +131,8 @@ export type JsonlSessionStore = {
   replace(messages: ModelMessage[]): Promise<void>;
   reset(): Promise<void>;
   load(): Promise<ModelMessage[]>;
+  loadUsage(): Promise<SessionUsage>;
+  saveUsage(usage: SessionUsage): Promise<void>;
   loadTaskLedger(): Promise<SessionTaskLedger | null>;
   saveTaskLedger(ledger: SessionTaskLedger | null): Promise<void>;
   fork(destination: string): Promise<JsonlSessionStore>;
@@ -116,10 +172,24 @@ export const createJsonlSessionStore = (file: string): JsonlSessionStore => {
     return out;
   };
 
+  /**
+   * The newest `message` entry, skipping `reset` and `usage` records.
+   *
+   * Both of those sit in the same file but are not part of the branch chain, so
+   * treating the physically-last line as the tail would either truncate the
+   * transcript at a usage record or chain the next message onto one.
+   */
+  const lastMessage = (all: SessionEntry[]): MessageEntry | undefined => {
+    for (let i = all.length - 1; i >= 0; i -= 1) {
+      const entry = all[i]!;
+      if (entry.kind === "message") return entry;
+    }
+    return undefined;
+  };
+
   const ensureTail = async (): Promise<void> => {
     if (tailId === null) {
-      const all = await readAll();
-      tailId = all[all.length - 1]?.id ?? null;
+      tailId = lastMessage(await readAll())?.id ?? null;
     }
   };
 
@@ -145,6 +215,27 @@ export const createJsonlSessionStore = (file: string): JsonlSessionStore => {
     tailId = id;
   };
 
+  const writeUsage = async (usage: SessionUsage): Promise<void> => {
+    const at = new Date().toISOString();
+    const id = createHash("sha1").update(`${at}:usage:${randomUUID()}`).digest("hex").slice(0, 16);
+    // `parentId` is null on purpose: usage is a side-channel, not a link in the
+    // message chain, and must never become the tail an appended message points
+    // back to.
+    const entry: UsageEntry = { id, at, kind: "usage", ...EMPTY_USAGE, ...usage };
+    await fs.appendFile(file, `${JSON.stringify(entry)}\n`, "utf8");
+  };
+
+  /** The most recent `usage` record, or zeroes when the file has none. */
+  const readUsage = async (): Promise<SessionUsage> => {
+    const all = await readAll();
+    for (let i = all.length - 1; i >= 0; i -= 1) {
+      const entry = all[i]!;
+      if (entry.kind !== "usage") continue;
+      return normalizeUsage(entry) ?? EMPTY_USAGE;
+    }
+    return EMPTY_USAGE;
+  };
+
   return {
     /** Append messages (in order) to the active branch. */
     append: (messages: ModelMessage[]): Promise<void> => serialize(async () => {
@@ -167,17 +258,20 @@ export const createJsonlSessionStore = (file: string): JsonlSessionStore => {
       await fs.mkdir(nodePath.dirname(file), { recursive: true });
       await ensureTail();
       await writeReset();
+      // A cleared transcript has spent nothing, so its counters go with it.
+      await writeUsage(EMPTY_USAGE);
       await fs.rm(taskFile, { force: true });
     }),
 
-    /** Load the active branch (linear path to the newest entry). */
+    /** Load the active branch (linear path to the newest message entry). */
     load: (): Promise<ModelMessage[]> => serialize(async () => {
       const all = await readAll();
-      tailId = all[all.length - 1]?.id ?? null;
-      if (all.length === 0) return [];
+      const newest = lastMessage(all);
+      tailId = newest?.id ?? null;
+      if (!newest) return [];
       const byId = new Map(all.map((entry) => [entry.id, entry]));
       const branch: MessageEntry[] = [];
-      let cursor: SessionEntry | undefined = all[all.length - 1];
+      let cursor: SessionEntry | undefined = newest;
       let visited = 0;
       while (cursor?.kind === "message") {
         branch.unshift(cursor);
@@ -186,6 +280,15 @@ export const createJsonlSessionStore = (file: string): JsonlSessionStore => {
         if (visited > all.length) break;
       }
       return branch.map((entry) => entry.message);
+    }),
+
+    /** Cumulative counters for the session, or zeroes when none were recorded. */
+    loadUsage: (): Promise<SessionUsage> => serialize(readUsage),
+
+    /** Record the running totals, so a resumed process can report them. */
+    saveUsage: (usage): Promise<void> => serialize(async () => {
+      await fs.mkdir(nodePath.dirname(file), { recursive: true });
+      await writeUsage(usage);
     }),
 
     loadTaskLedger: (): Promise<SessionTaskLedger | null> => serialize(async () => {
@@ -213,10 +316,11 @@ export const createJsonlSessionStore = (file: string): JsonlSessionStore => {
       const branch = createJsonlSessionStore(destination);
       const messages = await serialize(async () => {
         const all = await readAll();
-        if (all.length === 0) return [];
+        const newest = lastMessage(all);
+        if (!newest) return [];
         const byId = new Map(all.map((entry) => [entry.id, entry]));
         const messages: ModelMessage[] = [];
-        let cursor: SessionEntry | undefined = all[all.length - 1];
+        let cursor: SessionEntry | undefined = newest;
         let visited = 0;
         while (cursor?.kind === "message") {
           messages.unshift(cursor.message);
@@ -225,7 +329,11 @@ export const createJsonlSessionStore = (file: string): JsonlSessionStore => {
         }
         return messages;
       });
+      // The fork starts from the parent's transcript, so it inherits the
+      // parent's spend rather than reporting a fresh zeroed session.
+      const usage = await serialize(readUsage);
       await branch.replace(messages);
+      await branch.saveUsage(usage);
       await branch.saveTaskLedger(await serialize(async () => {
         try {
           return normalizeTaskLedger(JSON.parse(await fs.readFile(taskFile, "utf8")));

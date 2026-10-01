@@ -28,6 +28,54 @@ export const stripMouseReportText = (text: string): string =>
 const toolCallLine = (label: string, count: number): string =>
   `  ${c.cyan("◆")} ${label}${count > 1 ? c.dim(` ${"\u00d7"}${count}`) : ""}`;
 
+type MessagePart = Record<string, unknown>;
+
+const partsOf = (content: unknown): MessagePart[] =>
+  Array.isArray(content) ? (content as MessagePart[]) : [];
+
+/** First line of `text`, clipped. Reasoning is a log, not a transcript. */
+const clipLine = (text: string, max: number): string => {
+  const first = text.trim().split("\n")[0] ?? "";
+  return first.length > max ? `${first.slice(0, max - 1)}…` : first;
+};
+
+/**
+ * Prose of a user message.
+ *
+ * Array-shaped user content is how the transcript records an attached file, so
+ * accepting only `typeof content === "string"` silently dropped every prompt
+ * that carried one.
+ */
+const userText = (content: unknown): string => {
+  if (typeof content === "string") return content;
+  const parts = partsOf(content);
+  const text = parts
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text as string)
+    .join("\n")
+    .trim();
+  const files = parts.filter((part) => part.type === "file").length;
+  if (files === 0) return text;
+  const note = c.dim(`(+${files} file${files === 1 ? "" : "s"})`);
+  return text ? `${text} ${note}` : c.dim(`(${files} attached file${files === 1 ? "" : "s"})`);
+};
+
+/** `· result` for a restored `tool-result`, in the live renderer's shape. */
+const restoredResultLine = (part: MessagePart): string => {
+  const toolName = typeof part.toolName === "string" ? part.toolName : "tool";
+  const output = part.output as { value?: unknown } | string | undefined;
+  const text =
+    typeof output === "string"
+      ? output
+      : typeof output?.value === "string"
+        ? output.value
+        : output === undefined || output === null
+          ? ""
+          : JSON.stringify(output);
+  const summary = summarizeToolResult(toolName, undefined, text.slice(0, 2000), false);
+  return summary.show ? `    ${c.dim("·")} ${c.dim(summary.text)}` : "";
+};
+
 export class TurnOutput implements Component {
   private readonly blocks: Text[] = [];
   private stream: Text | null = null;
@@ -140,17 +188,31 @@ export class TurnOutput implements Component {
    *
    * Without this the transcript is loaded into `state.messages` (and replayed to
    * the model) but the pane starts blank, which is indistinguishable from the
-   * session having been lost. Tool traffic is summarised rather than replayed —
-   * a long session's tool log would bury the conversation it belongs to.
+   * session having been lost. Everything the live renderer shows is rebuilt
+   * here, through the same `toolLabel`/`summarizeToolResult` path, so a resumed
+   * session reads like the session that produced it: prose, tool calls, their
+   * results, and reasoning. Filtering the tool traffic out of the restored view
+   * left 34 messages rendering as three lines and made the log look truncated.
    */
   seedHistory(messages: readonly unknown[]): void {
     if (messages.length === 0) return;
+    const list = messages as Array<{ role?: string; content?: unknown }>;
     let toolCalls = 0;
 
-    for (const raw of messages) {
-      const message = raw as { role?: string; content?: unknown };
-      if (message.role === "user" && typeof message.content === "string") {
-        this.addLine(`${c.magenta("❯")} ${message.content}`);
+    for (const message of list) {
+      if (message.role === "user") {
+        this.addLine(`${c.magenta("❯")} ${userText(message.content)}`);
+        continue;
+      }
+      if (message.role === "tool") {
+        // Stored results are their own messages rather than parts of the call,
+        // so they are rendered here. Reusing the live summarizer keeps a
+        // restored session from dumping whole file bodies into the pane.
+        for (const part of partsOf(message.content)) {
+          if (part.type !== "tool-result") continue;
+          const line = restoredResultLine(part);
+          if (line) this.addLine(line);
+        }
         continue;
       }
       if (message.role !== "assistant") continue;
@@ -159,19 +221,25 @@ export class TurnOutput implements Component {
         this.addLine(`  ${message.content}`);
         continue;
       }
-      if (!Array.isArray(message.content)) continue;
 
-      // Array content: split the prose from the tool traffic.
-      const text = (message.content as Array<Record<string, unknown>>)
-        .filter((part) => part.type === "text" && typeof part.text === "string")
-        .map((part) => part.text as string)
-        .join("\n")
-        .trim();
-      const calls = (message.content as Array<Record<string, unknown>>).filter(
-        (part) => part.type === "tool-call",
-      ).length;
-      toolCalls += calls;
-      if (text) this.addLine(`  ${text}`);
+      for (const part of partsOf(message.content)) {
+        // Reasoning only carries `text`; the signature/provider metadata that made
+        // it replayable is not persisted, so an empty string is possible.
+        if (part.type === "reasoning" && typeof part.text === "string" && part.text.trim()) {
+          // `◦` at prose indent, against the `·` that hangs under a call. Both
+          // are dimmed, so the glyph and the indent are what tell them apart.
+          this.addLine(c.dim(`  ◦ ${clipLine(part.text, 100)}`));
+          continue;
+        }
+        if (part.type === "text" && typeof part.text === "string") {
+          this.addLine(`  ${part.text}`);
+          continue;
+        }
+        if (part.type === "tool-call" && typeof part.toolName === "string") {
+          toolCalls += 1;
+          this.addToolCall(toolLabel(part.toolName, part.input), part.input);
+        }
+      }
     }
 
     this.addLine("");

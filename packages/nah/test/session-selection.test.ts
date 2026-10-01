@@ -135,22 +135,64 @@ describe("resumed transcript is visible", () => {
     expect(text).toContain("resumed 2 earlier messages");
   });
 
-  it("summarises tool traffic instead of replaying it", () => {
+  it("replays restored tool calls and their results", () => {
     const output = new TurnOutput();
     output.seedHistory([
       {
         role: "assistant",
         content: [
-          { type: "tool-call", toolCallId: "a", toolName: "read", input: {} },
-          { type: "tool-call", toolCallId: "b", toolName: "grep", input: {} },
+          { type: "tool-call", toolCallId: "a", toolName: "read", input: { path: "src/app.ts" } },
           { type: "text", text: "Found it." },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          { type: "tool-result", toolCallId: "a", toolName: "read", output: { type: "text", value: "…" } },
+          { type: "tool-result", toolCallId: "b", toolName: "write", output: { type: "text", value: "wrote packages/nah/src/x.ts" } },
         ],
       },
     ]);
     const text = strip(output.render(90).join("\n"));
+    // The call and its result are the substance of a coding transcript. The
+    // previous renderer counted the calls and dropped the lines, which is what
+    // made a resumed session look truncated.
+    expect(text).toContain("◆ read src/app.ts");
     expect(text).toContain("Found it.");
-    expect(text).toContain("2 tool calls");
-    expect(text).not.toContain("◆");
+    expect(text).toContain("wrote packages/nah/src/x.ts");
+    expect(text).toContain("1 tool calls");
+  });
+
+  it("shows reasoning instead of dropping it", () => {
+    const output = new TurnOutput();
+    output.seedHistory([
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "The workspace root is elsewhere, so the path is absolute." },
+          { type: "text", text: "Mapped it." },
+        ],
+      },
+    ]);
+    const text = strip(output.render(90).join("\n"));
+    expect(text).toContain("The workspace root is elsewhere");
+    expect(text).toContain("Mapped it.");
+  });
+
+  it("renders a user message that carried a file attachment", () => {
+    const output = new TurnOutput();
+    output.seedHistory([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "explain this" },
+          { type: "file", data: "…", mediaType: "text/plain" },
+        ],
+      },
+    ]);
+    const text = strip(output.render(90).join("\n"));
+    expect(text).toContain("explain this");
+    expect(text).toContain("+1 file");
   });
 
   it("does nothing for an empty transcript", () => {
@@ -163,6 +205,47 @@ describe("resumed transcript is visible", () => {
 describe("end-to-end resume through the host", () => {
   beforeEach(() => {
     cwdCounter += 1;
+  });
+
+  it("restores the counters a previous run recorded, not zeroes", async () => {
+    const { resumeSession } = await import("../src/session.js");
+    const cwd = await freshCwd();
+    const file = defaultSessionFile(cwd);
+    const store = createJsonlSessionStore(file);
+    await store.append([
+      { role: "user", content: "what changed in the session store?" },
+      { role: "assistant", content: "usage records are now appended per turn" },
+    ]);
+    await store.saveUsage({
+      turns: 6,
+      inputTokens: 371_689,
+      outputTokens: 0,
+      totalTokens: 371_689,
+      contextUsedTokens: 120_000,
+      contextUsageEstimated: false,
+      lastOutputTokens: 900,
+    });
+
+    const state = { store: createJsonlSessionStore(file) } as SessionState;
+    expect(await resumeSession(state)).toBe(true);
+
+    expect(state.messages).toHaveLength(2);
+    expect(state.turns).toBe(6);
+    expect(state.totalUsage.totalTokens).toBe(371_689);
+    expect(state.contextUsedTokens).toBe(120_000);
+  });
+
+  it("reports zeroes for a session written before usage was recorded", async () => {
+    const { resumeSession } = await import("../src/session.js");
+    const cwd = await freshCwd();
+    const file = defaultSessionFile(cwd);
+    await createJsonlSessionStore(file).append([{ role: "user", content: "older session" }]);
+
+    const state = { store: createJsonlSessionStore(file) } as SessionState;
+    await resumeSession(state);
+
+    expect(state.turns).toBe(0);
+    expect(state.totalUsage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
   });
 
   it("shows resumed messages in the pane", async () => {
@@ -231,6 +314,93 @@ describe("end-to-end resume through the host", () => {
     const frame = strip(frames[frames.length - 1] ?? "");
     expect(frame).toContain("remember this detail");
     expect(frame).toContain("noted");
+
+    terminal.onInput?.("\x03");
+    await host;
+  });
+
+  it("restores tool calls and reasoning into the pane, not just prose", async () => {
+    const { startTuiHost } = await import("../src/tui/host.js");
+    const cwd = await freshCwd();
+    const file = defaultSessionFile(cwd);
+    await createJsonlSessionStore(file).append([
+      { role: "user", content: "where is the session store?" },
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "The store lives in the harness package." },
+          { type: "tool-call", toolCallId: "c1", toolName: "read", input: { path: "src/session.ts" } },
+          { type: "text", text: "Found it." },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          { type: "tool-result", toolCallId: "c1", toolName: "write", output: { type: "text", value: "wrote src/session.ts" } },
+        ],
+      },
+    ]);
+
+    class FakeTerminal {
+      written = "";
+      kittyProtocolActive = false;
+      constructor(
+        public columns = 80,
+        public rows = 24,
+      ) {}
+      start(onInput: (d: string) => void) {
+        this.onInput = onInput;
+      }
+      onInput: ((d: string) => void) | null = null;
+      stop() {}
+      async drainInput() {}
+      write(d: string) {
+        this.written += d;
+      }
+      moveBy() {}
+      hideCursor() {}
+      showCursor() {}
+      clearLine() {}
+      clearFromCursor() {}
+      clearScreen() {}
+      setTitle() {}
+      setProgress() {}
+    }
+
+    const terminal = new FakeTerminal();
+    const state = {
+      messages: await createJsonlSessionStore(file).load(),
+      system: "s",
+      cwd,
+      tools: {},
+      workspace: {},
+      activeFileChanges: null,
+      activeShellCommands: null,
+      undoHistory: [],
+      sessionBasePath: file,
+      taskLedger: null,
+      discoveredChecks: [],
+      store: createJsonlSessionStore(file),
+      model: { spec: "test:model" },
+      providerStatus: null,
+      totalUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      contextUsedTokens: 0,
+      contextUsageEstimated: false,
+      lastOutputTokens: 0,
+      turns: 0,
+      permissions: "yolo",
+    } as unknown as SessionState;
+
+    const host = startTuiHost({ state, terminal });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const frames = terminal.written.split("\u001b[?2026h");
+    const frame = strip(frames[frames.length - 1] ?? "");
+    expect(frame).toContain("where is the session store?");
+    expect(frame).toContain("The store lives in the harness package");
+    expect(frame).toContain("◆ read src/session.ts");
+    expect(frame).toContain("wrote src/session.ts");
+    expect(frame).toContain("Found it.");
 
     terminal.onInput?.("\x03");
     await host;

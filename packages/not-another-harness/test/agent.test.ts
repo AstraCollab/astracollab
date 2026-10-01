@@ -318,6 +318,94 @@ describe("jsonl session store", () => {
     }
   });
 
+  it("keeps the transcript intact when a usage record is the last line", async () => {
+    const dir = await mkdtemp(nodePath.join(tmpdir(), "nah-session-usage-"));
+    try {
+      const file = nodePath.join(dir, "s.jsonl");
+      const store = createJsonlSessionStore(file);
+      await store.append([
+        { role: "user", content: "task one" },
+        { role: "assistant", content: "done" },
+      ]);
+      await store.saveUsage({
+        turns: 4,
+        inputTokens: 1200,
+        outputTokens: 300,
+        totalTokens: 1500,
+        contextUsedTokens: 1200,
+        contextUsageEstimated: false,
+        lastOutputTokens: 90,
+      });
+      // A usage record is not a message, so neither `load` nor the next append
+      // may treat it as the branch tail.
+      expect(await createJsonlSessionStore(file).load()).toEqual([
+        { role: "user", content: "task one" },
+        { role: "assistant", content: "done" },
+      ]);
+      await store.append([{ role: "user", content: "task two" }]);
+      expect(await createJsonlSessionStore(file).load()).toEqual([
+        { role: "user", content: "task one" },
+        { role: "assistant", content: "done" },
+        { role: "user", content: "task two" },
+      ]);
+      expect(await createJsonlSessionStore(file).loadUsage()).toEqual({
+        turns: 4,
+        inputTokens: 1200,
+        outputTokens: 300,
+        totalTokens: 1500,
+        contextUsedTokens: 1200,
+        contextUsageEstimated: false,
+        lastOutputTokens: 90,
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports zeroes for a session that never recorded usage", async () => {
+    const dir = await mkdtemp(nodePath.join(tmpdir(), "nah-session-nousage-"));
+    try {
+      const store = createJsonlSessionStore(nodePath.join(dir, "s.jsonl"));
+      await store.append([{ role: "user", content: "hi" }]);
+      expect(await store.loadUsage()).toEqual({
+        turns: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        contextUsedTokens: 0,
+        contextUsageEstimated: false,
+        lastOutputTokens: 0,
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("zeroes the counters when the branch is cleared, and carries them into a fork", async () => {
+    const dir = await mkdtemp(nodePath.join(tmpdir(), "nah-session-usage-fork-"));
+    try {
+      const usage = {
+        turns: 2,
+        inputTokens: 800,
+        outputTokens: 200,
+        totalTokens: 1000,
+        contextUsedTokens: 800,
+        contextUsageEstimated: false,
+        lastOutputTokens: 50,
+      };
+      const parent = createJsonlSessionStore(nodePath.join(dir, "main.jsonl"));
+      await parent.append([{ role: "user", content: "original task" }]);
+      await parent.saveUsage(usage);
+      const fork = await parent.fork(nodePath.join(dir, "experiment.jsonl"));
+      expect(await fork.loadUsage()).toEqual(usage);
+      await parent.reset();
+      expect((await parent.loadUsage()).turns).toBe(0);
+      expect((await parent.loadUsage()).totalTokens).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("forks the loaded transcript into an independent session file", async () => {
     const dir = await mkdtemp(nodePath.join(tmpdir(), "nah-session-fork-"));
     try {
