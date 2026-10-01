@@ -82,6 +82,14 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
   // A resumed session is already in `state.messages`; show it, otherwise the
   // pane looks empty and the history reads as lost.
   output.seedHistory(state.messages);
+  // Switching sessions mid-run replaces the transcript, not just the state.
+  state.onSessionSwitch = (messages) => {
+    output.reset();
+    output.seedHistory(messages);
+    status.setText("");
+    refreshPrompt();
+    screen.requestRender(true);
+  };
   const status = new Text("", 1, 0);
   const editor = new Editor(screen, editorTheme, { paddingX: 1 });
 

@@ -13,7 +13,7 @@ import { removeProviderKey, storeProviderKey, type BuiltinProvider } from "./cre
 import { createApprover, parsePermissionMode, type PermissionMode } from "./permissions.js";
 import { c, formatFileChange, formatWorkspaceDiff, renderWelcome, toolLabel, usageLine, type RenderableFileChange } from "./render.js";
 import { renderCommandHelp } from "./commands.js";
-import { listSessionIds } from "./context.js";
+import { listSessionIds, resolveSessionFile } from "./context.js";
 import { createTurnExtractor, prepareMemory } from "./memory.js";
 import { createRecallTool } from "./memory-tool.js";
 import { MemoryInjectionLog } from "./memory-injection.js";
@@ -607,7 +607,7 @@ export const handleSlashCommand = async (
       return "handled";
     }
     case "session": {
-      if (arg === "list") {
+      if (!arg || arg === "list") {
         const directory = nodePath.dirname(defaultSessionFile(cwd));
         try {
           const sessions = (await listSessionIds(cwd)).map((session) => ({
@@ -623,7 +623,7 @@ export const handleSlashCommand = async (
               const active = session.active ? c.green(" · active") : "";
               out.write(`${session.id}${active}  ${c.dim(new Date(session.modified).toLocaleString())}\n`);
             }
-            out.write(c.dim("Resume with: nah --session <id>\n"));
+            out.write(c.dim("Switch with: /session <id>\n"));
           }
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") out.write(c.dim("(no saved sessions for this directory)\n"));
@@ -634,6 +634,48 @@ export const handleSlashCommand = async (
       if (arg === "off") {
         state.store = null;
         out.write(c.dim("(session persistence off for this process)\n"));
+        return "handled";
+      }
+      {
+        // `/session <id|path>` switches without leaving the running agent, using
+        // the same resolution as `--session` so both entry points agree.
+        const { createJsonlSessionStore } = await import("@astracollab/not-another-harness");
+        const target = resolveSessionFile(cwd, arg);
+        const known = (await listSessionIds(cwd)).map((session) => session.id);
+        const isKnown = known.includes(nodePath.basename(target, ".jsonl"));
+
+        let messages: typeof state.messages;
+        try {
+          messages = await createJsonlSessionStore(target).load();
+        } catch (error) {
+          out.write(
+            c.red(`could not open ${arg}: ${error instanceof Error ? error.message : String(error)}\n`),
+          );
+          return "handled";
+        }
+
+        // An id we do not recognise almost always means a typo. Say so, and say
+        // what does exist, rather than silently switching to an empty session.
+        if (messages.length === 0 && !isKnown) {
+          out.write(c.red(`no session "${arg}"${nodePath.isAbsolute(arg) ? "" : ` (${target})`}.\n`));
+          if (known.length > 0) {
+            out.write(c.dim(`  sessions here: ${known.join(", ")}\n`));
+          } else {
+            out.write(c.dim("  no saved sessions for this directory\n"));
+          }
+          return "handled";
+        }
+
+        state.store = createJsonlSessionStore(target);
+        state.sessionBasePath = target;
+        state.messages = messages;
+        state.taskLedger = await state.store.loadTaskLedger();
+        state.undoHistory = [];
+        const loaded = messages.length === 0
+          ? c.dim("(that session is empty)")
+          : c.dim(`${messages.length} message${messages.length === 1 ? "" : "s"} restored`);
+        out.write(`${c.green("switched")} → ${nodePath.basename(target)} ${loaded}\n`);
+        state.onSessionSwitch?.(state.messages);
         return "handled";
       }
       if (arg === "new") {
@@ -647,7 +689,7 @@ export const handleSlashCommand = async (
         out.write(c.dim(`new session → ${p}\n`));
         return "handled";
       }
-      out.write(c.red("usage: /session list | new | off") + "\n");
+      out.write(c.dim("usage: /session [list | <id> | new | off]") + "\n");
       return "handled";
     }
     case "compact": {

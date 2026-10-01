@@ -55,6 +55,17 @@ export class TurnOutput implements Component {
     this.push(stripMouseReportText(text));
   }
 
+  /** Drop everything rendered so far, e.g. after switching sessions. */
+  reset(): void {
+    this.blocks.length = 0;
+    this.group = null;
+    this.groupInput = null;
+    this.stream = null;
+    this.streamBuffer = "";
+    this.renderedChanges = 0;
+    this.lastChanges = null;
+  }
+
   /** Blank line separator. */
   addGap(): void {
     this.stream = null;

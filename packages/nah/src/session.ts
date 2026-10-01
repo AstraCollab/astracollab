@@ -53,6 +53,11 @@ export type SessionState = {
   setApprovalPrompt?: (prompt: ApprovalPrompt | null) => void;
   /** Rolling record of what memory injected into each turn's prompt. */
   memoryInjectionLog?: import("./memory-injection.js").MemoryInjectionLog;
+  /**
+   * Called after the active session is replaced. The TUI uses it to rebuild the
+   * transcript pane, which is otherwise only seeded once at startup.
+   */
+  onSessionSwitch?: (messages: ModelMessage[]) => void;
   /** Display label for the working dir (e.g. remote sandbox name). */
   sandboxCwd?: string;
   /** Tear down a remote sandbox (no-op for local sessions). */
