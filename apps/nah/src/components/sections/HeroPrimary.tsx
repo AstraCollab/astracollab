@@ -33,8 +33,8 @@ export function HeroPrimary() {
             <Link className="transition hover:text-white" href="#tools">Tools</Link>
             <Link className="transition hover:text-white" href="#control">CLI</Link>
           </div>
-          <Link href="/docs" className="group inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-2 text-xs text-zinc-200 transition hover:border-white/20 hover:bg-white/10">
-            Read the docs <MoveUpRight className="size-3.5 transition group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+          <Link href="/docs" className="group inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-2 text-xs text-zinc-200 transition hover:border-white/20 hover:bg-white/10">
+            Read the docs <MoveUpRight className="size-3.5 shrink-0 transition group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
           </Link>
         </nav>
       </header>
@@ -46,9 +46,9 @@ export function HeroPrimary() {
 
       <div className="relative z-10 mx-auto flex w-full max-w-7xl flex-1 flex-col items-center justify-center px-5 pb-16 pt-28 text-center sm:px-8">
         <motion.div {...reveal} className="mb-8">
-          <Link href="/docs" className="group inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 font-mono text-[11px] text-zinc-300 transition hover:border-indigo-300/30 hover:bg-indigo-300/[0.06]">
-            <span className="size-1.5 rounded-full bg-indigo-300" />
-            Open source · coding-agent runtime <ArrowRight className="size-3 text-zinc-500 transition group-hover:translate-x-0.5 group-hover:text-indigo-200" />
+          <Link href="/docs" className="group inline-flex max-w-full items-center gap-2 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 font-mono text-[11px] text-zinc-300 transition hover:border-indigo-300/30 hover:bg-indigo-300/[0.06]">
+            <span className="size-1.5 shrink-0 rounded-full bg-indigo-300" />
+            <span className="truncate">Open source · coding-agent runtime</span> <ArrowRight className="size-3 shrink-0 text-zinc-500 transition group-hover:translate-x-0.5 group-hover:text-indigo-200" />
           </Link>
         </motion.div>
         <motion.h1 {...reveal} transition={{ ...reveal.transition, delay: 0.08 }} className="max-w-5xl text-balance text-5xl font-medium leading-[0.98] tracking-[-0.065em] text-transparent sm:text-7xl lg:text-[5.8rem]">
@@ -60,17 +60,17 @@ export function HeroPrimary() {
           NAH is a small TypeScript runtime and CLI. Bring an AI SDK model, follow streamed tool calls, and set clear limits on what the agent can do.
         </motion.p>
         <motion.div {...reveal} transition={{ ...reveal.transition, delay: 0.24 }} className="mt-9 flex w-full flex-col items-center justify-center gap-3 sm:w-auto sm:flex-row">
-          <Link href="/docs/installation" className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-zinc-100 px-5 py-3 text-sm font-medium text-zinc-950 transition hover:bg-white sm:w-auto">
-            Get started <ArrowRight className="size-4" />
+          <Link href="/docs/installation" className="inline-flex w-full items-center justify-center gap-2 whitespace-nowrap rounded-full bg-zinc-100 px-5 py-3 text-sm font-medium text-zinc-950 transition hover:bg-white sm:w-auto">
+            Get started <ArrowRight className="size-4 shrink-0" />
           </Link>
-          <button type="button" onClick={copyInstall} className="inline-flex w-full items-center justify-between gap-5 rounded-full border border-white/10 bg-zinc-900/70 px-4 py-3 font-mono text-xs text-zinc-300 transition hover:border-white/20 sm:w-auto" aria-label="Copy NAH CLI install command">
-            <span><span className="text-zinc-600">$</span> npm install -g @astracollab/nah</span>
-            {copied ? <Check className="size-3.5 text-emerald-400" /> : <Copy className="size-3.5 text-zinc-500" />}
+          <button type="button" onClick={copyInstall} className="inline-flex w-full min-w-0 items-center justify-between gap-4 rounded-full border border-white/10 bg-zinc-900/70 px-4 py-3 font-mono text-xs text-zinc-300 transition hover:border-white/20 sm:w-auto" aria-label="Copy NAH CLI install command">
+            <span className="min-w-0 truncate"><span className="text-zinc-600">$</span> npm install -g @astracollab/nah</span>
+            {copied ? <Check className="size-3.5 shrink-0 text-emerald-400" /> : <Copy className="size-3.5 shrink-0 text-zinc-500" />}
           </button>
         </motion.div>
         <motion.div {...reveal} transition={{ ...reveal.transition, delay: 0.32 }} className="mt-20 flex items-center gap-3 text-[10px] font-mono uppercase tracking-[0.18em] text-zinc-600">
           <Code2 className="size-3.5" /> Open source · Node.js 20.6+ · AI SDK v5 <span className="mx-2 h-px w-8 bg-white/10" />
-          <Link href="#reasoning" className="inline-flex items-center gap-1.5 transition hover:text-zinc-300">See how it works <ArrowDown className="size-3" /></Link>
+          <Link href="#reasoning" className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap transition hover:text-zinc-300">See how it works <ArrowDown className="size-3 shrink-0" /></Link>
         </motion.div>
       </div>
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-zinc-950 to-transparent" />

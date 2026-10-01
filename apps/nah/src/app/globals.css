@@ -263,6 +263,10 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  /* Never let a long label push the button onto a second line on narrow
+     viewports. The label truncates; icons must keep their size. */
+  max-width: 100%;
+  white-space: nowrap;
   padding: 0.625rem 1.25rem;
   border: 1px solid var(--color-border-tab);
   border-radius: var(--radius-md);
@@ -282,10 +286,8 @@
 }
 .btn-terminal:focus-visible {
   outline: none;
-  ring: 2px;
-  ring-color: var(--color-terminal-green);
-  ring-offset: 2px;
-  ring-offset-color: var(--color-bg);
+  /* Was `ring:`/`ring-color:`, which are not CSS properties — no-ops here. */
+  box-shadow: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-terminal-green);
 }
 .btn-terminal:active {
   transform: translateY(0);
@@ -295,6 +297,8 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  max-width: 100%;
+  white-space: nowrap;
   padding: 0.4rem 0.8rem;
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
@@ -312,6 +316,8 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  max-width: 100%;
+  white-space: nowrap;
   padding: 0.625rem 1.25rem;
   border: 1px solid var(--color-accent);
   border-radius: var(--radius-md);
@@ -329,10 +335,7 @@
 }
 .btn-terminal-primary:focus-visible {
   outline: none;
-  ring: 2px;
-  ring-color: var(--color-terminal-green);
-  ring-offset: 2px;
-  ring-offset-color: var(--color-bg);
+  box-shadow: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-terminal-green);
 }
 
 .code-block {

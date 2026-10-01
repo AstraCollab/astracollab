@@ -26,7 +26,7 @@ export function HeroReasoning() {
           <div className="mt-8 flex flex-wrap gap-2 font-mono text-[10px] text-zinc-500">
             <span className="rounded-full border border-white/10 px-3 py-1.5">max 32 steps by default</span><span className="rounded-full border border-white/10 px-3 py-1.5">typed async events</span><span className="rounded-full border border-white/10 px-3 py-1.5">abortable</span>
           </div>
-          <Link href="/docs/agent-loop" className="mt-8 inline-flex items-center gap-2 text-xs text-cyan-200 transition hover:text-white">How the loop works <ArrowRight className="size-3.5" /></Link>
+          <Link href="/docs/agent-loop" className="mt-8 inline-flex items-center gap-2 whitespace-nowrap text-xs text-cyan-200 transition hover:text-white">How the loop works <ArrowRight className="size-3.5 shrink-0" /></Link>
         </motion.div>
         <motion.div {...reveal} transition={{ ...reveal.transition, delay: 0.1 }} className="relative">
           <div className="absolute -inset-5 rounded-[2rem] bg-cyan-400/[0.04] blur-2xl" />
