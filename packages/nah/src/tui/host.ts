@@ -261,8 +261,7 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
     const bare = input.replace(/@[^\s]+/g, "").trim();
     void withFileInclusions(state.cwd, files, bare).then((prompt) => {
       run.abort = new AbortController();
-      output.addLine("");
-      output.addLine(`${c.magenta("❯")} ${c.bold(prompt)}`);
+      output.addLine(`${c.magenta("❯")} ${c.bold(prompt)}`, "user");
       const turn = runTurn(state, prompt, { signal: run.abort.signal });
       run.turn = { steer: (text) => turn.steer(text) };
       refreshPrompt();

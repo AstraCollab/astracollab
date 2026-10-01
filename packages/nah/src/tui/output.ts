@@ -105,6 +105,15 @@ const commandBlock = (command: string, count: number): string =>
 
 type MessagePart = Record<string, unknown>;
 
+/**
+ * What a block of the transcript is, which decides whether it needs air.
+ *
+ * Blocks of the same kind stay tight - a tool call and its own result are one
+ * unit, a diff is many lines of a single thought. Switching kind gets a blank
+ * line, which is what makes a transcript scannable instead of a wall.
+ */
+export type BlockKind = "user" | "prose" | "tool" | "diff" | "notice";
+
 const partsOf = (content: unknown): MessagePart[] =>
   Array.isArray(content) ? (content as MessagePart[]) : [];
 
@@ -171,6 +180,8 @@ export class TurnOutput implements Component {
   private streamBuffer = "";
   private renderedChanges = 0;
   private lastChanges: RenderableFileChange[] | null = null;
+  /** Kind of the last rendered block, so the next one can decide on spacing. */
+  private lastKind: BlockKind | null = null;
 
   constructor(
     private readonly getFileChanges: () => RenderableFileChange[] = () => [],
@@ -186,15 +197,22 @@ export class TurnOutput implements Component {
   appendStream(delta: string): void {
     this.streamBuffer += stripMouseReportText(delta);
     if (!this.stream) {
+      this.gap("prose");
       this.stream = this.pushMarkdown("");
     }
     this.stream.setText(this.streamBuffer.trimStart());
   }
 
-  /** A standalone line: tool call, result, notice, or divider. */
-  addLine(text: string): void {
+  /**
+   * A standalone line: tool result, notice, diff row, or divider.
+   *
+   * `kind` groups a multi-line block so its rows are not separated from each
+   * other: a 40-line diff is one thought and must not become 40 paragraphs.
+   */
+  addLine(text: string, kind: BlockKind = "notice"): void {
     this.stream = null;
     this.streamBuffer = "";
+    this.gap(kind);
     this.push(stripMouseReportText(text));
   }
 
@@ -207,6 +225,7 @@ export class TurnOutput implements Component {
   addMarkdown(text: string): void {
     this.stream = null;
     this.streamBuffer = "";
+    this.gap("prose");
     this.pushMarkdown(stripMouseReportText(text));
   }
 
@@ -219,13 +238,42 @@ export class TurnOutput implements Component {
     this.streamBuffer = "";
     this.renderedChanges = 0;
     this.lastChanges = null;
+    this.lastKind = null;
   }
 
   /** Blank line separator. */
   addGap(): void {
     this.stream = null;
     this.streamBuffer = "";
-    this.blocks.push(new Text("", 1, 0));
+    // Cleared, not set to a kind: the next block must not add a second gap on
+    // top of this one.
+    this.lastKind = null;
+    this.blankLine();
+  }
+
+  /**
+   * One empty rendered row.
+   *
+   * Not a `Text`: pi-tui derives a text block's rows from its content and
+   * returns *none* for whitespace-only input, so `Text("")` and `Text(" ")`
+   * both render to zero lines and a separator built from them is invisible.
+   */
+  private blankLine(): void {
+    this.blocks.push({ render: () => [""], invalidate: () => {} });
+  }
+
+  /**
+   * Insert a blank line when the kind of block changes.
+   *
+   * Suppressed at the very top so a transcript does not open on empty space,
+   * and suppressed between same-kind blocks so a run of tool calls or diff rows
+   * reads as one passage.
+   */
+  private gap(kind: BlockKind): void {
+    if (this.lastKind !== null && this.lastKind !== kind) {
+      this.blankLine();
+    }
+    this.lastKind = kind;
   }
 
   /** Current run of identical consecutive tool calls, collapsed to one line. */
@@ -267,7 +315,8 @@ export class TurnOutput implements Component {
           stripAnsi(this.group.label).includes(summary.text);
         if (summary.show && !redundant) {
           const mark = event.isError ? c.red("✗") : c.dim("·");
-          this.addLine(`    ${mark} ${event.isError ? c.red(summary.text) : c.dim(summary.text)}`);
+          // "tool", not "notice": the result belongs to the call above it.
+          this.addLine(`    ${mark} ${event.isError ? c.red(summary.text) : c.dim(summary.text)}`, "tool");
         }
         // The group survives the result — calls and results always alternate,
         // so clearing it here would mean consecutive repeats never collapse.
@@ -290,7 +339,6 @@ export class TurnOutput implements Component {
         this.flushFileChanges();
         return;
       case "finish":
-        this.addLine("");
         this.addLine(
           c.dim(
             `  ${event.reason} · ${event.usage.totalTokens} tokens${
@@ -322,7 +370,7 @@ export class TurnOutput implements Component {
 
     for (const message of list) {
       if (message.role === "user") {
-        this.addLine(`${c.magenta("❯")} ${userText(message.content)}`);
+        this.addLine(`${c.magenta("❯")} ${userText(message.content)}`, "user");
         continue;
       }
       if (message.role === "tool") {
@@ -338,7 +386,7 @@ export class TurnOutput implements Component {
             continue;
           }
           const line = restoredResultLine(part);
-          if (line) this.addLine(line);
+          if (line) this.addLine(line, "tool");
         }
         continue;
       }
@@ -373,10 +421,8 @@ export class TurnOutput implements Component {
       }
     }
 
-    this.addLine("");
     const summary = toolCalls > 0 ? ` · ${toolCalls} tool calls` : "";
     this.addLine(c.dim(`  — resumed ${messages.length} earlier messages${summary} —`));
-    this.addLine("");
   }
 
   /** File changes recorded during the step that just finished. */
@@ -392,8 +438,7 @@ export class TurnOutput implements Component {
     while (this.renderedChanges < changes.length) {
       const change = changes[this.renderedChanges++];
       if (!change) continue;
-      this.addLine("");
-      for (const line of formatFileChange(change)) this.addLine(line);
+      for (const line of formatFileChange(change)) this.addLine(line, "diff");
     }
   }
 
@@ -407,6 +452,7 @@ export class TurnOutput implements Component {
   private addToolCall(toolName: string, input: unknown): void {
     this.stream = null;
     this.streamBuffer = "";
+    this.gap("tool");
     this.groupInput = input;
 
     const label = toolLabel(toolName, input);

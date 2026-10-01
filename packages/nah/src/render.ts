@@ -20,8 +20,17 @@ export const c = {
   italic: wrap("\u001b[3m", "\u001b[23m"),
   strikethrough: wrap("\u001b[9m", "\u001b[29m"),
   underline: wrap("\u001b[4m", "\u001b[24m"),
-  /** Panel fill. 236 is a near-black grey that reads as a surface, not a block. */
-  background: wrap("\u001b[48;5;236m", "\u001b[49m"),
+  /**
+   * Panel fill: near-white text on a near-black surface, in one SGR pair.
+   *
+   * Both attributes are set by a single sequence and cleared by a single reset
+   * rather than by separate foreground/background pairs. That keeps the row's
+   * byte overhead at 17 characters instead of 29, which matters because the row
+   * is padded to the full pane width and then clamped to the terminal width: the
+   * cheaper form is the difference between fitting and having the closing escape
+   * clipped off mid-sequence, which bleeds the fill onto the next line.
+   */
+  background: wrap("\u001b[38;5;255;48;5;236m", "\u001b[0m"),
   /**
    * Failure fill, applied to the whole panel rather than to the text.
    *
@@ -29,7 +38,7 @@ export const c = {
    * and the layout clips the closing escape, so a panel cannot carry its own
    * colour. Tinting the surface is the way to mark a failure here.
    */
-  backgroundError: wrap("\u001b[48;5;52m", "\u001b[49m"),
+  backgroundError: wrap("\u001b[38;5;255;48;5;52m", "\u001b[0m"),
   magenta: wrap("[35m", "[0m"),
 };
 
