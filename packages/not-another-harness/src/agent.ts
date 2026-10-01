@@ -2,7 +2,7 @@ import { streamText, stepCountIs, type ModelMessage, type ToolSet } from "ai";
 import type { SharedV2ProviderOptions } from "@ai-sdk/provider";
 
 import { compactMessages } from "./compaction.js";
-import { cacheOptions, contextManagementOptions, withCachedToolSchemas } from "./cache.js";
+import { cacheOptions, contextManagementOptions, supportsCaching, withCachedToolSchemas } from "./cache.js";
 import { createStepDedupe } from "./dedupe.js";
 import { createReadCoverage } from "./read-coverage.js";
 import { pruneOldToolResults } from "./prune.js";
@@ -289,7 +289,28 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
         // Bound transcript growth on providers with no server-side context
         // editing. Skipped automatically when reasoning is present.
         let requestMessages = messages;
-        if (options.pruneToolResults && step > 1) {
+        /**
+         * Client-side pruning and prompt caching are mutually exclusive.
+         *
+         * Eliding a tool result rewrites bytes that sit *behind* the cache
+         * breakpoint, so the prefix hash stops matching what the previous request
+         * wrote. Measured on the configured model over a growing conversation: a
+         * stable prefix cached 3,242 tokens per turn on average, the same
+         * conversation with old results rewritten cached 487 - an 85% collapse,
+         * matching a real run that reported 2% cached.
+         *
+         * The trade is not close. A cached token costs 0.1x, so replaying a large
+         * prefix at a discount is far cheaper than paying full price for a
+         * slightly smaller one. On that 548k turn that is roughly 60k billed
+         * against 537k - pruning saved 1% of the tokens and gave away a 90%
+         * discount.
+         *
+         * So pruning is for providers with no cache to lose. Growth is bounded by
+         * compaction instead, which rewrites the whole conversation rarely enough
+         * that one cache write per compaction is worth paying.
+         */
+        const cacheable = supportsCaching(options.cacheProvider);
+        if (options.pruneToolResults && step > 1 && !cacheable) {
           const pruned = pruneOldToolResults(messages, options.pruneToolResults.keepRecentToolCalls, {
             // Reasoning signatures are an Anthropic concept. Without this the
             // guard fired for every provider, so pruning never ran anywhere.

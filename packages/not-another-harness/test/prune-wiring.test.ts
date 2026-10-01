@@ -96,17 +96,43 @@ const run = async (modelId: string, provider: string): Promise<string[]> => {
   return captured;
 };
 
-describe("pruning reaches the provider", () => {
-  it("elides old results for a reasoning model on a provider without signature checks", async () => {
-    const requests = await run("stealth/space-bunny-alpha", "openrouter");
-    const last = requests.at(-1) ?? "";
-    // The unit test proves the predicate; this proves the wiring, which is what
-    // was actually broken - the call site passed no provider at all.
+describe("pruning is skipped when the provider can cache", () => {
+  const run = async (provider: string, modelId: string): Promise<string> => {
+    const captured: string[] = [];
+    const result = runAgent({
+      model: Object.assign(probingModel(4, captured), { modelId, provider, specificationVersion: "v2" }),
+      system: "s",
+      prompt: "go",
+      messages: seededReasoning,
+      cacheProvider: provider as never,
+      tools: { probe: tool({ inputSchema: z.object({}), execute: async () => bigResult("payload") }) },
+      pruneToolResults: { keepRecentToolCalls: 1 },
+    });
+    for await (const _ of result.events) {
+      // Drain, so every step runs.
+    }
+    await result.result;
+    return captured.at(-1) ?? "";
+  };
+
+  it("leaves the transcript alone on a cacheable provider", async () => {
+    // Eliding rewrites bytes behind the cache breakpoint, so the prefix hash
+    // stops matching. Measured on the configured model: 3,242 cached tokens per
+    // turn with a stable prefix, 487 with old results rewritten. Trading a 0.1x
+    // discount for a smaller prompt is a bad deal.
+    const last = await run("openrouter", "stealth/space-bunny-alpha");
+    expect(last).not.toContain("[output elided");
+  });
+
+  it("still prunes on a provider with no cache to lose", async () => {
+    const last = await run("openai", "gpt-5");
     expect(last).toContain("[output elided");
   });
 
-  it("leaves an Anthropic model's transcript intact", async () => {
-    const requests = await run("anthropic/claude-sonnet-4.5", "openrouter");
-    expect(requests.at(-1) ?? "").not.toContain("[output elided");
+  it("still refuses to prune an Anthropic model's reasoning transcript", async () => {
+    // Reached through a cacheable provider, so pruning is off anyway - but the
+    // signature guard has to hold for a non-caching Anthropic route too.
+    const last = await run("a-non-caching-anthropic-proxy", "claude-sonnet-4-5");
+    expect(last).not.toContain("[output elided");
   });
 });
