@@ -4,6 +4,7 @@ import type { SharedV2ProviderOptions } from "@ai-sdk/provider";
 import { compactMessages } from "./compaction.js";
 import { cacheOptions, contextManagementOptions, withCachedToolSchemas } from "./cache.js";
 import { createStepDedupe } from "./dedupe.js";
+import { createReadCoverage } from "./read-coverage.js";
 import { pruneOldToolResults } from "./prune.js";
 import { estimateMessageTokens, estimateRequestTokens } from "./estimate.js";
 import type {
@@ -187,11 +188,21 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
     // cleared per step, so re-running a command later — after an edit — still
     // works normally.
     const dedupe = createStepDedupe(options.tools);
+    /**
+     * Re-reads of lines this run already fetched, served from what is in hand.
+     *
+     * Wrapped outside the step memo because the redundancy spans steps. Any
+     * mutating tool clears the window, since a stale read would be worse than
+     * the duplicate it prevents.
+     */
+    const coverage = createReadCoverage(dedupe.tools);
     // Tool definitions and the system prompt are re-sent verbatim every step, so
     // they carry cache breakpoints. Marking a prefix is safe; rewriting one is
     // not, because editing a prior tool_result invalidates Anthropic's
     // thinking-block signatures.
-    const cachedTools = withCachedToolSchemas(dedupe.tools, options.cacheProvider, options.cacheTtl);
+    // Coverage sits outside the memo and inside the cache marking, so the model
+    // sees the wrapped tools and the breakpoints still land on the real schemas.
+    const cachedTools = withCachedToolSchemas(coverage.tools, options.cacheProvider, options.cacheTtl);
     const editing = contextManagementOptions(options.cacheProvider, options.contextEditing);
     const providerOptions = {
       ...(cacheOptions(options.cacheProvider, options.cacheTtl) ?? {}),
