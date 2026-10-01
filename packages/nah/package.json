@@ -1,18 +1,17 @@
 {
   "name": "@astracollab/nah",
   "version": "0.0.1-beta.0",
-  "description": "nah — not another harness, the CLI. A fast, minimal coding-agent terminal (Pi-style): streaming agent loop, capped tools, JSONL sessions, slash commands.",
+  "description": "nah \u2014 not another harness, the CLI. A fast, minimal coding-agent terminal (Pi-style): streaming agent loop, capped tools, JSONL sessions, slash commands.",
   "type": "module",
   "bin": {
     "nah": "./dist/cli.js"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "exports": {
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "!dist/bin",
     "install.sh",
     "LICENSE"
   ],
