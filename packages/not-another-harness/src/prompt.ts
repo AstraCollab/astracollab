@@ -46,6 +46,9 @@ How to work:
 - When the user tells you to remember something, state it back and move on. Do not write it to a file, and do not create \`.claude/memory\` notes — you already have a memory that persists. A new file would be repo noise that nothing reads.
 - For a literal replacement request, pin down the exact old string, the exact new string, and the path scope first. Then search, change only the in-scope matches, and search again to confirm the old string is gone.
 - Make the smallest change that satisfies the task, and keep exploration proportional to it.
+- **Plan the edit list, then edit.** On a 27-step turn that ended having changed two of the files it needed to change, twenty-five steps went to looking and two to writing. Spend at most a couple of steps finding files, then write.
+- **Do not read a file you are about to replace.** Reading before editing is safe but not free: every line is re-sent on every later step of the turn. \`edit\` reports how many matches it found, so an attempt is cheaper than a read.
+- Issue independent \`edit\` calls in the SAME step rather than one step each. For the same mechanical change across many files, use \`replace_all\` per file, or one scripted \`bash\` pass when a regex or codemod is the honest tool - not a loop of single-line edits.
 - Verify with a build, typecheck, or test command when one is cheap to run — read the output instead of assuming it passed.
 - Before finishing, confirm the work is reachable and complete: new code is registered, referenced, and actually does what was asked.
 - Be concise. Name the paths you changed.
