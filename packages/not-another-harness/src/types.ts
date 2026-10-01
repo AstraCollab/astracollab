@@ -13,7 +13,19 @@ export type HarnessUsage = {
 export type HarnessStopReason =
   | "completed" /** Model replied with no tool calls. */
   | "max-steps"
+  /** A spend ceiling was hit: the dollar rail, or the deprecated token rail. */
   | "max-tokens"
+  /**
+   * The model's reply hit the per-step *output* cap and was cut off.
+   *
+   * Distinct from `max-tokens` because it means something completely different:
+   * nothing was wrong with input size or spend, one response was simply longer
+   * than the allowance. Thinking tokens count against that cap, so on a reasoning
+   * model a single verbose step can trip it - and reporting that as `max-tokens`
+   * sends the reader to tune input context, which is the one knob that cannot
+   * fix it.
+   */
+  | "max-output"
   | "aborted"
   | "error";
 

@@ -19,7 +19,15 @@ import type {
 
 const DEFAULT_MAX_STEPS = 32;
 const DEFAULT_MAX_TOKENS = 400_000;
-const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
+/**
+ * Per-step output ceiling when the caller sets none.
+ *
+ * 16k rather than 8k. Reasoning tokens come out of the same allowance as the
+ * reply, so a model that thinks at length can exhaust a small cap mid-thought and
+ * the step ends as truncated rather than finishing. The cost only rises when the
+ * extra room is actually used.
+ */
+const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
 const DEFAULT_COMPACT_AT_TOKENS = 120_000;
 const DEFAULT_KEEP_RECENT = 6;
 /** Headroom kept aside so a compaction summary can still be paid for. */
@@ -399,7 +407,11 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           break;
         }
         if (finishReason === "length") {
-          reason = "max-tokens";
+          // Cut off by the per-step output cap. Reported as `max-output`, not
+          // `max-tokens`: this limits how much the model *wrote*, and thinking
+          // tokens count against it, so pointing the reader at input size or
+          // spend sends them to the one knob that cannot help.
+          reason = "max-output";
           break;
         }
         if (!stepHadToolCalls(response.messages)) {
