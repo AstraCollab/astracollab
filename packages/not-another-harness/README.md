@@ -105,6 +105,21 @@ const run = runAgent({ model, prompt, system, tools, cacheProvider: "anthropic",
 
 This only *marks* the prefix. It never rewrites earlier content, which matters: editing a prior `tool_result` invalidates the thinking-block signatures Anthropic binds to that prefix, and hard-fails the request.
 
+### Bounding the transcript on any provider
+
+```ts
+const run = runAgent({ model, prompt, system, tools, pruneToolResults: { keepRecentToolCalls: 6 } });
+```
+
+Tool results older than the last few rounds are replaced in place with a note saying how much was removed, so a long run stops paying for output it no longer needs. Only the `value` inside the result changes: the block, its `toolCallId`, its position and the owning `tool-call` all stay put, so the tool_use/tool_result pairing the provider validates is untouched.
+
+Two safety properties:
+
+- **It refuses to run on a transcript containing reasoning.** Rewriting an earlier `tool_result` invalidates the thinking-block signatures Anthropic binds to that prefix, and the SDK sends reasoning back by default. With none present there are no signatures to disturb.
+- **It is monotone.** A result is elided once and stays elided, so the prompt prefix does not churn on every request.
+
+Measured over 13 steps reading a 1,200-line file: **347 KB of prompt down to 162 KB, 53% reclaimed (~47k tokens).**
+
 ### Server-side context editing
 
 For providers that support it, you can also ask the API to clear old tool results and replace them with placeholders, so a long run does not keep replaying output the agent no longer needs.

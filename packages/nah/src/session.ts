@@ -164,6 +164,9 @@ export const runTurn = (
     // Let the API clear old tool results for us. Triggers well below our own
     // compaction threshold, because the cost is the repeated replay of a
     // transcript that never grows large enough to trip that threshold.
+    // Provider-agnostic transcript bounding. No-op when reasoning is present,
+    // so Anthropic still prefers server-side editing, which is safer there.
+    pruneToolResults: { keepRecentToolCalls: 6 },
     contextEditing: {
       triggerTokens: 40_000,
       keepToolUses: 6,

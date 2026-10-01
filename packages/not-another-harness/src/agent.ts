@@ -4,6 +4,7 @@ import type { SharedV2ProviderOptions } from "@ai-sdk/provider";
 import { compactMessages } from "./compaction.js";
 import { cacheOptions, contextManagementOptions, withCachedToolSchemas } from "./cache.js";
 import { createStepDedupe } from "./dedupe.js";
+import { pruneOldToolResults } from "./prune.js";
 import { estimateMessageTokens, estimateRequestTokens } from "./estimate.js";
 import type {
   HarnessEvent,
@@ -232,7 +233,13 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           // `maxSteps` cannot silently drop a message they deliberately sent.
           stepLimit = step + maxSteps;
         }
-        const requestMessages = messages;
+        // Bound transcript growth on providers with no server-side context
+        // editing. Skipped automatically when reasoning is present.
+        let requestMessages = messages;
+        if (options.pruneToolResults && step > 1) {
+          const pruned = pruneOldToolResults(messages, options.pruneToolResults.keepRecentToolCalls);
+          requestMessages = pruned.messages;
+        }
         const estimatedInputTokens = estimateRequestTokens(options.system, requestMessages);
         if (maxTokens > 0 && remainingTokens <= estimatedInputTokens) {
           reason = "max-tokens";

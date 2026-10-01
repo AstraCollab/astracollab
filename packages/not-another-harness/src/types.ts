@@ -163,6 +163,15 @@ export type HarnessRunOptions = {
    * Server-side context editing: ask the API to clear old tool results and
    * replace them with placeholders. Applied only for providers that support it.
    */
+  /**
+   * Client-side pruning of old tool results, for providers without server-side
+   * context editing. Automatically skipped when the transcript contains
+   * reasoning, because rewriting those results would invalidate signatures.
+   */
+  pruneToolResults?: {
+    /** Recent tool rounds kept verbatim. Default 6. */
+    keepRecentToolCalls?: number;
+  };
   contextEditing?: {
     /** Input tokens that trigger clearing. Default 40_000. */
     triggerTokens?: number;
