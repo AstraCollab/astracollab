@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 
 import { allocateSessionFile, defaultSessionFile, latestSessionFile, resolveSessionFile } from "../src/context.js";
 import { TurnOutput } from "../src/tui/output.js";

@@ -8,11 +8,11 @@
  * `CognitiveMemory.search`, with no model in the loop, so recall does not
  * degrade when the model is weak.
  */
-import { tool } from "ai";
+import { tool, type Tool } from "ai";
 import { z } from "zod";
 import type { CognitiveMemory } from "@astracollab/not-another-harness";
 
-export const createRecallTool = (getMemory: () => CognitiveMemory | undefined) =>
+export const createRecallTool = (getMemory: () => CognitiveMemory | undefined): Tool =>
   tool({
     description:
       "Search your memory of this project for earlier facts, preferences and conventions. " +

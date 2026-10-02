@@ -35,7 +35,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   { name: "stats", description: "Tokens used this session", argless: true },
   {
     name: "budget",
-    description: "Show or set the per-turn spend ceiling (e.g. /budget 8, /budget auto)",
+    description: "Show spend, or cap a turn (e.g. /budget 8, /budget off)",
     argumentHint: "[usd|auto]",
   },
   { name: "task", description: "Show the saved plan and progress", argless: true },

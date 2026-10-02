@@ -44,13 +44,13 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^2.0.0",
-    "@ai-sdk/openai": "^2.0.0",
-    "@ai-sdk/openai-compatible": "^1.0.0",
+    "@ai-sdk/anthropic": "^4.0.71",
+    "@ai-sdk/openai": "^4.0.83",
+    "@ai-sdk/openai-compatible": "^3.0.62",
     "@astracollab/not-another-harness": "workspace:*",
     "@blaxel/core": "^0.2.95",
     "@earendil-works/pi-tui": "^0.99.2",
-    "ai": "^5.0.0",
+    "ai": "^7.0.127",
     "zod": "^4.3.6"
   },
   "devDependencies": {

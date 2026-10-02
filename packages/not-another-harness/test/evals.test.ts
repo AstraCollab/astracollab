@@ -2,29 +2,30 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { afterEach, describe, expect, it } from "vitest";
 import { runAgent } from "../src/agent.js";
 import { createNodeEnvironment } from "../src/node.js";
 import { createCodingTools } from "../src/tools.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
-const usage = { inputTokens: 80, outputTokens: 16, totalTokens: 96 };
-const call = (toolName: string, input: unknown, id: string): (() => ReturnType<typeof simulateReadableStream<LanguageModelV2StreamPart>>) =>
-  () => simulateReadableStream<LanguageModelV2StreamPart>({ chunks: [
+const usage = v4Usage({ input: 80, output: 16 });
+const call = (toolName: string, input: unknown, id: string): (() => ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>>) =>
+  () => simulateReadableStream<LanguageModelV4StreamPart>({ chunks: [
     { type: "tool-call", toolCallId: id, toolName, input: JSON.stringify(input) },
-    { type: "finish", finishReason: "tool-calls", usage },
+    { type: "finish", finishReason: finishReason("tool-calls"), usage },
   ] });
-const answer = (text: string) => () => simulateReadableStream<LanguageModelV2StreamPart>({ chunks: [
+const answer = (text: string) => () => simulateReadableStream<LanguageModelV4StreamPart>({ chunks: [
   { type: "text-start", id: "answer" },
   { type: "text-delta", id: "answer", delta: text },
   { type: "text-end", id: "answer" },
-  { type: "finish", finishReason: "stop", usage },
+  { type: "finish", finishReason: finishReason("stop"), usage },
 ] });
 
-const modelFor = (streams: Array<() => ReturnType<typeof simulateReadableStream<LanguageModelV2StreamPart>>>) => {
+const modelFor = (streams: Array<() => ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>>>) => {
   let index = 0;
-  return new MockLanguageModelV2({
+  return new MockLanguageModelV4({
     doStream: async () => ({ stream: streams[Math.min(index++, streams.length - 1)]!() }),
   });
 };
@@ -72,6 +73,7 @@ describe("real-task harness evaluations", () => {
     await check(workspace);
     expect(result.reason).toBe("completed");
     expect(result.steps).toBe(plan.length);
-    expect(result.usage.totalTokens).toBe(plan.length * usage.totalTokens);
+    // The harness's own total, summed across the plan: each step is 80 in / 16 out.
+    expect(result.usage.totalTokens).toBe(plan.length * 96);
   });
 });

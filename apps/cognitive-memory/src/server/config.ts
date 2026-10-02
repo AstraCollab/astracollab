@@ -68,6 +68,34 @@ export const CognitiveMemorySettings = Context.Reference<CognitiveMemorySettings
 /** The settings as an effect, for the places that need the value itself. */
 export const settings = Effect.service(CognitiveMemorySettings)
 
+/**
+ * The budgets actually in force for one organisation.
+ *
+ * An override wins over the deployment default, and a null override means
+ * "inherit" — so a dashboard can show both numbers and a change of mind is one
+ * `null`. Kept here rather than in the engine because the engine, the health
+ * endpoint and the analytics report all need the same answer, and three places
+ * each deciding what an override means is three places to be subtly wrong.
+ */
+export interface EffectiveBudgets {
+  readonly maxTotalTokens: number
+  readonly maxIndexItems: number
+  readonly defaultRecallLimit: number
+}
+
+export const mergeBudgets = (
+  config: CognitiveMemorySettingsValue,
+  overrides: {
+    readonly maxTotalTokens: number | null
+    readonly maxIndexItems: number | null
+    readonly defaultRecallLimit: number | null
+  }
+): EffectiveBudgets => ({
+  maxTotalTokens: overrides.maxTotalTokens ?? config.maxTotalTokens,
+  maxIndexItems: overrides.maxIndexItems ?? config.maxIndexItems,
+  defaultRecallLimit: overrides.defaultRecallLimit ?? config.defaultRecallLimit
+})
+
 /** Whether model-backed extraction is available, for the health endpoint. */
 export const extractorMode = Effect.map(
   settings,

@@ -135,12 +135,18 @@ export const formatSidebar = (data: SidebarData, width: number): string[] => {
     const tone = hitRate >= HEALTHY_HIT_RATE ? c.dim : hitRate >= POOR_HIT_RATE ? c.yellow : c.red;
     row(tone(`cache ${rate}`));
   }
-  // Spend against the rail. A budget nobody can see is a budget that looks
-  // arbitrary when it fires.
+  /**
+   * Spend, with a denominator only when the user set one.
+   *
+   * There is no ceiling by default, so the common case is a plain figure. Showing
+   * `$1.99 / $2.00` implied a limit that could stop the turn, and for a run that
+   * ran long that read as "nearly out of budget" rather than "this is what the
+   * work has cost so far".
+   */
   const spend = finite(data.spendUsd);
-  if (spend > 0 || data.spendLimitUsd != null) {
-    const limit = Number.isFinite(data.spendLimitUsd as number) ? (data.spendLimitUsd as number) : null;
-    row(c.dim(limit === null ? `${formatUsd(spend)} spent` : `${formatUsd(spend)} / ${formatUsd(limit)}`));
+  const limit = Number.isFinite(data.spendLimitUsd as number) ? (data.spendLimitUsd as number) : null;
+  if (spend > 0 || limit !== null) {
+    row(c.dim(limit === null ? `${formatUsd(spend)} spent` : `${formatUsd(spend)} / ${formatUsd(limit)} ceiling`));
   }
 
   section("session state");

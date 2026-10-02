@@ -72,6 +72,13 @@ export type SessionState = {
    * Explicit per-turn spend override in USD, or null to use the context-scaled
    * default. Set by `/budget`.
    */
+  /**
+   * Explicit per-turn spend ceiling in USD, or null for none.
+   *
+   * Null is the normal state, and it means the turn runs until the task is done,
+   * the context window is full, or the human interrupts. See `budget.ts` for why
+   * nothing is picked automatically.
+   */
   turnSpendLimitUsd: number | null;
   /** Approval policy for mutating tools (edit/write/bash). */
   permissions: PermissionMode;
@@ -138,6 +145,61 @@ export type TurnHooks = {
 };
 
 /**
+ * Split a turn's context into the part that is cached and the part that is not.
+ *
+ * The system prompt is the first thing in every request and the anchor for prefix
+ * caching, so a single changed byte in it invalidates the *entire* cached prefix:
+ * system, tool schemas, and the whole transcript behind them. The whole request is
+ * then re-read at full price, which for a cached token is roughly 10x what the
+ * same request costs when the prefix hits.
+ *
+ * The task ledger and the memory injection both used to live here. Both change
+ * from turn to turn, so every turn whose ledger or injection differed from the
+ * last one started cold. Measured on a real session: turns that left the ledger
+ * alone hit 87-96% cache, and one turn billed 599,127 input tokens to read 288 of
+ * them back — 0.05%. Nothing about that turn was unusual except that it touched
+ * the task ledger.
+ *
+ * They are state, not instructions, so the tail is where they belong anyway. The
+ * model reads a current plan better as the most recent thing in the conversation
+ * than as a system-level assertion written once at the start, and the cost of them
+ * changing drops from re-reading the whole transcript to one new message.
+ *
+ * Returned rather than inlined so the invariant is directly testable: the system
+ * half must be byte-identical across turns no matter what the ledger does.
+ */
+export const composeTurnRequest = (
+  state: Pick<SessionState, "system" | "tools" | "taskLedger">,
+  prompt: string,
+  injectionText: string,
+): { system: string; prompt: string } => {
+  const staticContext = [
+    "Task tracking: For substantial multi-step work, call task_ledger discover_checks before editing. Save a plan using exact discovered executable acceptance commands. Update progress as you work, run each check through task_ledger run_check, repair failures and rerun, and mark completed only when all steps are complete and every check has an actual zero exit code. The task_ledger tool result is the latest source of task status during this run.",
+    state.tools.delegate_task
+      ? "Delegation: Use delegate_task only for independent, bounded subtasks that can start from committed HEAD and do not depend on uncommitted parent changes. The child runs in a temporary isolated worktree; inspect its returned diff and integrate changes deliberately. Delegated changes are not merged automatically. Do not delegate subtasks that depend on each other."
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const dynamicContext = [
+    state.taskLedger && state.taskLedger.status !== "completed"
+      ? `Current durable task ledger:\n${formatTaskLedger(state.taskLedger)}`
+      : "",
+    injectionText,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  return {
+    system: staticContext ? `${state.system}\n\n${staticContext}` : state.system,
+    // The user's ask stays last, so the harness-generated preamble reads as
+    // context for it rather than a substitute for it.
+    prompt: dynamicContext ? `${dynamicContext}\n\n---\n\n${prompt}` : prompt,
+  };
+};
+
+/**
  * Run one agent turn on top of the session's current messages, then fold the
  * transcript back into state and persist the delta (Pi-style branch append).
  *
@@ -179,16 +241,8 @@ export const runTurn = (
   const injectionText = injection.text;
   state.memoryInjectionLog?.record(injection);
 
-  const taskContext = [
-    "Task tracking: For substantial multi-step work, call task_ledger discover_checks before editing. Save a plan using exact discovered executable acceptance commands. Update progress as you work, run each check through task_ledger run_check, repair failures and rerun, and mark completed only when all steps are complete and every check has an actual zero exit code. The task_ledger tool result is the latest source of task status during this run.",
-    state.tools.delegate_task
-      ? "Delegation: Use delegate_task only for independent, bounded subtasks that can start from committed HEAD and do not depend on uncommitted parent changes. The child runs in a temporary isolated worktree; inspect its returned diff and integrate changes deliberately. Delegated changes are not merged automatically. Do not delegate subtasks that depend on each other."
-      : "",
-    state.taskLedger && state.taskLedger.status !== "completed"
-      ? `Current durable task ledger:\n${formatTaskLedger(state.taskLedger)}`
-      : "",
-    injectionText,
-  ].filter(Boolean).join("\n\n");
+  const { system, prompt: requestPrompt } = composeTurnRequest(state, prompt, injectionText);
+
   const run = runAgent({
     model: state.model.model,
     // Enables Anthropic-style prompt-cache breakpoints. Safe and worthwhile
@@ -216,15 +270,16 @@ export const runTurn = (
     // count charges a well-cached run at ~10x its real cost and fires on harness
     // efficiency rather than on money spent.
     rates: ratesFor(state.model.modelId),
-    // Scaled to the transcript this turn is actually carrying, not a flat $5.
-    // A fresh session does not inherit a budget sized for a full window.
-    maxSpendUsd: resolveTurnSpendUsd(state.contextUsedTokens, state.turnSpendLimitUsd),
+    // No ceiling unless the user asked for one. `0` is the harness's "no budget",
+    // and it is the default because a turn that stops mid-task for money the user
+    // never agreed to spend is worse than one that runs long.
+    maxSpendUsd: resolveTurnSpendUsd(state.turnSpendLimitUsd),
     // The model's window. Exceeding it is fixable — compaction shrinks the
     // request — so this triggers compaction, and only stops a run when even a
     // compacted request cannot fit.
     maxContextTokens: TURN_CONTEXT_LIMIT,
-    system: `${state.system}\n\n${taskContext}`,
-    prompt,
+    system,
+    prompt: requestPrompt,
     messages: state.messages,
     tools: state.tools,
     abortSignal: hooks.signal,

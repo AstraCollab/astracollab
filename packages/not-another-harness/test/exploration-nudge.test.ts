@@ -2,8 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runAgent } from "../src/agent.js";
@@ -11,11 +11,12 @@ import { createNodeEnvironment } from "../src/node.js";
 import { createCodingTools } from "../src/tools.js";
 import type { ModelMessage } from "ai";
 import type { HarnessEvent } from "../src/types.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
-const USAGE = { inputTokens: 100, outputTokens: 20, totalTokens: 120 };
+const USAGE = v4Usage({ input: 100, output: 20 });
 
-const grepStep = (pattern: string): ReturnType<typeof simulateReadableStream> =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+const grepStep = (pattern: string): ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>> =>
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       {
@@ -24,12 +25,12 @@ const grepStep = (pattern: string): ReturnType<typeof simulateReadableStream> =>
         toolName: "grep",
         input: JSON.stringify({ pattern }),
       },
-      { type: "finish", finishReason: "tool-calls", usage: USAGE },
+      { type: "finish", finishReason: finishReason("tool-calls"), usage: USAGE },
     ],
   });
 
-const editStep = (): ReturnType<typeof simulateReadableStream> =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+const editStep = (): ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>> =>
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       {
@@ -38,24 +39,26 @@ const editStep = (): ReturnType<typeof simulateReadableStream> =>
         toolName: "edit",
         input: JSON.stringify({ path: "a.ts", old_string: "a", new_string: "b" }),
       },
-      { type: "finish", finishReason: "tool-calls", usage: USAGE },
+      { type: "finish", finishReason: finishReason("tool-calls"), usage: USAGE },
     ],
   });
 
-const doneStep = (): ReturnType<typeof simulateReadableStream> =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+const doneStep = (): ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>> =>
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       { type: "text-start", id: "t" },
       { type: "text-delta", id: "t", delta: "done" },
       { type: "text-end", id: "t" },
-      { type: "finish", finishReason: "stop", usage: USAGE },
+      { type: "finish", finishReason: finishReason("stop"), usage: USAGE },
     ],
   });
 
-const scriptedModel = (streams: Array<() => ReturnType<typeof simulateReadableStream>>) => {
+const scriptedModel = (
+  streams: Array<() => ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>>>
+) => {
   let call = 0;
-  return new MockLanguageModelV2({
+  return new MockLanguageModelV4({
     doStream: async () => {
       const make = streams[Math.min(call, streams.length - 1)];
       call += 1;
@@ -105,7 +108,9 @@ describe("the exploration nudge", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  const runAndCapture = async (streams: Array<() => ReturnType<typeof simulateReadableStream>>) => {
+  const runAndCapture = async (
+  streams: Array<() => ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>>>
+) => {
     const tools = createCodingTools(createNodeEnvironment(dir)) as Record<string, unknown>;
     const seen: ModelMessage[][] = [];
     const run = runAgent({

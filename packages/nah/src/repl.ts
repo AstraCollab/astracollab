@@ -22,7 +22,7 @@ import { createTaskLedgerTool, formatTaskLedger } from "./task-ledger.js";
 import { createDelegationTool } from "./delegation.js";
 import { loadLastModel, saveLastModel } from "./model-preferences.js";
 import { ratesFor } from "./rates.js";
-import { formatUsd, projectStepCostUsd, resolveTurnSpendUsd } from "./budget.js";
+import { formatUsd, projectStepCostUsd } from "./budget.js";
 import { describeWorkspaceBoundary, resolveWorkspaceRoot } from "./workspace.js";
 import { formatTokens } from "./tui/sidebar.js";
 
@@ -276,27 +276,42 @@ export const setActiveModel = (state: SessionState, model: SessionState["model"]
   model?.setStatusHandler((status) => { state.providerStatus = status; });
 };
 
+/**
+ * Copy the per-step figures a status panel needs onto the state.
+ *
+ * Both frontends call this for every event, and it has to be one function rather
+ * than two: the readline footer and the TUI sidebar read the same fields, and a
+ * handler wired into only one of them means the other shows zeros forever. That
+ * is exactly what happened — the TUI consumed the event stream directly, so
+ * `contextUsedTokens` stayed 0 in the panel *and* in the per-turn budget that
+ * reads it.
+ */
+export const applyUsageEvent = (state: SessionState, event: HarnessEvent): void => {
+  if (event.type !== "step-finish") {
+    if (event.type === "finish" || event.type === "error") state.providerStatus = null;
+    return;
+  }
+  /**
+   * Context size comes from `event.request`, not `event.usage`.
+   *
+   * `usage` accumulates across every step of the run, so its `inputTokens` is
+   * the total spent, not what is in the window. Reading it as the context made a
+   * 30k-token session display as though it were carrying 270k — the two differ by
+   * the number of steps, which is exactly the quantity the panel exists to help
+   * you reason about.
+   */
+  state.contextUsedTokens = event.request.totalInputTokens;
+  state.lastOutputTokens = event.usage.outputTokens;
+  state.contextUsageEstimated = event.usage.estimated === true;
+  state.cacheHitRate = event.request.hitRate;
+};
+
 const withStatusUpdates = async function* (
   events: AsyncIterable<HarnessEvent>,
   state: SessionState,
 ): AsyncIterable<HarnessEvent> {
   for await (const event of events) {
-    if (event.type === "step-finish") {
-      /**
-       * Context size comes from `event.request`, not `event.usage`.
-       *
-       * `usage` accumulates across every step of the run, so its `inputTokens` is
-       * the total spent, not what is in the window. Reading it as the context
-       * made a 30k-token session display as though it were carrying 270k — the
-       * two differ by the number of steps, which is exactly the quantity the
-       * panel exists to help you reason about.
-       */
-      state.contextUsedTokens = event.request.totalInputTokens;
-      state.lastOutputTokens = event.usage.outputTokens;
-      state.contextUsageEstimated = event.usage.estimated === true;
-      state.cacheHitRate = event.request.hitRate;
-    }
-    if (event.type === "finish" || event.type === "error") state.providerStatus = null;
+    applyUsageEvent(state, event);
     yield event;
   }
 };
@@ -488,17 +503,17 @@ export const handleSlashCommand = async (
       return "handled";
     case "budget": {
       /**
-       * Show the rail, and let it be changed.
+       * Show what this session has cost, and let a ceiling be set.
        *
-       * The default scales with the transcript the turn is carrying, so the
-       * number is not the same all session — which makes it worth being able to
-       * see and override, and worth saying what it is scaled against.
+       * There is no ceiling to show by default, so the bare form reports spend and
+       * says what the bounds on a turn actually are. Setting one is opt-in; the
+       * previous version computed a number nobody chose and stopped turns at it
+       * mid-task, which is the whole reason this is now empty by default.
        */
       const rates = state.model ? ratesFor(state.model.modelId) : null;
-      const auto = resolveTurnSpendUsd(state.contextUsedTokens, null);
-      if (arg === "auto") {
+      if (arg === "off" || arg === "none") {
         state.turnSpendLimitUsd = null;
-        out.write(c.dim(`(per-turn budget: ${formatUsd(auto)} — scaled to context)\n`));
+        out.write(c.dim("(no per-turn ceiling — a turn runs until the task is done)\n"));
         return "handled";
       }
       if (arg) {
@@ -508,21 +523,21 @@ export const handleSlashCommand = async (
           return "handled";
         }
         state.turnSpendLimitUsd = parsed;
-        out.write(c.dim(`(per-turn budget: ${formatUsd(parsed)} — fixed)\n`));
+        out.write(c.dim(`(per-turn ceiling: ${formatUsd(parsed)} — this turn will stop there)\n`));
         return "handled";
       }
-      const effective = state.turnSpendLimitUsd ?? auto;
-      const mode = state.turnSpendLimitUsd === null ? "scaled to context" : "fixed";
       const lines = [
         `${formatUsd(state.spendUsd)} spent this session`,
-        `${formatUsd(effective)} per-turn ceiling (${mode})`,
+        state.turnSpendLimitUsd === null
+          ? "no per-turn ceiling — turns run until the task is done"
+          : `${formatUsd(state.turnSpendLimitUsd)} per-turn ceiling`,
         `context ${formatTokens(state.contextUsedTokens)}` +
           (rates
             ? ` · next step ≈ ${formatUsd(
                 projectStepCostUsd(state.contextUsedTokens, state.cacheHitRate, rates),
               )} at ${Math.round(state.cacheHitRate * 100)}% cached`
             : ""),
-        c.dim("/budget <usd> to fix it · /budget auto to scale it again"),
+        c.dim("/budget <usd> to cap a turn · /budget off to remove the cap"),
       ];
       out.write(`${lines.join("\n")}\n`);
       return "handled";

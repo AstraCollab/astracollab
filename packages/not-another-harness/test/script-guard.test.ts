@@ -73,7 +73,7 @@ describe("inline scripts that rewrite files", () => {
   it("allows a saved script, which is the honest version of the same thing", () => {
     // `write` the script, then run it: reviewable, re-runnable, in the diff.
     expect(detectScriptedMutation("python3 migrate.py")).toBeNull();
-    expect(detectScriptedMutation("npx tsx scripts/sync-cognitive.ts")).toBeNull();
+    expect(detectScriptedMutation("npx tsx scripts/cost-report.mts")).toBeNull();
   });
 
   it("allows real codemod tools", () => {

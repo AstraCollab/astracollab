@@ -24,10 +24,9 @@ import { pickModel } from "../model-picker.js";
 import { resolveModel } from "../model.js";
 import { saveLastModel } from "../model-preferences.js";
 import { runTurn, type SessionState } from "../session.js";
-import { handleSlashCommand, setActiveModel, setupProvider } from "../repl.js";
+import { applyUsageEvent, handleSlashCommand, setActiveModel, setupProvider } from "../repl.js";
 import { defaultSessionFile, withFileInclusions } from "../context.js";
 import { c } from "../render.js";
-import { resolveTurnSpendUsd } from "../budget.js";
 import { exclusiveCommands, renderCommandHelp, SLASH_COMMANDS } from "../commands.js";
 
 import { TurnOutput, userText } from "./output.js";
@@ -138,9 +137,9 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
       cacheWriteTokens: state.cacheWriteTokens,
       cacheHitRate: state.cacheHitRate,
       spendUsd: state.spendUsd,
-      spendLimitUsd:
-        state.turnSpendLimitUsd ??
-        resolveTurnSpendUsd(state.contextUsedTokens, null),
+      // Only ever a ceiling the user asked for. `null` renders as a bare spend
+      // figure rather than implying a limit that does not exist.
+      spendLimitUsd: state.turnSpendLimitUsd,
       turns: state.turns,
       permissions: state.permissions,
       providerStatus: state.providerStatus,
@@ -296,6 +295,10 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
       void (async () => {
         try {
           for await (const event of turn.events) {
+            // The sidebar reads context size, cache hit rate, and output tokens
+            // off the state, and nothing else writes them. Consuming the stream
+            // without this left every one of those at zero for the whole session.
+            applyUsageEvent(state, event);
             output.apply(event);
             screen.requestRender();
           }

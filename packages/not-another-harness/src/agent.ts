@@ -3,7 +3,6 @@ import type { SharedV2ProviderOptions } from "@ai-sdk/provider";
 
 import { compactMessages } from "./compaction.js";
 import {
-  cacheAccountingFor,
   cacheOptions,
   contextManagementOptions,
   supportsCaching,
@@ -304,7 +303,6 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
     const keepRecent = Math.max(2, Math.floor(options.compactKeepRecent ?? DEFAULT_KEEP_RECENT));
     const wrapUpEnabled = options.wrapUpOnLimit !== false;
     const spend = options.rates ? createSpendMeter(options.rates) : null;
-    const cacheAccounting = options.cacheAccounting ?? cacheAccountingFor(options.cacheProvider);
 
     let messages: ModelMessage[] = [...(options.messages ?? [])];
     messages.push({ role: "user", content: options.prompt });
@@ -698,34 +696,70 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
         await options.onStepFinish?.(step, [...messages]);
         const inputTokens = stepUsage.inputTokens ?? 0;
         const outputTokens = stepUsage.outputTokens ?? 0;
-        const totalTokens = stepUsage.totalTokens ?? inputTokens + outputTokens;
         /**
-         * The cached portion, which the provider reports separately and which
-         * `inputTokens` excludes once caching is active.
+         * The cache breakdown, normalised by the SDK.
          *
-         * Anthropic puts cache *writes* in `input_tokens` but cache *reads* in
-         * `cache_read_input_tokens`, so the request's true size is the sum. The
-         * SDK surfaces reads as `cachedInputTokens`; writes arrive in provider
-         * metadata, and are read best-effort because the shape differs by provider.
+         * This used to be `stepUsage.cachedInputTokens` plus a best-effort read of
+         * `anthropic.cacheCreationInputTokens` out of provider metadata, and the
+         * comment above it explained a subtle trap: on AI SDK v5 `inputTokens`
+         * *excluded* the cached prefix, so the request's true size was the sum of
+         * all three, and summing on a provider that already counted the cache
+         * inflated a 90%-hit run roughly 10x.
+         *
+         * On v7 that trap is gone rather than moved. `inputTokens` is now the
+         * total — cache reads and writes included — with the composition broken
+         * out under `inputTokenDetails`. So `inputTokens` alone is the request's
+         * real size, and the old sum would now double-count exactly the portion
+         * the old code went to such lengths to add correctly.
+         *
+         * `cacheWriteTokens` is preferred over the metadata read, since the SDK
+         * now normalises it; the provider-metadata path stays as a fallback so a
+         * provider that reports neither still contributes rather than silently
+         * reporting zero cache writes.
          */
-        const cachedInputTokens = stepUsage.cachedInputTokens ?? 0;
-        const cacheCreationInputTokens = readCacheCreationTokens(providerMetadata);
+        const tokenDetails = stepUsage.inputTokenDetails;
+        const cachedInputTokens = tokenDetails?.cacheReadTokens ?? 0;
+        /**
+         * `||`, not `??`: the SDK always fills `cacheWriteTokens` in, with 0 when
+         * the provider reported none, so `??` would treat "not reported" as "there
+         * were none" and never reach the metadata read. A provider that reports
+         * cache writes only in `providerMetadata` — which is what Anthropic did
+         * before the SDK normalised it — then reported zero writes forever, and
+         * a large cache write was priced as fresh input.
+         */
+        const cacheCreationInputTokens =
+          tokenDetails?.cacheWriteTokens || readCacheCreationTokens(providerMetadata);
         /**
          * The request's real input size.
          *
-         * Depends on the provider's convention: Anthropic reports the cached
-         * prefix outside `input_tokens`, OpenAI-compatible gateways include it.
-         * Summing blindly double-counts the cached portion on the latter — which
-         * on a healthy 90%-hit run inflates the reported context roughly 10x and
-         * then drives compaction and the spend rail off a fiction.
+         * Identical to the pre-v7 result under both conventions — the old
+         * `split` branch computed exactly this total by summing three numbers the
+         * SDK has since folded into one, and the `inclusive` branch already took
+         * the provider's own count, which is now the same value.
          */
-        const requestSize =
-          cacheAccounting === "split"
-            ? inputTokens + cachedInputTokens + cacheCreationInputTokens
-            : inputTokens;
+        const requestSize = inputTokens;
+        /**
+         * The billed input: prompt tokens the provider charged full price for.
+         *
+         * `HarnessUsage.inputTokens` has always meant this, and the rest of the
+         * package is built on it: `totalTokens` is `inputTokens + outputTokens`
+         * with the cache tracked beside them, and `spend.ts` charges
+         * `inputTokens` at the full input rate *and* `cachedInputTokens` and
+         * `cacheCreationInputTokens` at their own cheaper rates.
+         *
+         * Passing v7's `inputTokens` straight through would therefore bill the
+         * cached prefix twice — once at the full rate and again at the cache-read
+         * rate. On a 90%-hit request that is roughly 11x the correct cost for the
+         * cached portion, which is why a well-cached run came out *more*
+         * expensive than an uncached one on the same rail. The uncached count is
+         * `noCacheTokens`; a provider that reports no breakdown falls back to the
+         * total, which is what it would have meant under the old convention.
+         */
+        const freshInputTokens = tokenDetails?.noCacheTokens ?? inputTokens;
+        const totalTokens = freshInputTokens + outputTokens;
         if (totalTokens > 0 || inputTokens > 0 || outputTokens > 0) {
           const stepUsageDelta = {
-            inputTokens,
+            inputTokens: freshInputTokens,
             outputTokens,
             totalTokens,
             cachedInputTokens,
@@ -761,10 +795,13 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
             totalInputTokens: lastRequestTokens,
             cachedInputTokens,
             cacheCreationInputTokens,
-            // On an inclusive provider the fresh portion is what is left after
-            // the cached share; on a split one `inputTokens` already is that.
+            // The uncached portion of the prompt. `inputTokens` is the total on
+            // v7, so this is the total minus both cache reads and cache writes —
+            // which is what `noCacheTokens` already is, and the subtraction is
+            // the fallback for a provider that reports no breakdown.
             freshInputTokens:
-              cacheAccounting === "split" ? inputTokens : Math.max(0, inputTokens - cachedInputTokens),
+              tokenDetails?.noCacheTokens ??
+              Math.max(0, inputTokens - cachedInputTokens - cacheCreationInputTokens),
             hitRate: requestSize > 0 ? Math.min(1, cachedInputTokens / requestSize) : 0,
           },
         });

@@ -1,34 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { simulateReadableStream } from "ai";import { MockLanguageModelV2 } from "ai/test";
+import { simulateReadableStream } from "ai";import { MockLanguageModelV4 } from "ai/test";
 import { tool, type ModelMessage } from "ai";
 import { z } from "zod";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import type { LanguageModelV4FinishReason, LanguageModelV4Usage } from "@ai-sdk/provider";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 
 import { runAgent } from "../src/agent.js";
 import type { HarnessEvent } from "../src/types.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
 /** Sonnet's published figures, so the dollar arithmetic is checkable by eye. */
 const RATES = { input: 3, output: 15 };
 
 const probeTool = () => ({ probe: tool({ inputSchema: z.object({}), execute: async () => "ok" }) });
 
-const toolCallStream = (id: string, usage: Record<string, number>) =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+const toolCallStream = (id: string, usage: LanguageModelV4Usage) =>
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       { type: "tool-call", toolCallId: id, toolName: "probe", input: "{}" },
-      { type: "finish", finishReason: "tool-calls", usage },
+      { type: "finish", finishReason: finishReason("tool-calls"), usage },
     ],
   });
 
-const textStream = (text: string, usage: Record<string, number> = { inputTokens: 10, outputTokens: 5, totalTokens: 15 }) =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+const textStream = (text: string, usage: LanguageModelV4Usage = v4Usage({ input: 10, output: 5 })) =>
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       { type: "text-start", id: "t" },
       { type: "text-delta", id: "t", delta: text },
       { type: "text-end", id: "t" },
-      { type: "finish", finishReason: "stop", usage },
+      { type: "finish", finishReason: finishReason("stop"), usage },
     ],
   });
 
@@ -42,13 +44,9 @@ describe("spend budget", () => {
   it("stops on the dollar rail rather than on a token count", async () => {
     // Every step bills 1M input + 1M output = $18. A $40 rail allows two steps.
     // The deprecated token rail is switched off so this exercises the dollar one.
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => ({
-        stream: toolCallStream("c", {
-          inputTokens: 1_000_000,
-          outputTokens: 1_000_000,
-          totalTokens: 2_000_000,
-        }),
+        stream: toolCallStream("c", v4Usage({ input: 1_000_000, output: 1_000_000 })),
       }),
     });
     const run = runAgent({
@@ -77,20 +75,25 @@ describe("spend budget", () => {
     expect(result.usage.spendUsd).toBeLessThanOrEqual(40);
   });
 
-  it("lets a well-cached run go far longer on the same dollar rail", async () => {
+  it(
+    "lets a well-cached run go far longer on the same dollar rail",
+    // The point of the test is that a cached run gets *further* on the same
+    // money, so it does correspondingly more steps. Five seconds is no longer a
+    // bound on the behaviour; it was a bound on the work.
+    async () => {
     // The behaviour that makes long runs affordable. Both runs send the same
     // ~100k tokens of input per step; one reads its prefix back from cache and
     // one does not. A token budget cannot tell them apart — it charges both
     // 100k. A dollar budget can, and the cached one is ~7x cheaper per step.
     const makeModel = (cached: boolean) =>
-      new MockLanguageModelV2({
+      new MockLanguageModelV4({
         doStream: async () => ({
-          stream: toolCallStream("c", {
-            inputTokens: cached ? 1_000 : 100_000,
-            outputTokens: 500,
-            totalTokens: (cached ? 1_000 : 100_000) + 500,
-            ...(cached ? { cachedInputTokens: 99_000 } : {}),
-          }),
+          stream: toolCallStream(
+            "c",
+            cached
+              ? v4Usage({ input: 100_000, output: 500, cacheRead: 99_000 })
+              : v4Usage({ input: 100_000, output: 500 })
+          ),
         }),
       });
 
@@ -123,33 +126,35 @@ describe("spend budget", () => {
     // Both were stopped by money, not by the step cap, so the comparison is real.
     expect(uncached.steps).toBeLessThan(100);
     expect(cached.steps).toBeGreaterThan(uncached.steps * 2);
-    expect(cached.usage.cachedInputTokens).toBeGreaterThan(0);
-  });
+      expect(cached.usage.cachedInputTokens).toBeGreaterThan(0);
+    },
+    30_000,
+  );
 
   it("reports cumulative cached tokens separately from fresh input", async () => {
-    // Anthropic excludes cache reads from `inputTokens`, so a harness that reads
-    // only that field cannot tell how large the request actually was.
-    const model = new MockLanguageModelV2({
+    // On AI SDK v7 `inputTokens` is the total, cache included, with the cached
+    // share broken out alongside it — so a harness that reads only `inputTokens`
+    // still cannot tell a cached request from a large fresh one.
+    const model = new MockLanguageModelV4({
       doStream: async () => ({
-        stream: textStream("done", {
-          inputTokens: 10,
-          outputTokens: 5,
-          totalTokens: 15,
-          cachedInputTokens: 90_000,
-        }),
+        stream: textStream("done", v4Usage({ input: 90_010, output: 5, cacheRead: 90_000 })),
       }),
     });
     const run = runAgent({ model, system: "s", prompt: "hi", tools: {} });
     await run.result;
     const result = await run.result;
     expect(result.usage.cachedInputTokens).toBe(90_000);
+    // The harness reports `inputTokens` as the *fresh* portion and the cache
+    // beside it, which is the contract callers read; the provider's own total is
+    // the sum of the two.
     expect(result.usage.inputTokens).toBe(10);
+    expect(result.usage.totalTokens).toBe(15);
   });
 
   it("charges the deprecated token rail too, so the two ceilings compose", async () => {
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => ({
-        stream: toolCallStream("c", { inputTokens: 1000, outputTokens: 100, totalTokens: 1100 }),
+        stream: toolCallStream("c", v4Usage({ input: 1000, output: 100 })),
       }),
     });
     const run = runAgent({
@@ -173,9 +178,9 @@ describe("spend budget", () => {
     // `cache_read_input_tokens`, and the SDK's usage type only carries the read
     // side. The write arrives in provider metadata — which `streamText` exposes as
     // a promise, so reading it synchronously would silently contribute nothing.
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => ({
-        stream: simulateReadableStream<LanguageModelV2StreamPart>({
+        stream: simulateReadableStream<LanguageModelV4StreamPart>({
           chunkDelayInMs: 0,
           chunks: [
             { type: "text-start", id: "t" },
@@ -183,8 +188,8 @@ describe("spend budget", () => {
             { type: "text-end", id: "t" },
             {
               type: "finish",
-              finishReason: "stop",
-              usage: { inputTokens: 5_000, outputTokens: 100, totalTokens: 5_100 },
+              finishReason: finishReason("stop"),
+              usage: v4Usage({ input: 5_000, output: 100 }),
               providerMetadata: { anthropic: { cacheCreationInputTokens: 40_000 } },
             },
           ],
@@ -217,9 +222,9 @@ describe("context budget", () => {
     // A full context window is fixable, so the response to one must be to make
     // the request smaller — never to end the run. The window here is tight
     // enough that the ~48k-token request does not fit, but a compacted one does.
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => ({
-        stream: toolCallStream("c", { inputTokens: 60_000, outputTokens: 500, totalTokens: 60_500 }),
+        stream: toolCallStream("c", v4Usage({ input: 60_000, output: 500 })),
       }),
     });
     const run = runAgent({
@@ -243,9 +248,9 @@ describe("context budget", () => {
   });
 
   it("stops only when even a compacted request cannot fit", async () => {
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => ({
-        stream: toolCallStream("c", { inputTokens: 60_000, outputTokens: 500, totalTokens: 60_500 }),
+        stream: toolCallStream("c", v4Usage({ input: 60_000, output: 500 })),
       }),
     });
     const run = runAgent({
@@ -271,7 +276,7 @@ describe("context budget", () => {
     // Output counts against the window, thinking included. A request that fits
     // exactly still fails mid-generation without headroom for the response, so a
     // generous output allowance must be clamped down to what the window has left.
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => ({ stream: textStream("done") }),
     });
     const run = runAgent({
@@ -304,14 +309,9 @@ describe("compaction trigger uses the whole request", () => {
     // alone made the trigger collapse toward the newest few blocks once caching
     // worked, so `compactAtTokens` silently stopped firing exactly when it
     // mattered. This run is ~100k real tokens but only 1k fresh ones.
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => ({
-        stream: toolCallStream("c", {
-          inputTokens: 1_000,
-          outputTokens: 500,
-          totalTokens: 1_500,
-          cachedInputTokens: 99_000,
-        }),
+        stream: toolCallStream("c", v4Usage({ input: 100_000, output: 500, cacheRead: 99_000 })),
       }),
     });
     // Enough history that there is a middle section to summarize. `compactMessages`
@@ -345,50 +345,22 @@ describe("compaction trigger uses the whole request", () => {
     expect(events.some((e) => e.type === "compacted")).toBe(true);
   });
 
-  it("does not double-count cached tokens on an inclusive provider", async () => {
-    // OpenAI-compatible gateways report `prompt_tokens` *containing*
-    // `cached_tokens`. Adding them reports ~10x the true context on a healthy run,
-    // and then compaction and the spend rail both chase a number that was never
-    // real. The request here is 1,000 tokens total, of which 990 were cached —
-    // the split formula would call it 1,990.
-    const model = new MockLanguageModelV2({
+  it("reports the prompt once, never adding the cached portion on top", async () => {
+    // The failure this guards against is arithmetic, not convention: a 10,000
+    // token prompt of which 9,900 came from cache must be reported as 10,000. An
+    // earlier version summed `inputTokens + cachedInputTokens`, which reported
+    // 19,900 and then let compaction and the spend rail chase a context that was
+    // twice the real size.
+    //
+    // This used to be a pair of tests, one per provider convention, because v5
+    // reported the cached prefix inside `input_tokens` on some providers and
+    // beside it on others, so "the total" was ambiguous and the harness had to
+    // pick a formula. v7 reports `inputTokens` as the whole prompt and the
+    // composition in `inputTokenDetails`, so the ambiguity is gone and there is
+    // one correct answer for every provider. Both old tests collapsed into this.
+    const model = new MockLanguageModelV4({
       doStream: async () => ({
-        stream: textStream("done", {
-          inputTokens: 1_000,
-          outputTokens: 10,
-          totalTokens: 1_010,
-          cachedInputTokens: 990,
-        }),
-      }),
-    });
-    const run = runAgent({
-      model,
-      system: "s",
-      prompt: "hi",
-      tools: {},
-      cacheProvider: "openrouter",
-    });
-    const eventsPromise = drain(run);
-    const result = await run.result;
-    const events = await eventsPromise;
-
-    const step = events.find((e) => e.type === "step-finish");
-    expect(step?.request.totalInputTokens).toBe(1_000);
-    expect(step?.request.freshInputTokens).toBe(10);
-    expect(step?.request.hitRate).toBeCloseTo(0.99, 2);
-  });
-
-  it("reports the same total under the Anthropic convention", async () => {
-    // The same usage, declared as Anthropic: `input_tokens` excludes the cached
-    // prefix, so the total is the sum and the fresh portion is `input_tokens`.
-    const model = new MockLanguageModelV2({
-      doStream: async () => ({
-        stream: textStream("done", {
-          inputTokens: 10,
-          outputTokens: 10,
-          totalTokens: 20,
-          cachedInputTokens: 990,
-        }),
+        stream: textStream("done", v4Usage({ input: 10_000, output: 10, cacheRead: 9_900 })),
       }),
     });
     const run = runAgent({
@@ -403,9 +375,14 @@ describe("compaction trigger uses the whole request", () => {
     const events = await eventsPromise;
 
     const step = events.find((e) => e.type === "step-finish");
-    expect(step?.request.totalInputTokens).toBe(1_000);
-    expect(step?.request.freshInputTokens).toBe(10);
+    expect(step?.request.totalInputTokens).toBe(10_000);
+    // The uncached remainder, which is what the provider actually billed in full.
+    expect(step?.request.freshInputTokens).toBe(100);
     expect(step?.request.hitRate).toBeCloseTo(0.99, 2);
+    // And the billed input is the fresh part, so a 99%-cached step is not charged
+    // as though the whole prompt arrived cold.
+    expect(result.usage.inputTokens).toBe(100);
+    expect(result.usage.cachedInputTokens).toBe(9_900);
   });
 
   it("does not fire when the real request is small, however much was billed in total", async () => {
@@ -413,11 +390,11 @@ describe("compaction trigger uses the whole request", () => {
     // every step. Compacting on that signal threw away working memory for
     // nothing.
     let call = 0;
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => {
         call += 1;
         return call < 6
-          ? { stream: toolCallStream(`c${call}`, { inputTokens: 5_000, outputTokens: 500, totalTokens: 5_500 }) }
+          ? { stream: toolCallStream(`c${call}`, v4Usage({ input: 5_000, output: 500 })) }
           : { stream: textStream("done") };
       },
     });
@@ -433,5 +410,118 @@ describe("compaction trigger uses the whole request", () => {
     await eventsPromise;
     expect(result.compactions).toBe(0);
     expect(result.reason).toBe("completed");
+  });
+});
+
+describe("no ceiling unless one is asked for", () => {
+  const loopingModel = (steps: number, usage: LanguageModelV4Usage) => {
+    let call = 0;
+    return new MockLanguageModelV4({
+      doStream: async () => {
+        call += 1;
+        return { stream: call <= steps ? toolCallStream(`c${call}`, usage) : textStream("finished") };
+      },
+    });
+  };
+
+  const drainRun = async (options: Parameters<typeof runAgent>[0]) => {
+    const run = runAgent(options);
+    // Drained alongside the result rather than after it: the event stream only
+    // finishes once the run does, so awaiting one before touching the other
+    // deadlocks.
+    const eventsPromise = drain(run);
+    const result = await run.result;
+    return { events: await eventsPromise, result };
+  };
+
+  /**
+   * 100k in + 5k out is $0.375 at Sonnet rates, so eight steps is $3.00 — well
+   * past the $2 rail that used to end every real turn, and it still finishes.
+   */
+  const PRICEY_STEP = v4Usage({ input: 100_000, output: 5_000 });
+
+  it("runs a turn well past the old $2 default", async () => {
+    const { events, result } = await drainRun({
+      model: loopingModel(8, PRICEY_STEP),
+      system: "test",
+      prompt: "do the work",
+      tools: probeTool(),
+      rates: RATES,
+      maxSteps: 12,
+    });
+    expect(result.reason).toBe("completed");
+    expect(result.text).toBe("finished");
+    // $3.00 of spend, which the removed default would have refused to pay.
+    expect(result.usage.spendUsd).toBeGreaterThan(3);
+    // No wrap-up: nothing tried to hand off, because nothing ran out.
+    expect(events.some((e) => e.type === "wrap-up")).toBe(false);
+  });
+
+  it("still stops at a ceiling when one is set", async () => {
+    // Opt-in, not removed. Anyone who wants a bound still gets one, and it stops
+    // the turn rather than merely reporting the number.
+    const { result } = await drainRun({
+      model: loopingModel(20, PRICEY_STEP),
+      system: "test",
+      prompt: "do the work",
+      tools: probeTool(),
+      rates: RATES,
+      maxSpendUsd: 1,
+      maxSteps: 20,
+    });
+    expect(result.reason).toBe("max-tokens");
+    // Two steps at $0.375 each, then the third would not fit.
+    expect(result.steps).toBeLessThanOrEqual(3);
+    expect(result.usage.spendUsd).toBeLessThanOrEqual(1);
+  });
+
+  it("declines a wrap-up it cannot pay for, rather than emitting one", async () => {
+    // The rail fires when the remaining money is below the cost of a step, and a
+    // wrap-up step is a step. Announcing a handoff and then not delivering one
+    // is worse than staying quiet, so the harness spends the last affordable
+    // request instead — which here means none is left.
+    const { events, result } = await drainRun({
+      model: loopingModel(20, PRICEY_STEP),
+      system: "test",
+      prompt: "do the work",
+      tools: probeTool(),
+      rates: RATES,
+      maxSpendUsd: 0.5,
+      maxSteps: 20,
+    });
+    expect(result.reason).toBe("max-tokens");
+    expect(events.some((e) => e.type === "wrap-up")).toBe(false);
+  });
+
+  it("does not stop a run that has rates but no budget", async () => {
+    // `rates` without `maxSpendUsd` is the normal configuration now: spend is
+    // reported, nothing is enforced.
+    const { result } = await drainRun({
+      model: loopingModel(6, PRICEY_STEP),
+      system: "test",
+      prompt: "do the work",
+      tools: probeTool(),
+      rates: RATES,
+      maxSpendUsd: 0,
+      maxSteps: 10,
+    });
+    expect(result.reason).toBe("completed");
+    expect(result.usage.spendUsd).toBeGreaterThan(2);
+  });
+
+  it("is bounded by maxSteps, so removing the ceiling is not unbounded", async () => {
+    // The step limit is what a turn without a dollar ceiling still runs into,
+    // and it stays finite. A steer grants a fresh window, which is the intended
+    // way to keep going.
+    const { result } = await drainRun({
+      model: loopingModel(50, PRICEY_STEP),
+      system: "test",
+      prompt: "do the work",
+      tools: probeTool(),
+      rates: RATES,
+      maxSteps: 6,
+    });
+    expect(result.reason).toBe("max-steps");
+    expect(result.steps).toBeLessThanOrEqual(7);
   });
 });

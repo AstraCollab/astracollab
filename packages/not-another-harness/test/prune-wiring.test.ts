@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { tool } from "ai";
 import { z } from "zod";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
 import type { ModelMessage } from "ai";
 
 import { runAgent } from "../src/agent.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
-const USAGE = { inputTokens: 100, outputTokens: 10, totalTokens: 110 };
+const USAGE = v4Usage({ input: 100, output: 10 });
 
 /**
  * A model that calls a tool for `steps` rounds, then answers.
@@ -17,7 +18,7 @@ const USAGE = { inputTokens: 100, outputTokens: 10, totalTokens: 110 };
  * the transcript the provider was actually asked to read.
  */
 const probingModel = (steps: number, captured: string[]) =>
-  new MockLanguageModelV2({
+  new MockLanguageModelV4({
     doStream: async (options) => {
       // Tool results carry their text under `output.value`, not `text`, so a
       // capture that only reads `text` silently ignores every result - which is
@@ -42,7 +43,7 @@ const probingModel = (steps: number, captured: string[]) =>
       captured.push(flat.join("\n"));
       const n = captured.length - 1;
       const last = n >= steps;
-      const chunks: LanguageModelV2StreamPart[] = last
+      const chunks: LanguageModelV4StreamPart[] = last
         ? [
             { type: "text-start", id: "t" },
             { type: "text-delta", id: "t", delta: "done" },
@@ -50,9 +51,12 @@ const probingModel = (steps: number, captured: string[]) =>
           ]
         : [{ type: "tool-call", toolCallId: `c${n}`, toolName: "probe", input: "{}" }];
       return {
-        stream: simulateReadableStream({
+        stream: simulateReadableStream<LanguageModelV4StreamPart>({
           chunkDelayInMs: 0,
-          chunks: [...chunks, { type: "finish", finishReason: last ? "stop" : "tool-calls", usage: USAGE }],
+          chunks: [
+            ...chunks,
+            { type: "finish", finishReason: finishReason(last ? "stop" : "tool-calls"), usage: USAGE },
+          ],
         }),
       };
     },
@@ -74,7 +78,7 @@ const seededReasoning: ModelMessage[] = [
 const run = async (modelId: string, provider: string): Promise<string[]> => {
   const captured: string[] = [];
   const result = runAgent({
-    model: Object.assign(probingModel(4, captured), { modelId, provider, specificationVersion: "v2" }),
+    model: Object.assign(probingModel(4, captured), { modelId, provider }),
     system: "s",
     prompt: "go",
     messages: seededReasoning,
@@ -100,7 +104,7 @@ describe("pruning is skipped when the provider can cache", () => {
   const run = async (provider: string, modelId: string): Promise<string> => {
     const captured: string[] = [];
     const result = runAgent({
-      model: Object.assign(probingModel(4, captured), { modelId, provider, specificationVersion: "v2" }),
+      model: Object.assign(probingModel(4, captured), { modelId, provider }),
       system: "s",
       prompt: "go",
       messages: seededReasoning,

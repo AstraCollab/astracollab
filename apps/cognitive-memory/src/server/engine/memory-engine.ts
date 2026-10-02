@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 
 import { Context, Effect, Layer, Random, Result } from "effect"
 
-import { settings } from "../config"
+import { mergeBudgets, settings, type EffectiveBudgets } from "../config"
 import { InvalidRequest, NotFound, StorageFailure } from "../domain/errors"
 import {
   Claim,
@@ -200,6 +200,113 @@ export interface MemoryEngineService {
   readonly promote: (organizationId: string, id: string, tier: MemoryTier) => Effect.Effect<void, NotFound | StorageFailure>
 
   /**
+   * Edit what a memory says.
+   *
+   * Deliberately narrow: identity, creation time and access counters are not
+   * editable, so a rewritten memory keeps the history of how often it was
+   * actually used. An "edit" that resets `lastAccessedAt` would quietly demote a
+   * memory that was in every prompt, which is the opposite of what editing a
+   * memory is for.
+   */
+  readonly edit: (
+    organizationId: string,
+    id: string,
+    patch: {
+      readonly content?: string | undefined
+      readonly gist?: string | undefined
+      readonly domains?: ReadonlyArray<string> | undefined
+    }
+  ) => Effect.Effect<MemoryItem, NotFound | StorageFailure | InvalidRequest>
+
+  /** A page of memories with the counts behind the filters, for the library. */
+  readonly page: (
+    organizationId: string,
+    query: {
+      readonly text?: string | undefined
+      readonly tiers?: ReadonlyArray<string> | undefined
+      readonly domain?: string | undefined
+      readonly source?: string | undefined
+      readonly sort?: "recent" | "created" | "accessed" | "alpha" | undefined
+      readonly limit?: number | undefined
+      readonly offset?: number | undefined
+    }
+  ) => Effect.Effect<
+    {
+      readonly rows: Array<MemoryItem>
+      readonly total: number
+      readonly offset: number
+      readonly limit: number
+      readonly facets: {
+        readonly tiers: Record<string, number>
+        readonly sources: Record<string, number>
+        readonly domains: ReadonlyArray<{ readonly name: string; readonly count: number }>
+      }
+    },
+    StorageFailure
+  >
+
+  /** Tier change or deletion across a selection. Returns how many rows moved. */
+  readonly applyTo: (
+    organizationId: string,
+    ids: ReadonlyArray<string>,
+    action: "forget" | { readonly tier: MemoryTier }
+  ) => Effect.Effect<number, StorageFailure>
+
+  /**
+   * Forget every memory this organisation holds.
+   *
+   * The danger zone. Memories only — keys, contradictions and the self-model
+   * survive, because "start the memory over" and "revoke every credential" are
+   * separate decisions and a button that did both would be one nobody presses.
+   */
+  readonly forgetEverything: (organizationId: string) => Effect.Effect<number, StorageFailure>
+
+  /** Reopen a resolved contradiction, or put a latent one back to active. */
+  readonly setTensionStatus: (
+    organizationId: string,
+    id: string,
+    status: KnowledgeTension["status"]
+  ) => Effect.Effect<KnowledgeTension, NotFound | StorageFailure>
+
+  readonly forgetTension: (organizationId: string, id: string) => Effect.Effect<boolean, StorageFailure>
+
+  /**
+   * Forget a domain entirely: its score, its guardrail, and its samples.
+   *
+   * All three, because a reset that left the history behind would let the score
+   * rebuild from the same evidence that produced the wrong one.
+   */
+  readonly forgetDomain: (
+    organizationId: string,
+    domain: string
+  ) => Effect.Effect<{ readonly samples: number }, StorageFailure>
+
+  /** The budgets in force for this organisation, overrides included. */
+  readonly budgets: (organizationId: string) => Effect.Effect<EffectiveBudgets, StorageFailure>
+
+  /**
+   * Recall with the reason attached.
+   *
+   * The score alone is the gap this service claims to close: "why did this
+   * match" is answerable because ranking is token overlap, so the overlapping
+   * terms can be named instead of guessed at.
+   */
+  readonly explainRecall: (
+    input: {
+      readonly organizationId: string
+      readonly query: string
+      readonly limit?: number | undefined
+    }
+  ) => Effect.Effect<
+    ReadonlyArray<{
+      readonly item: MemoryItem
+      readonly score: number
+      readonly matched: ReadonlyArray<string>
+    }>,
+    StorageFailure
+  >
+
+  /**
    * Memories similar enough to a candidate that a restatement should be folded
    * in rather than stored twice.
    */
@@ -220,6 +327,29 @@ const makeMemoryEngine = Effect.gen(function*() {
   const extractor = yield* TurnExtractor
 
   const now = Effect.clockWith((clock) => clock.currentTimeMillis)
+
+  /**
+   * The budgets for one organisation.
+   *
+   * Read per call rather than captured once: the dashboard can change a
+   * deployment's budget at runtime, and a value cached in the layer would keep
+   * applying the old one until the next deploy — which is exactly the kind of
+   * "I changed it and nothing happened" that erodes trust in a tuning knob.
+   */
+  const budgetsFor = (organizationId: string): Effect.Effect<EffectiveBudgets, StorageFailure> =>
+    store.getSettings(organizationId).pipe(
+      Effect.map(
+        (overrides) =>
+          mergeBudgets(
+            config,
+            overrides ?? {
+              maxTotalTokens: null,
+              maxIndexItems: null,
+              defaultRecallLimit: null
+            }
+          )
+      )
+    )
 
   /**
    * Store one statement, folding it into something already held when it is a
@@ -364,9 +494,10 @@ const makeMemoryEngine = Effect.gen(function*() {
       return { stored, mergedInto, merged, rejected, tensions: 0, promotions: 0 }
     })
 
-  const recall: MemoryEngineService["recall"] = (input) =>
-    Effect.gen(function*() {
-      const limit = Math.min(Math.max(input.limit ?? config.defaultRecallLimit, 1), 50)
+const recall: MemoryEngineService["recall"] = (input) =>
+    Effect.gen(function* () {
+      const budgets = yield* budgetsFor(input.organizationId)
+      const limit = Math.min(Math.max(input.limit ?? budgets.defaultRecallLimit, 1), 50)
       const query = relevanceTokens(input.query)
       if (query.size === 0) return []
 
@@ -395,9 +526,10 @@ const makeMemoryEngine = Effect.gen(function*() {
       return out
     })
 
-  const planContext: MemoryEngineService["planContext"] = (input) =>
-    Effect.gen(function*() {
-      const budget = input.maxTokens ?? config.maxTotalTokens
+const planContext: MemoryEngineService["planContext"] = (input) =>
+    Effect.gen(function* () {
+      const budgets = yield* budgetsFor(input.organizationId)
+      const budget = input.maxTokens ?? budgets.maxTotalTokens
       const sections: Array<string> = []
       const entries: Array<MemoryInjectionEntry> = []
       let used = 0
@@ -411,7 +543,7 @@ const makeMemoryEngine = Effect.gen(function*() {
       if (input.userMessage) {
         for (const identifier of extractIdentifiers(input.userMessage)) {
           const needle = identifier.toLowerCase()
-          for (const item of yield* store.activeMemories(input.organizationId, config.maxIndexItems)) {
+          for (const item of yield* store.activeMemories(input.organizationId, budgets.maxIndexItems)) {
             if (item.content.toLowerCase().includes(needle)) force.add(item.id)
           }
         }
@@ -482,7 +614,7 @@ const makeMemoryEngine = Effect.gen(function*() {
       }
 
       // 3. The index: one line per memory, bodies withheld unless a trigger earned them.
-      const pool = yield* store.activeMemories(input.organizationId, config.maxIndexItems)
+      const pool = yield* store.activeMemories(input.organizationId, budgets.maxIndexItems)
       const indexLines: Array<string> = []
       for (const item of pool) {
         const tags = item.metadata.domains.slice(0, 3)
@@ -547,9 +679,11 @@ const makeMemoryEngine = Effect.gen(function*() {
       // Deterministic first, so a plainly-stated fact is captured even if the
       // model refuses, hedges, or returns nothing.
       const rules = extractDeterministic(input.userMessage)
+      const overrides = yield* store.getSettings(input.organizationId)
       const extracted = yield* extractor.extract({
         userMessage: input.userMessage,
-        assistantResponse: input.assistantResponse
+        assistantResponse: input.assistantResponse,
+        allowModel: overrides?.extraction !== "rules"
       })
 
       const statements = [
@@ -711,6 +845,86 @@ const makeMemoryEngine = Effect.gen(function*() {
   const listTensions: MemoryEngineService["listTensions"] = (organizationId, status) =>
     Effect.map(store.listTensions(organizationId, status), (rows) => rows)
 
+  const edit: MemoryEngineService["edit"] = (organizationId, id, patch) =>
+    Effect.gen(function* () {
+      const at = yield* now
+      const content = patch.content?.trim()
+      if (patch.content !== undefined && (content === undefined || content.length < 3)) {
+        return yield* new InvalidRequest({ message: "A memory needs at least 3 characters." })
+      }
+      if (content !== undefined && content.length > 4000) {
+        return yield* new InvalidRequest({ message: "A memory is capped at 4000 characters." })
+      }
+      return yield* store.editMemory(
+        organizationId,
+        id,
+        {
+          ...(content === undefined ? {} : { content }),
+          ...(patch.gist === undefined ? {} : { gist: patch.gist.trim().slice(0, 200) }),
+          ...(patch.domains === undefined ? {} : { domains: patch.domains })
+        },
+        at
+      )
+    })
+
+  const page: MemoryEngineService["page"] = (organizationId, query) => store.memoryPage(organizationId, query)
+
+  const applyTo: MemoryEngineService["applyTo"] = (organizationId, ids, action) =>
+    store.applyToMemories(organizationId, ids, action)
+
+  const forgetEverything: MemoryEngineService["forgetEverything"] = (organizationId) =>
+    store.deleteEveryMemory(organizationId)
+
+  const setTensionStatus: MemoryEngineService["setTensionStatus"] = (organizationId, id, status) =>
+    store.setTensionStatus(organizationId, id, status)
+
+  const forgetTension: MemoryEngineService["forgetTension"] = (organizationId, id) =>
+    store.deleteTension(organizationId, id)
+
+  const forgetDomain: MemoryEngineService["forgetDomain"] = (organizationId, domain) =>
+    Effect.gen(function* () {
+      const at = yield* now
+      const model = yield* store.getSelfModel(organizationId)
+      // Filtered rather than destructured-and-ignored: a bare `_dropped` binding
+      // is the kind of leftover that reads like a mistake to the next person.
+      const domains = Object.fromEntries(
+        Object.entries(model.domains).filter(([entry]) => entry !== domain)
+      )
+      yield* store.putSelfModel(
+        organizationId,
+        new ProprioceptiveSelfModel({
+          domains,
+          calibrationFactor: model.calibrationFactor,
+          activeDomains: model.activeDomains.filter((entry) => entry !== domain)
+        }),
+        at
+      )
+      return { samples: yield* store.deleteOutcomeHistory(organizationId, domain) }
+    })
+
+  const budgets: MemoryEngineService["budgets"] = (organizationId) => budgetsFor(organizationId)
+
+  /**
+   * Recall, with the terms that did the matching.
+   *
+   * `relevanceTokens` is the same function the ranking uses, so `matched` is the
+   * actual reason rather than a keyword highlight drawn after the fact.
+   */
+  const explainRecall: MemoryEngineService["explainRecall"] = (input) =>
+    Effect.gen(function* () {
+      const query = relevanceTokens(input.query)
+      if (query.size === 0) return []
+      const hits = yield* recall(input)
+      return hits.map((hit) => {
+        const own = relevanceTokens(`${hit.item.content} ${hit.item.metadata.domains.join(" ")}`)
+        return {
+          item: hit.item,
+          score: hit.score,
+          matched: [...own].filter((token) => query.has(token)).sort()
+        }
+      })
+    })
+
   const addTension: MemoryEngineService["addTension"] = (input) =>
     Effect.gen(function*() {
       const at = yield* now
@@ -788,6 +1002,18 @@ const makeMemoryEngine = Effect.gen(function*() {
           : [...model.activeDomains, input.domain]
       })
       yield* store.putSelfModel(input.organizationId, updated, at)
+      // The sample, not just the score. `self_models` holds the moving average,
+      // which cannot show you that a domain recovered — only the individual
+      // outcomes can.
+      yield* store.recordOutcome({
+        id: yield* newId("out"),
+        organizationId: input.organizationId,
+        domain: input.domain,
+        success: input.success,
+        ...(input.failurePattern === undefined ? {} : { failurePattern: input.failurePattern }),
+        ...(input.strategy === undefined ? {} : { strategy: input.strategy }),
+        now: at
+      })
       return next
     })
 
@@ -805,6 +1031,15 @@ const makeMemoryEngine = Effect.gen(function*() {
     forget,
     list,
     promote,
+    edit,
+    page,
+    applyTo,
+    forgetEverything,
+    setTensionStatus,
+    forgetTension,
+    forgetDomain,
+    budgets,
+    explainRecall,
     candidatesFor
   }
 

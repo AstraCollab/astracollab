@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createStepDedupe } from "../src/dedupe.js";
+import { createStepDedupe, type ToolLike } from "../src/dedupe.js";
 
 const counter = () => {
   let n = 0;
@@ -11,6 +11,18 @@ const counter = () => {
     },
   };
 };
+
+type Executable = { execute: (input: unknown, ctx: unknown) => Promise<unknown> };
+
+/**
+ * Reach the wrapped tool's `execute`.
+ *
+ * `ToolLike` is `Record<string, unknown>` on purpose — `createStepDedupe` takes
+ * whatever tool map it is handed — so the wrapped value is statically `unknown`
+ * and every call site would need its own cast. The cast is safe for a specific
+ * reason: a tool only lands in the wrapped map after `isExecutable` accepted it.
+ */
+const executable = (tool: unknown): Executable => tool as Executable;
 
 const wrap = (tool: { execute: (i: unknown, c: unknown) => Promise<unknown> }) => {
   const dedupe = createStepDedupe({ probe: tool as never });
@@ -23,8 +35,8 @@ describe("per-step tool de-duplication", () => {
     const { dedupe, ctx } = wrap(tool);
     dedupe.beginStep();
 
-    expect(await dedupe.tools.probe!.execute!({ command: "ls" }, ctx)).toBe("run 1");
-    expect(await dedupe.tools.probe!.execute!({ command: "ls" }, ctx)).toBe("run 1");
+    expect(await executable(dedupe.tools.probe).execute({ command: "ls" }, ctx)).toBe("run 1");
+    expect(await executable(dedupe.tools.probe).execute({ command: "ls" }, ctx)).toBe("run 1");
     expect(tool.calls).toBe(1);
     expect(dedupe.skipped).toBe(1);
   });
@@ -34,8 +46,8 @@ describe("per-step tool de-duplication", () => {
     const { dedupe, ctx } = wrap(tool);
     dedupe.beginStep();
 
-    await dedupe.tools.probe!.execute!({ command: "ls" }, ctx);
-    await dedupe.tools.probe!.execute!({ command: "cat x" }, ctx);
+    await executable(dedupe.tools.probe).execute({ command: "ls" }, ctx);
+    await executable(dedupe.tools.probe).execute({ command: "cat x" }, ctx);
     expect(tool.calls).toBe(2);
   });
 
@@ -44,9 +56,9 @@ describe("per-step tool de-duplication", () => {
     const { dedupe, ctx } = wrap(tool);
 
     dedupe.beginStep();
-    await dedupe.tools.probe!.execute!({ command: "ls" }, ctx);
+    await executable(dedupe.tools.probe).execute({ command: "ls" }, ctx);
     dedupe.beginStep();
-    await dedupe.tools.probe!.execute!({ command: "ls" }, ctx);
+    await executable(dedupe.tools.probe).execute({ command: "ls" }, ctx);
 
     expect(tool.calls).toBe(2);
   });
@@ -60,8 +72,8 @@ describe("per-step tool de-duplication", () => {
     } as never);
     dedupe.beginStep();
 
-    expect(await dedupe.tools.one!.execute!({ x: 1 }, {})).toBe("a1");
-    expect(await dedupe.tools.two!.execute!({ x: 1 }, {})).toBe("b1");
+    expect(await executable(dedupe.tools.one).execute({ x: 1 }, {})).toBe("a1");
+    expect(await executable(dedupe.tools.two).execute({ x: 1 }, {})).toBe("b1");
   });
 
   it("leaves non-executable tools alone", () => {
@@ -83,8 +95,8 @@ describe("per-step tool de-duplication", () => {
     } as never);
     dedupe.beginStep();
 
-    await dedupe.tools.probe!.execute!(cyclic, {});
-    await dedupe.tools.probe!.execute!(cyclic, {});
+    await executable(dedupe.tools.probe).execute(cyclic, {});
+    await executable(dedupe.tools.probe).execute(cyclic, {});
     expect(calls).toBe(2);
   });
 });

@@ -1,19 +1,12 @@
 import type { Metadata } from "next"
 
-import { Dashboard } from "./dashboard"
+import { OverviewPanel } from "./panel"
 
 export const metadata: Metadata = {
-  title: "Dashboard",
-  description: "Issue API keys, and see exactly what your agent is being told."
+  title: "Overview",
+  description: "What this agent knows, what it contradicts, and what it is costing."
 }
 
-/**
- * The dashboard.
- *
- * Renders client-side rather than reading a session cookie here: the panels are
- * interactive, and gating the whole route on a server-side session would make
- * every keystroke in the context preview a round trip.
- */
 export default function DashboardPage() {
-  return <Dashboard />
+  return <OverviewPanel />
 }

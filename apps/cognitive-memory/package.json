@@ -31,7 +31,7 @@
   },
   "packageManager": "pnpm@10.13.1",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.19.0"
   },
   "devDependencies": {
     "@astracollab/cogmem": "workspace:*",
@@ -39,7 +39,7 @@
     "@effect/vitest": "4.0.0",
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/node": "^20",
+    "@types/node": "^22.19.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "drizzle-kit": "^0.31.11",

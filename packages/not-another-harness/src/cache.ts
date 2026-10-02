@@ -183,21 +183,34 @@ export const withCachedTail = (
  * Getting this wrong is not a rounding error. On a run with a 90% hit rate the
  * split formula reports roughly 10x the true context size, which then drives
  * compaction and the spend rail off a number that was never real.
+ *
+ * @deprecated v7 normalises cache accounting, so the distinction no longer
+ * exists. The type is kept only so existing callers still compile.
  */
 export type CacheAccounting = "split" | "inclusive";
-
-const SPLIT_ACCOUNTING_PROVIDERS = new Set(["anthropic"]);
 
 /**
  * Which accounting convention `provider` uses.
  *
- * Inferred from the provider id, and overridable per run, because a gateway can
- * front either convention and a wrong guess silently corrupts every size figure
+ * **Deprecated on AI SDK v7, and no longer consulted.** It existed because the
+ * SDK reported `input_tokens` two different ways depending on the provider —
+ * Anthropic excluded the cached prefix, OpenAI-compatible gateways included it —
+ * so a harness that summed the pieces had to know which it was looking at, and a
+ * wrong guess inflated every size figure it reported by up to 10x.
+ *
+ * v7 removes the ambiguity rather than moving it: `inputTokens` is always the
+ * whole prompt and `inputTokenDetails` always breaks out `noCache`,
+ * `cacheRead`, and `cacheWrite`. There is nothing left to infer.
+ *
+ * Kept exported so existing callers still compile, and because the provider list
+ * is the kind of thing worth having on record. It no longer affects any figure
  * the harness reports.
+ *
+ * @deprecated v7 normalises cache accounting; this is inert.
  */
 export const cacheAccountingFor = (provider: string | undefined): CacheAccounting => {
-  if (!provider) return "inclusive";
-  return SPLIT_ACCOUNTING_PROVIDERS.has(provider.toLowerCase()) ? "split" : "inclusive";
+  void provider;
+  return "inclusive";
 };
 
 /**

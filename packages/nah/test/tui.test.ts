@@ -1,33 +1,34 @@
 import { describe, expect, it } from "vitest";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { Terminal } from "@earendil-works/pi-tui";
 
 import { TurnOutput, stripMouseReportText } from "../src/tui/output.js";
 import type { SessionState } from "../src/session.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
-const USAGE = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
+const USAGE = v4Usage({ input: 10, output: 5 });
 
 const strip = (s: string) => s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "");
 
 const textStream = (text: string) =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       { type: "text-start", id: "t" },
       { type: "text-delta", id: "t", delta: text },
       { type: "text-end", id: "t" },
-      { type: "finish", finishReason: "stop", usage: USAGE },
+      { type: "finish", finishReason: finishReason("stop"), usage: USAGE },
     ],
   });
 
 const toolStream = (id: string) =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       { type: "tool-call", toolCallId: id, toolName: "grep", input: JSON.stringify({ pattern: "needle" }) },
-      { type: "finish", finishReason: "tool-calls", usage: USAGE },
+      { type: "finish", finishReason: finishReason("tool-calls"), usage: USAGE },
     ],
   });
 
@@ -291,7 +292,7 @@ describe("alternate-screen host layout", () => {
       release = resolve;
     });
     let step = 0;
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => {
         // First step holds so we can type mid-turn; later steps finish quickly.
         if (step++ === 0) await gate;
@@ -341,7 +342,7 @@ describe("alternate-screen host layout", () => {
 
   it("exits on Ctrl-D with an empty editor and on Ctrl-C when idle", async () => {
     const { startTuiHost } = await import("../src/tui/host.js");
-    const model = new MockLanguageModelV2({ doStream: async () => ({ stream: textStream("x") }) });
+    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: textStream("x") }) });
     const terminal = new FakeTerminal(60, 20);
     const state = makeState(model);
 
@@ -357,7 +358,7 @@ describe("alternate-screen host layout", () => {
 
   it("does not treat Ctrl-D as quit while the editor has text", async () => {
     const { startTuiHost } = await import("../src/tui/host.js");
-    const model = new MockLanguageModelV2({ doStream: async () => ({ stream: textStream("x") }) });
+    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: textStream("x") }) });
     const terminal = new FakeTerminal(60, 20);
     const state = makeState(model);
 
@@ -377,7 +378,7 @@ describe("alternate-screen host layout", () => {
 
   it("opens the model list for a bare /model", async () => {
     const { startTuiHost } = await import("../src/tui/host.js");
-    const model = new MockLanguageModelV2({ doStream: async () => ({ stream: textStream("x") }) });
+    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: textStream("x") }) });
     const terminal = new FakeTerminal(60, 20);
     const state = makeState(model);
 
@@ -403,7 +404,7 @@ describe("alternate-screen host layout", () => {
 
   it("dispatches /model <spec> as a direct switch", async () => {
     const { startTuiHost } = await import("../src/tui/host.js");
-    const model = new MockLanguageModelV2({ doStream: async () => ({ stream: textStream("x") }) });
+    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: textStream("x") }) });
     const terminal = new FakeTerminal(60, 20);
     // No API key, so resolveModel fails deterministically — which proves the
     // command reached the model-switch path rather than being ignored.
@@ -430,7 +431,7 @@ describe("alternate-screen host layout", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => {
         await gate;
         return { stream: textStream("done") };
@@ -468,7 +469,7 @@ describe("alternate-screen host layout", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => {
         await gate;
         return { stream: textStream("all done") };

@@ -1,15 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { MockLanguageModelV2 } from "ai/test";
+import { MockLanguageModelV4 } from "ai/test";
 
 import { createMemoryReconciler, parseReconciliation } from "../src/memory.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
-const USAGE = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
+const USAGE = v4Usage({ input: 10, output: 5 });
 
 const textModel = (text: string) =>
-  new MockLanguageModelV2({
+  new MockLanguageModelV4({
     doGenerate: async () => ({
       content: [{ type: "text" as const, text }],
-      finishReason: "stop" as const,
+      finishReason: finishReason("stop"),
       usage: USAGE,
       warnings: [],
     }),
@@ -17,14 +18,14 @@ const textModel = (text: string) =>
 
 /** The bug this suite exists for: a model with no structured-output support. */
 const textOnlyModelThatRejectsSchemas = (text: string) =>
-  new MockLanguageModelV2({
+  new MockLanguageModelV4({
     doGenerate: async (options) => {
       if (options.responseFormat?.type === "json") {
         throw new Error("AI_NoObjectGeneratedError: no object generated");
       }
       return {
         content: [{ type: "text" as const, text }],
-        finishReason: "stop" as const,
+        finishReason: finishReason("stop"),
         usage: USAGE,
         warnings: [],
       };
@@ -124,14 +125,14 @@ describe("createMemoryReconciler", () => {
   it("judges every candidate in the turn with one call", async () => {
     let calls = 0;
     const reconcile = createMemoryReconciler(
-      new MockLanguageModelV2({
+      new MockLanguageModelV4({
         doGenerate: async () => {
           calls += 1;
           return {
             content: [
               { type: "text" as const, text: '{"verdicts":[{"index":0,"action":"merge"}]}' },
             ],
-            finishReason: "stop" as const,
+            finishReason: finishReason("stop"),
             usage: USAGE,
             warnings: [],
           };
@@ -145,7 +146,7 @@ describe("createMemoryReconciler", () => {
 
   it("keeps everything when the model errors", async () => {
     const reconcile = createMemoryReconciler(
-      new MockLanguageModelV2({
+      new MockLanguageModelV4({
         doGenerate: async () => {
           throw new Error("rate limited");
         },
@@ -157,10 +158,10 @@ describe("createMemoryReconciler", () => {
   it("does not call the model for an empty batch", async () => {
     let calls = 0;
     const reconcile = createMemoryReconciler(
-      new MockLanguageModelV2({
+      new MockLanguageModelV4({
         doGenerate: async () => {
           calls += 1;
-          return { content: [], finishReason: "stop" as const, usage: USAGE, warnings: [] };
+          return { content: [], finishReason: finishReason("stop"), usage: USAGE, warnings: [] };
         },
       }),
     );

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { Terminal } from "@earendil-works/pi-tui";
 
 import { TurnOutput } from "../src/tui/output.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -38,13 +39,13 @@ class FakeTerminal implements Terminal {
 }
 
 const textStream = (text: string) =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       { type: "text-start", id: "t" },
       { type: "text-delta", id: "t", delta: text },
       { type: "text-end", id: "t" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 5, outputTokens: 1, totalTokens: 6 } },
+      { type: "finish", finishReason: finishReason("stop"), usage: v4Usage({ input: 5, output: 1 }) },
     ],
   });
 
@@ -79,7 +80,7 @@ describe("terminal teardown", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => {
         await gate;
         return { stream: textStream("done") };

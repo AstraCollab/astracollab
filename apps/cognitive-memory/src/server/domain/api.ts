@@ -77,6 +77,80 @@ export const DomainOutcomeBody = Schema.Struct({
 
 export const PromoteBody = Schema.Struct({ tier: MemoryTier })
 
+/* -------------------------------------------------------------------------- */
+/* The dashboard's own bodies                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Editing one memory from the library.
+ *
+ * One shape for "move it to L2" and "fix what it says", because they are the same
+ * operation on the same row and a form that has to choose a verb before it can
+ * send a field is a worse form. At least one field has to be present; an empty
+ * patch is rejected rather than treated as a no-op that reports success.
+ */
+export const EditMemoryBody = Schema.Struct({
+  tier: Schema.optional(MemoryTier),
+  content: Schema.optional(LongText),
+  gist: Schema.optional(Schema.String.pipe(Schema.check(Schema.isMaxLength(200)))),
+  domains: Schema.optional(Schema.Array(ShortText))
+})
+
+/**
+ * A bulk action over a selection.
+ *
+ * "promote" and "demote" rather than a tier per row: a selection is always one
+ * kind of row in practice, and a verb is a smaller thing to get wrong than a
+ * tier number.
+ */
+export const BulkMemoryBody = Schema.Struct({
+  ids: Schema.Array(Schema.String).pipe(Schema.check(Schema.isMinLength(1))),
+  action: Schema.Literals(["promote", "demote", "archive", "forget"])
+})
+
+export const RecallInspectBody = Schema.Struct({
+  query: NonEmpty.pipe(Schema.check(Schema.isMaxLength(2000))),
+  limit: Schema.optional(Schema.Number)
+})
+
+/**
+ * Per-organisation settings.
+ *
+ * Nullable numbers, because `null` is the difference between "this
+ * organisation's ceiling is 4000" and "this organisation follows the
+ * deployment", and a field that cannot say that forces the dashboard to keep a
+ * copy of the deployment default and go stale.
+ */
+export const SettingsBody = Schema.Struct({
+  maxTotalTokens: Schema.optional(
+    Schema.NullOr(Schema.Number.pipe(Schema.check(Schema.isGreaterThan(0))))
+  ),
+  maxIndexItems: Schema.optional(
+    Schema.NullOr(Schema.Number.pipe(Schema.check(Schema.isGreaterThan(0))))
+  ),
+  defaultRecallLimit: Schema.optional(
+    Schema.NullOr(Schema.Number.pipe(Schema.check(Schema.isGreaterThan(0))))
+  ),
+  retentionDays: Schema.optional(
+    Schema.Number.pipe(
+      Schema.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(3650))
+    )
+  ),
+  extraction: Schema.optional(Schema.Literals(["auto", "rules"]))
+})
+
+export const SettingsActionBody = Schema.Struct({
+  action: Schema.Literals(["prune", "forget-all", "revoke-keys"])
+})
+
+export const TensionStatusBody = Schema.Struct({
+  status: Schema.Literals(["active", "latent", "resolved"])
+})
+
+export const DomainBody = Schema.Struct({
+  domain: NonEmpty.pipe(Schema.check(Schema.isMaxLength(100)))
+})
+
 export const IssueKeyBody = Schema.Struct({
   name: NonEmpty.pipe(Schema.check(Schema.isMaxLength(100))),
   scopes: Schema.optional(
@@ -139,4 +213,11 @@ export type TensionBody = typeof TensionBody.Type
 export type ResolveTensionBody = typeof ResolveTensionBody.Type
 export type DomainOutcomeBody = typeof DomainOutcomeBody.Type
 export type IssueKeyBody = typeof IssueKeyBody.Type
+export type EditMemoryBody = typeof EditMemoryBody.Type
+export type BulkMemoryBody = typeof BulkMemoryBody.Type
+export type RecallInspectBody = typeof RecallInspectBody.Type
+export type SettingsBody = typeof SettingsBody.Type
+export type SettingsActionBody = typeof SettingsActionBody.Type
+export type TensionStatusBody = typeof TensionStatusBody.Type
+export type DomainBody = typeof DomainBody.Type
 export type MemoryView = typeof MemoryView.Type

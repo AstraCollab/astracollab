@@ -1,24 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { Terminal } from "@earendil-works/pi-tui";
 
 import { TurnOutput } from "../src/tui/output.js";
 import { ContextSidebar, formatSidebar, formatTokens, type SidebarData } from "../src/tui/sidebar.js";
 import { stripAnsi } from "../src/render.js";
 import type { SessionState } from "../src/session.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
 const strip = (value: string): string => stripAnsi(value).replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
 
 const textStream = (text: string) =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       { type: "text-start", id: "t" },
       { type: "text-delta", id: "t", delta: text },
       { type: "text-end", id: "t" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+      { type: "finish", finishReason: finishReason("stop"), usage: v4Usage({ input: 1, output: 1 }) },
     ],
   });
 
@@ -100,7 +101,7 @@ const DATA: SidebarData = {
   cacheWriteTokens: 40_000,
   cacheHitRate: 0.94,
   spendUsd: 0.61,
-  spendLimitUsd: 2,
+  spendLimitUsd: null,
   turns: 12,
   permissions: "yolo",
   providerStatus: null,
@@ -172,16 +173,27 @@ describe("cache hit rate", () => {
   });
 });
 
-describe("spend against the rail", () => {
+describe("spend", () => {
   const at = (over: Partial<SidebarData>) => strip(formatSidebar({ ...DATA, ...over }, 60).join("\n"));
 
-  it("shows spend against the ceiling", () => {
-    // A budget nobody can see is a budget that looks arbitrary when it fires.
-    expect(at({})).toContain("$0.610 / $2.00");
+  it("shows spend alone when there is no ceiling, which is the normal state", () => {
+    // `$1.99 / $2.00` implied a limit that could end the turn, and on a run that
+    // went long it read as "nearly out of budget" rather than "this is what the
+    // work has cost".
+    expect(at({ spendLimitUsd: null })).toContain("$0.610 spent");
   });
 
-  it("shows spend alone when no ceiling applies", () => {
-    expect(at({ spendLimitUsd: null })).toContain("$0.610 spent");
+  it("names the ceiling when the user set one, so it is not mistaken for progress", () => {
+    expect(at({ spendLimitUsd: 2 })).toContain("$0.610 / $2.00 ceiling");
+  });
+
+  it("does not invent a ceiling from the spend figure", () => {
+    // The old code derived one from context every frame, so a panel could show a
+    // denominator the run was never subject to.
+    const moneyRow = at({ spendLimitUsd: null })
+      .split("\n")
+      .find((line) => line.includes("spent"));
+    expect(moneyRow).toBe("$0.610 spent");
   });
 
   it("keeps three decimals, because a cheap turn must not read as zero", () => {
@@ -250,7 +262,7 @@ describe("formatTokens", () => {
 describe("the sidebar inside the real TUI", () => {
   it("sits beside the transcript on a wide terminal and is dropped on a narrow one", async () => {
     const { startTuiHost } = await import("../src/tui/host.js");
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => ({ stream: textStream("done") }),
     });
 

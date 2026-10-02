@@ -1,70 +1,47 @@
 import { describe, expect, it } from "vitest";
 
-import { defaultTurnSpendUsd, formatUsd, projectStepCostUsd, resolveTurnSpendUsd } from "../src/budget.js";
+import { formatUsd, projectStepCostUsd, resolveTurnSpendUsd } from "../src/budget.js";
 
 const RATES = { input: 3, output: 15 };
 
-describe("defaultTurnSpendUsd", () => {
-  it("gives a fresh session a floor, not the old flat ceiling", () => {
-    // Two read-only "explain this codebase" runs cost $0.11 and $0.15 against the
-    // old $5. A rail that never binds is decoration, not a safety net.
-    expect(defaultTurnSpendUsd(0)).toBeLessThan(5);
-    expect(defaultTurnSpendUsd(2_000)).toBeLessThan(5);
-  });
-
-  it("still leaves room for a real turn on an empty session", () => {
-    // The floor must cover a genuine 32-step turn that grows its context: roughly
-    // 1.4M cumulative input plus output lands near $1, so $2 has headroom.
-    expect(defaultTurnSpendUsd(0)).toBeGreaterThanOrEqual(2);
-  });
-
-  it("grows with the transcript, which is what actually drives cost", () => {
-    // Every step re-sends the transcript, so a turn resuming a large one pays
-    // more per step for identical work. A flat number got this backwards.
-    expect(defaultTurnSpendUsd(150_000)).toBeGreaterThan(defaultTurnSpendUsd(20_000));
-  });
-
-  it("reaches the historical ceiling at a full window", () => {
-    expect(defaultTurnSpendUsd(180_000)).toBeCloseTo(5, 6);
-    // And never exceeds it, however much context is carried.
-    expect(defaultTurnSpendUsd(1_000_000)).toBe(5);
-  });
-
-  it("is monotonic across the whole range", () => {
-    let previous = 0;
-    for (const context of [0, 10_000, 50_000, 100_000, 180_000, 500_000]) {
-      const value = defaultTurnSpendUsd(context);
-      expect(value).toBeGreaterThanOrEqual(previous);
-      previous = value;
-    }
-  });
-
-  it("treats a negative context as empty rather than shrinking the floor", () => {
-    expect(defaultTurnSpendUsd(-5_000)).toBe(defaultTurnSpendUsd(0));
-  });
-});
-
 describe("resolveTurnSpendUsd", () => {
-  it("prefers an explicit override over the scaled default", () => {
-    expect(resolveTurnSpendUsd(0, 25, {})).toBe(25);
+  it("is zero by default, so a turn has no ceiling", () => {
+    // This is the fix. A run stopped at `$1.99 / $2.00` on every turn, mid-task,
+    // with the work unfinished — a ceiling inside the cost of doing the job.
+    // Long-running agents run until the task is done, the window is full, or a
+    // human interrupts.
+    expect(resolveTurnSpendUsd(null, {})).toBe(0);
+    expect(resolveTurnSpendUsd(undefined, {})).toBe(0);
+  });
+
+  it("does not scale with context any more", () => {
+    // It did, and it was the right idea on the wrong signal: the turn's starting
+    // context, which nothing ever wrote. contextUsedTokens sat at 0 for every
+    // turn in a real session, so the $2 floor was the only number that ever
+    // applied — a fresh session and a 3.9M-token session got the same budget.
+    expect(resolveTurnSpendUsd(null, {})).toBe(0);
+  });
+
+  it("honours an explicit ceiling when the user asks for one", () => {
+    expect(resolveTurnSpendUsd(25, {})).toBe(25);
   });
 
   it("still honours the env var for existing setups", () => {
-    expect(resolveTurnSpendUsd(0, null, { NAH_TURN_SPEND_USD: "8" })).toBe(8);
+    expect(resolveTurnSpendUsd(null, { NAH_TURN_SPEND_USD: "8" })).toBe(8);
   });
 
-  it("falls back to scaling when neither is set", () => {
-    expect(resolveTurnSpendUsd(100_000, null, {})).toBe(defaultTurnSpendUsd(100_000));
+  it("prefers the explicit value over the env var", () => {
+    expect(resolveTurnSpendUsd(3, { NAH_TURN_SPEND_USD: "8" })).toBe(3);
   });
 
-  it("ignores a nonsense override rather than disabling the rail", () => {
-    // Falling through to 0 here would remove the safety net entirely, which is
-    // the opposite of what "set it to nothing" should mean.
+  it("treats a nonsense ceiling as none rather than inventing one", () => {
+    // Guessing a fallback here would reintroduce exactly the automatic ceiling
+    // this removed, so a bad value means no ceiling and nothing says otherwise.
     for (const bad of [0, -3, Number.NaN]) {
-      expect(resolveTurnSpendUsd(0, bad, {})).toBe(defaultTurnSpendUsd(0));
+      expect(resolveTurnSpendUsd(bad, {})).toBe(0);
     }
-    expect(resolveTurnSpendUsd(0, null, { NAH_TURN_SPEND_USD: "abc" })).toBe(defaultTurnSpendUsd(0));
-    expect(resolveTurnSpendUsd(0, null, { NAH_TURN_SPEND_USD: "-1" })).toBe(defaultTurnSpendUsd(0));
+    expect(resolveTurnSpendUsd(null, { NAH_TURN_SPEND_USD: "abc" })).toBe(0);
+    expect(resolveTurnSpendUsd(null, { NAH_TURN_SPEND_USD: "-1" })).toBe(0);
   });
 });
 
@@ -90,7 +67,7 @@ describe("projectStepCostUsd", () => {
 
 describe("formatUsd", () => {
   it("keeps enough precision at small spend", () => {
-    // A turn that costs $0.082 must not render as "$0" next to a $2 rail.
+    // A turn that costs $0.082 must not render as "$0" next to a two-digit figure.
     expect(formatUsd(0.0824)).toBe("$0.082");
     expect(formatUsd(2)).toBe("$2.00");
     expect(formatUsd(12.4)).toBe("$12");

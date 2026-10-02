@@ -30,6 +30,7 @@ const SECTIONS = [
   { id: "tensions", label: "Tensions" },
   { id: "self-model", label: "Self-model" },
   { id: "api", label: "API" },
+  { id: "dashboard", label: "Dashboard" },
   { id: "auth", label: "Credentials" }
 ] as const
 
@@ -300,6 +301,45 @@ export default function DocsPage() {
             </p>
           </Doc>
 
+          <Doc id="dashboard" title="Dashboard">
+            <p>
+              Ten pages, all authenticated by session cookie rather than by API key —
+              looking at your own memory should not cost you a credential, and
+              handing out keys to open a page would train exactly the habit this
+              service discourages. What each one answers:
+            </p>
+            <DashboardTable />
+            <p>
+              Two of them are worth calling out, because they are the ones that turn
+              a vague feeling into a specific fix.
+            </p>
+            <p>
+              <b>Analytics</b> splits the token spend by the rule that caused each
+              line: index, trigger, tension, guardrail. A build that spends its
+              whole budget on index lines and no bodies is not a memory that needs a
+              bigger budget, it is a store with nothing worth promoting, and the two
+              problems have opposite fixes.
+            </p>
+            <p>
+              <b>Activity</b> replays the block that was actually sent, not the one
+              the planner would produce today. Re-running the planner against current
+              memory answers &ldquo;what would the agent get now&rdquo;, which is a
+              much better-looking answer than the one that caused whatever you are
+              trying to understand. The triggering message is not stored with it —
+              that is the conversation, not the memory — but the identifiers inside
+              it are, because those are what explain why a full body was spent.
+            </p>
+            <p>
+              <b>Settings</b> holds per-organisation overrides of the token ceiling,
+              the index limit and the recall default, plus whether model extraction
+              runs at all and how long the logs are kept. Each override is nullable,
+              and null means &ldquo;inherit the deployment default&rdquo;: a setting
+              that silently reverts is worse than no setting at all, so the page shows
+              both numbers and clearing the override is one click rather than a guess
+              at what the deployment default was last week.
+            </p>
+          </Doc>
+
           <Doc id="auth" title="Credentials">
             <p>Two kinds of credential, deliberately separated.</p>
             <p>
@@ -419,6 +459,36 @@ function Rules() {
           <p className="text-xs font-medium text-zinc-200">{rule}</p>
           <p className="mt-1 text-xs leading-5 text-zinc-500">{detail}</p>
         </div>
+      ))}
+    </div>
+  )
+}
+
+function DashboardTable() {
+  const rows = [
+    ["/dashboard", "Overview", "What needs a human: unresolved contradictions, weak domains, whether the budget is truncating."],
+    ["/dashboard/context", "Context", "The exact block your agent would be given for any message, with the reason and cost of every line."],
+    ["/dashboard/activity", "Activity", "Every context build, with the block that was sent and the reason each line was included."],
+    ["/dashboard/memory", "Library", "Search, filter, edit, retier and bulk-forget. Plus a recall inspector that names the terms that matched."],
+    ["/dashboard/tensions", "Tensions", "Contradictions by status, with resolve, reopen, and the reusable pattern a resolution revealed."],
+    ["/dashboard/self-model", "Self-model", "Reliability per domain with every sample behind the score, and a form to record an outcome."],
+    ["/dashboard/analytics", "Analytics", "Tokens per turn over time, the reason mix, per-endpoint and per-key spend, tier distribution."],
+    ["/dashboard/start", "Get started", "SDK and curl snippets, and a live tester that sends real requests with a key you paste."],
+    ["/dashboard/keys", "Keys", "Issue, scope, expire and revoke agent credentials."],
+    ["/dashboard/settings", "Settings", "Budgets, extraction, retention, the organisation, and a danger zone."]
+  ] as const
+  return (
+    <div className="overflow-hidden rounded-xl border border-white/[0.08]">
+      {rows.map(([href, name, does]) => (
+        <Link
+          key={href}
+          href={href}
+          className="grid grid-cols-[1fr_120px_2fr] items-baseline gap-3 border-b border-white/[0.05] px-4 py-3 transition last:border-0 hover:bg-white/[0.02]"
+        >
+          <code className="font-mono text-[11px] text-violet-200">{href}</code>
+          <span className="text-xs text-zinc-300">{name}</span>
+          <span className="text-xs leading-5 text-zinc-500">{does}</span>
+        </Link>
       ))}
     </div>
   )

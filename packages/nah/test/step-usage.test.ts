@@ -3,21 +3,22 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as nodePath from "node:path";
 import { tmpdir } from "node:os";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { createJsonlSessionStore, createCodingTools } from "@astracollab/not-another-harness";
 import { createNodeEnvironment } from "@astracollab/not-another-harness/node";
 
 import { runTurn, type SessionState } from "../src/session.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
-const USAGE = { inputTokens: 40_000, outputTokens: 300, totalTokens: 40_300 };
+const USAGE = v4Usage({ input: 40_000, output: 300 });
 
 /** One tool round, then a final answer: two steps in a single turn. */
 let calls = 0;
-const model = new MockLanguageModelV2({
+const model = new MockLanguageModelV4({
   doStream: async () => {
     const done = calls++ > 0;
-    const chunks: LanguageModelV2StreamPart[] = done
+    const chunks: LanguageModelV4StreamPart[] = done
       ? [
           { type: "text-start", id: "t" },
           { type: "text-delta", id: "t", delta: "all done" },
@@ -27,7 +28,7 @@ const model = new MockLanguageModelV2({
     return {
       stream: simulateReadableStream({
         chunkDelayInMs: 0,
-        chunks: [...chunks, { type: "finish", finishReason: done ? "stop" : "tool-calls", usage: USAGE }],
+        chunks: [...chunks, { type: "finish", finishReason: finishReason(done ? "stop" : "tool-calls"), usage: USAGE }],
       }),
     };
   },

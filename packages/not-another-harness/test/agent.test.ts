@@ -2,8 +2,9 @@ import { mkdtemp, rm, readFile as fsReadFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4FinishReason } from "@ai-sdk/provider";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runAgent } from "../src/agent.js";
@@ -15,17 +16,18 @@ import { createJsonlSessionStore } from "../src/session.js";
 import { createNodeEnvironment } from "../src/node.js";
 import { createCodingTools } from "../src/tools.js";
 import type { HarnessEvent, HarnessUsage } from "../src/types.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
-const USAGE = { inputTokens: 100, outputTokens: 20, totalTokens: 120 };
+const USAGE = v4Usage({ input: 100, output: 20 });
 
-const textStream = (text: string, finishReason: "stop" | "tool-calls" = "stop") =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+const textStream = (text: string, reason: LanguageModelV4FinishReason = finishReason("stop")) =>
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       { type: "text-start", id: "t1" },
       { type: "text-delta", id: "t1", delta: text },
       { type: "text-end", id: "t1" },
-      { type: "finish", finishReason, usage: USAGE },
+      { type: "finish", finishReason: reason, usage: USAGE },
     ],
   });
 
@@ -36,7 +38,7 @@ const toolCallStream = (
   thenText?: string,
   usage = USAGE,
 ) => {
-  const chunks: LanguageModelV2StreamPart[] = [
+  const chunks: LanguageModelV4StreamPart[] = [
     { type: "tool-call", toolCallId, toolName, input: JSON.stringify(input) },
   ];
   if (thenText) {
@@ -44,8 +46,8 @@ const toolCallStream = (
     chunks.push({ type: "text-delta", id: "t2", delta: thenText });
     chunks.push({ type: "text-end", id: "t2" });
   }
-  chunks.push({ type: "finish", finishReason: "tool-calls", usage });
-  return simulateReadableStream<LanguageModelV2StreamPart>({
+  chunks.push({ type: "finish", finishReason: finishReason("tool-calls"), usage });
+  return simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks,
   });
@@ -53,9 +55,9 @@ const toolCallStream = (
 
 type StreamFactory = () => ReturnType<typeof textStream>;
 
-const scriptedModel = (streams: StreamFactory[]): MockLanguageModelV2 => {
+const scriptedModel = (streams: StreamFactory[]): MockLanguageModelV4 => {
   let call = 0;
-  return new MockLanguageModelV2({
+  return new MockLanguageModelV4({
     doStream: async () => {
       const make = streams[Math.min(call, streams.length - 1)];
       call += 1;
@@ -153,7 +155,8 @@ describe("runAgent", () => {
     await eventsPromise;
     expect(result.reason).toBe("max-steps");
     expect(usageEvents.length).toBe(3);
-    expect(usageEvents[2]?.totalTokens).toBe(USAGE.totalTokens * 3);
+    // Three steps of the 100-in/20-out fixture above, as the harness counts them.
+    expect(usageEvents[2]?.totalTokens).toBe(120 * 3);
   });
 
   it("spends one wrap-up step handing off instead of stopping mid-task", async () => {
@@ -317,11 +320,7 @@ describe("runAgent", () => {
     const model = scriptedModel([
       // big step-1 usage crosses the 10k compaction floor immediately
       () =>
-        toolCallStream("read", { path: "x" }, "call-1", undefined, {
-          inputTokens: 11_000,
-          outputTokens: 500,
-          totalTokens: 11_500,
-        }),
+        toolCallStream("read", { path: "x" }, "call-1", undefined, v4Usage({ input: 11_000, output: 500 })),
       () => textStream("post-compaction"),
     ]);
     const env = createNodeEnvironment(dir);
@@ -347,18 +346,14 @@ describe("runAgent", () => {
     // when the real context is tiny. Triggering compaction off that number threw
     // away the agent's working memory mid-task and left it unable to finish.
     let call = 0;
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => {
         const index = call;
         call += 1;
         return {
           stream:
             index < 8
-              ? toolCallStream("read", { path: "x" }, `call-${index}`, undefined, {
-                  inputTokens: 20_000,
-                  outputTokens: 500,
-                  totalTokens: 20_500,
-                })
+              ? toolCallStream("read", { path: "x" }, `call-${index}`, undefined, v4Usage({ input: 20_000, output: 500 }))
               : textStream("done"),
         };
       },
@@ -386,19 +381,14 @@ describe("runAgent", () => {
 
   it("compacts once a single request genuinely approaches the threshold", async () => {
     let call = 0;
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => {
         const index = call;
         call += 1;
         return {
           stream:
             index < 4
-              ? toolCallStream("read", { path: "x" }, `call-${index}`, undefined, {
-                  // each request really is ~40k tokens on its own
-                  inputTokens: 40_000,
-                  outputTokens: 500,
-                  totalTokens: 40_500,
-                })
+              ? toolCallStream("read", { path: "x" }, `call-${index}`, undefined, v4Usage({ input: 40_000, output: 500 }))
               : textStream("done"),
         };
       },
@@ -573,22 +563,22 @@ describe("budget triage", () => {
     }));
 
     let call = 0;
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async (options) => {
         const step = call++;
         // Bill what the prompt actually costs, so the budget behaves like a real
         // run rather than a flat per-step fiction.
-        const inputTokens = Math.ceil(JSON.stringify(options?.prompt ?? options?.messages ?? []).length / 4);
+        const inputTokens = Math.ceil(JSON.stringify(options?.prompt ?? []).length / 4);
         if (step < 14) {
           return {
-            stream: simulateReadableStream<LanguageModelV2StreamPart>({
+            stream: simulateReadableStream<LanguageModelV4StreamPart>({
               chunkDelayInMs: 0,
               chunks: [
                 { type: "tool-call", toolCallId: `c${step}`, toolName: "probe", input: "{}" },
                 {
                   type: "finish",
-                  finishReason: "tool-calls",
-                  usage: { inputTokens, outputTokens: 200, totalTokens: inputTokens + 200 },
+                  finishReason: finishReason("tool-calls"),
+                  usage: v4Usage({ input: inputTokens, output: 200 }),
                 },
               ],
             }),
@@ -635,11 +625,11 @@ describe("budget triage", () => {
 
   it("still stops when even a compacted request cannot be afforded", async () => {
     let call = 0;
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => {
         const step = call++;
         return {
-          stream: simulateReadableStream<LanguageModelV2StreamPart>({
+          stream: simulateReadableStream<LanguageModelV4StreamPart>({
             chunkDelayInMs: 0,
             chunks: [
               ...(step < 2
@@ -647,8 +637,10 @@ describe("budget triage", () => {
                 : []),
               {
                 type: "finish" as const,
-                finishReason: (step < 2 ? "tool-calls" : "stop") as "tool-calls" | "stop",
-                usage: { inputTokens: 0, outputTokens: 0, totalTokens: 40_000 },
+                finishReason: finishReason(step < 2 ? "tool-calls" : "stop"),
+                // A step that reads nothing but still reports a 40k prompt: the
+                // point of the test is the size, not the cache composition.
+                usage: v4Usage({ input: 40_000, output: 0 }),
               },
             ],
           }),

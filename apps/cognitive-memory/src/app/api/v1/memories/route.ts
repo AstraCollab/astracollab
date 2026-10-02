@@ -4,7 +4,7 @@ import { RememberBody } from "@/server/domain/api"
 import { MemoryTier } from "@/server/domain/memory"
 import { decodeBody, readJson } from "@/server/http/respond"
 import { toLearnView, toMemoryView } from "@/server/http/views"
-import { authorize, MemoryEngine, respond } from "@/server/runtime"
+import { authorize, account, MemoryEngine, respond } from "@/server/runtime"
 import { Scope } from "@/server/services/keys"
 import { MemoryStore } from "@/server/services/memory-store"
 
@@ -49,6 +49,8 @@ const create = (request: Request) =>
       ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
       source: "api"
     })
+
+    yield* account(caller, "POST /v1/memories")
 
     return toLearnView(outcome)
   })

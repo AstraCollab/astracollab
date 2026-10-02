@@ -1,69 +1,54 @@
 /**
- * Per-turn spend budgets, scaled to the task rather than fixed.
+ * Optional per-turn spend ceiling.
  *
- * ## Why a flat ceiling was wrong
+ * ## There is no ceiling by default
  *
- * `NAH_TURN_SPEND_USD` defaulted to $5 for every turn regardless of what the turn
- * was doing. Two runs of the same read-only "explain this codebase" cost $0.11
- * and $0.15 against that $5 — roughly 35x of headroom that was never touched, on
- * a turn whose entire output was one markdown document.
+ * This used to pick one automatically: $2 on a fresh session, scaling to $5 as the
+ * transcript grew. Every turn in a real session then stopped at `$1.99 / $2.00`,
+ * mid-task, with the work unfinished. Three separate things were wrong with it:
  *
- * A ceiling that never binds is not a safety rail, it is decoration. Worse, the
- * number was invisible: nothing in the UI showed a budget, so when a rail *did*
- * fire the stop looked arbitrary.
+ * - **It stopped working runs.** A turn that emits 68k output tokens costs about
+ *   a dollar at Sonnet rates, and the agent was emitting that on ordinary tasks.
+ *   The ceiling was inside the cost of doing the job.
+ * - **It was scaled on a signal that was always zero.** The scaling keyed on the
+ *   turn's starting context, which nothing ever wrote — `contextUsedTokens` sat
+ *   at 0 for every turn — so the scaling never engaged and the $2 floor was the
+ *   only number that ever applied. A fresh session and a session with 3.9M
+ *   tokens of history got the same $2.
+ * - **It was priced from invented numbers.** `ratesFor` falls back to assumed
+ *   Sonnet rates for a model it does not recognise, and the model in question
+ *   was an OpenRouter route the user may well pay nothing for. A ceiling
+ *   computed from a guess will confidently stop real work.
  *
- * ## What the budget is actually paying for
+ * Long-running coding agents do not stop because a counter crossed a line. Claude
+ * Code, opencode, and pi all run a turn until the task is done, the context window
+ * is genuinely full, or the human interrupts. Those are the only bounds here now,
+ * and they are the right ones: `maxContextTokens` is a real limit, `maxSteps` is
+ * finite, and Ctrl-C is always available.
  *
- * Every step re-sends the transcript, so a turn's cost is dominated by how much
- * context it carries and how many steps it takes — not by how much the model
- * writes. That makes context size the one signal available at turn start that
- * actually predicts cost, and it points the opposite way from a flat number: the
- * sessions that most need budget are the ones resuming a large transcript.
+ * A ceiling remains available for anyone who wants one — `/budget 5`, or
+ * `NAH_TURN_SPEND_USD=5` — and it is opt-in because the cost of having it on by
+ * default is a run that stops half-finished for no reason the user can see.
  *
- * The old default gave the *freshest* session the largest envelope and the
- * biggest one a merely adequate one.
+ * ## What is still worth reporting
  *
- * ## What this is not
- *
- * Not a cap on model intelligence or a per-task allowance — the harness cannot
- * know a task's difficulty, and guessing from the prompt text would be brittle.
- * It is a runaway guard sized by the dominant cost driver, with the real number
- * on screen and a way to change it. Raising it is always one command away.
+ * Spend, and the cache hit rate it depends on. Both are diagnostics, and neither
+ * can end a run: a display that only shows what has happened is not a ceiling.
  */
 import type { ModelRates } from "@astracollab/not-another-harness";
 
-/** Never less than this, however small the context. */
-const FLOOR_USD = 2;
-/** Never more than this, however large the context. */
-const CEILING_USD = 5;
 /**
- * Marginal dollars per context token, chosen so the rail reaches the historical
- * $5 ceiling at a full 180k transcript.
- */
-const PER_CONTEXT_TOKEN_USD = 1.7e-5;
-
-/**
- * Spend rail for a turn starting from `contextTokens` of existing transcript.
+ * The ceiling for a turn, or 0 for none.
  *
- * $2 on an empty session — still ~13x a read-only explanation, but no longer an
- * unreachable $5 — rising to $5 once a turn is carrying a full window, where the
- * per-step resend genuinely is expensive.
- */
-export const defaultTurnSpendUsd = (contextTokens: number): number => {
-  const scaled = FLOOR_USD + Math.max(0, contextTokens) * PER_CONTEXT_TOKEN_USD;
-  return Math.min(CEILING_USD, Math.max(FLOOR_USD, scaled));
-};
-
-/**
- * Resolve the rail for a turn: an explicit override wins, otherwise the
- * context-scaled default.
+ * 0 rather than `null` because the harness treats any non-positive budget as "no
+ * budget", and because a number that cannot be mistaken for a real allowance is
+ * harder to accidentally treat as one.
  *
- * `NAH_TURN_SPEND_USD` stays supported so an existing setup keeps working, and so
- * there is an escape hatch without a slash command — but it now has to be asked
- * for rather than inherited.
+ * Resolution is deliberately narrow: an explicit `/budget`, then the env var, then
+ * nothing. There is no computed fallback, because every attempt to compute one
+ * produced a number nobody chose.
  */
 export const resolveTurnSpendUsd = (
-  contextTokens: number,
   override?: number | null,
   env: NodeJS.ProcessEnv = process.env,
 ): number => {
@@ -71,17 +56,18 @@ export const resolveTurnSpendUsd = (
   const raw = env.NAH_TURN_SPEND_USD;
   if (raw) {
     const parsed = Number.parseFloat(raw);
+    // A malformed value is ignored rather than guessed at. Falling back to some
+    // automatic number here would reintroduce exactly the ceiling this removed.
     if (Number.isFinite(parsed) && parsed > 0) return parsed;
   }
-  return defaultTurnSpendUsd(contextTokens);
+  return 0;
 };
 
 /**
  * Projected cost of one more step at this context size, cache hit rate, and rates.
  *
- * Used by `/budget` to show what the rail actually buys, so the number is not an
- * abstraction. At a 90% hit rate this is roughly an order of magnitude below the
- * same step uncached, which is the whole argument for watching the hit rate.
+ * Purely informational: what the next step is expected to cost, so the hit rate
+ * has a number attached to it. Nothing acts on it.
  */
 export const projectStepCostUsd = (
   contextTokens: number,

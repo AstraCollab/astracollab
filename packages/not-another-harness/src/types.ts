@@ -260,10 +260,10 @@ export type HarnessRunOptions = {
   /**
    * Override the inferred cache-accounting convention.
    *
-   * Anthropic reports the cached prefix outside `input_tokens`; OpenAI-compatible
-   * gateways include it. Summing them blindly inflates the reported context on the
-   * latter. Inferred from `cacheProvider` when unset — set this explicitly when a
-   * gateway fronts a different convention than its id suggests.
+   * @deprecated AI SDK v7 normalises cache accounting, so this is ignored. It
+   * used to say whether the provider reported the cached prefix inside
+   * `input_tokens` or beside it; v7 always reports the total in `inputTokens`
+   * and the composition in `inputTokenDetails`, so there is nothing to choose.
    */
   cacheAccounting?: CacheAccounting;
   /** Cache lifetime for breakpoints. 5m is cheaper, 1h holds across longer runs. */

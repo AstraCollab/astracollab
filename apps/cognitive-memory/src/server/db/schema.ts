@@ -97,6 +97,88 @@ export const tensions = sqliteTable(
   (table) => [index("tensions_organization_status_idx").on(table.organizationId, table.status)]
 )
 
+/**
+ * Per-organisation overrides of the injection budgets.
+ *
+ * Nullable on purpose: a null column means "inherit the deployment default", so
+ * turning a setting back on is a matter of clearing one field rather than
+ * remembering what the deployment default was at the time. The dashboard shows
+ * both the override and the effective value, because a budget that silently
+ * reverted to a deployment default is the kind of thing that shows up as "the
+ * prompt got smaller and nobody changed anything".
+ */
+export const organizationSettings = sqliteTable("organization_settings", {
+  organizationId: text("organization_id").primaryKey(),
+  maxTotalTokens: integer("max_total_tokens"),
+  maxIndexItems: integer("max_index_items"),
+  defaultRecallLimit: integer("default_recall_limit"),
+  /** How long injections, usage and outcomes are kept. 0 keeps them forever. */
+  retentionDays: integer("retention_days").notNull().default(90),
+  /** "auto" uses the model when one is configured; "rules" never does. */
+  extraction: text("extraction").notNull().default("auto")
+})
+
+/**
+ * What the service actually put in a prompt, and why.
+ *
+ * `usage_events` answers "how many tokens", which is a cost question. This
+ * answers "was it the right memory", which is the only question that tells you
+ * whether to raise the budget or fix the store — a build that spent its whole
+ * budget on index lines is not fixed by a bigger ceiling.
+ *
+ * The rendered block is stored rather than reconstructed. Re-running the planner
+ * against today's memory would show what the agent *would* get now, which is a
+ * different and more flattering answer than the one that was actually sent.
+ */
+export const injectionLogs = sqliteTable(
+  "injection_logs",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    apiKeyId: text("api_key_id"),
+    tokens: integer("tokens").notNull().default(0),
+    truncated: integer("truncated", { mode: "boolean" }).notNull().default(false),
+    /** Lines included at index cost, i.e. gist only. */
+    indexLines: integer("index_lines").notNull().default(0),
+    /** Lines that were promoted to a full body by a deterministic signal. */
+    bodies: integer("bodies").notNull().default(0),
+    /** Identifiers the triggering message named. Why the triggers fired. */
+    identifiers: text("identifiers", { mode: "json" }).$type<Array<string>>().notNull().default([]),
+    /** reason -> count, so the mix survives without walking the entries. */
+    reasons: text("reasons", { mode: "json" }).$type<Record<string, number>>().notNull().default({}),
+    entries: text("entries", { mode: "json" }).$type<Array<InjectionLogEntry>>().notNull().default([]),
+    /** The exact block that was handed to the caller. */
+    text: text("text").notNull().default(""),
+    createdAt: text("created_at").notNull()
+  },
+  (table) => [index("injection_logs_organization_idx").on(table.organizationId, table.createdAt)]
+)
+
+/**
+ * One recorded task outcome, so reliability has a history behind it.
+ *
+ * `self_models` keeps the current score per domain, which is enough to render a
+ * guardrail but not enough to answer "is this getting better or did one bad
+ * afternoon cause it". The score is a weighted moving average; the only way to
+ * see the individual samples is to have kept them.
+ */
+export const domainOutcomes = sqliteTable(
+  "domain_outcomes",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    domain: text("domain").notNull(),
+    success: integer("success", { mode: "boolean" }).notNull(),
+    failurePattern: text("failure_pattern"),
+    strategy: text("strategy"),
+    createdAt: text("created_at").notNull()
+  },
+  (table) => [
+    index("domain_outcomes_organization_idx").on(table.organizationId, table.createdAt),
+    index("domain_outcomes_domain_idx").on(table.organizationId, table.domain)
+  ]
+)
+
 export const selfModels = sqliteTable("self_models", {
   organizationId: text("organization_id").primaryKey(),
   /** JSON map of domain -> capability record. */
@@ -145,6 +227,15 @@ export type DomainCapability = {
   readonly recommendedStrategies: Array<string>
 }
 
+/** One line of a stored injection, as it was billed. */
+export type InjectionLogEntry = {
+  readonly id: string
+  readonly tier: string
+  readonly reason: string
+  readonly gist: string
+  readonly tokens: number
+}
+
 export * from "./auth-schema"
 
 export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
@@ -172,5 +263,8 @@ export const schema = {
   memories,
   tensions,
   selfModels,
-  usageEvents
+  usageEvents,
+  organizationSettings,
+  injectionLogs,
+  domainOutcomes
 }

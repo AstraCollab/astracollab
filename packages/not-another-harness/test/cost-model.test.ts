@@ -6,8 +6,8 @@ import {
   messageTokens,
   messagesFromSessionJsonl,
   type ContextPolicy,
-  type ModelMessage,
 } from "../src/cost-model.js";
+import type { ModelMessage } from "ai";
 
 const bigResult = (id: string, chars: number): ModelMessage =>
   ({

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { MockLanguageModelV2 } from "ai/test";
+import { MockLanguageModelV4 } from "ai/test";
 import { simulateReadableStream } from "ai";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 
 import {
   cacheOptions,
@@ -13,8 +13,9 @@ import {
 } from "../src/cache.js";
 import { runAgent } from "../src/agent.js";
 import type { ModelMessage } from "ai";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
-const USAGE = { inputTokens: 10, outputTokens: 2, totalTokens: 12 };
+const USAGE = v4Usage({ input: 10, output: 2 });
 
 describe("cache breakpoint detection", () => {
   it("enables Anthropic and OpenRouter, not unknown providers", () => {
@@ -46,9 +47,11 @@ describe("tool schema caching", () => {
       { a: { description: "x" }, b: { description: "y" }, c: { description: "z" } },
       "anthropic",
     );
-    const marked = (name: string) =>
-      (tools[name] as { providerOptions?: { anthropic?: { cacheControl?: unknown } } }).providerOptions?.anthropic
-        ?.cacheControl;
+    const byName = tools as Record<
+      string,
+      { providerOptions?: { anthropic?: { cacheControl?: unknown } } }
+    >;
+    const marked = (name: string) => byName[name]?.providerOptions?.anthropic?.cacheControl;
     expect(marked("a")).toBeUndefined();
     expect(marked("b")).toBeUndefined();
     expect(marked("c")).toEqual({ type: "ephemeral", ttl: "5m" });
@@ -81,10 +84,10 @@ describe("tool schema caching", () => {
     };
     const out = withCachedToolSchemas(tools, "anthropic") as Record<
       string,
-      { providerOptions: Record<string, Record<string, unknown>> }
+      { providerOptions?: Record<string, Record<string, unknown>> }
     >;
-    expect(out.b!.providerOptions.openai).toEqual({ parallelToolCalls: false });
-    expect(out.b!.providerOptions.anthropic).toBeDefined();
+    expect(out.b?.providerOptions?.openai).toEqual({ parallelToolCalls: false });
+    expect(out.b?.providerOptions?.anthropic).toBeDefined();
     // The earlier tool is untouched, so its own options survive as-is.
     expect((out.a as { providerOptions?: unknown }).providerOptions).toBeUndefined();
   });
@@ -150,11 +153,11 @@ describe("caching reaches the model call", () => {
   const capture = async (cacheProvider: string | undefined) => {
     const seen: Array<Record<string, unknown>> = [];
     let call = 0;
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async (options: Record<string, unknown>) => {
         seen.push(options);
         const done = call++ > 0;
-        const chunks: LanguageModelV2StreamPart[] = [];
+        const chunks: LanguageModelV4StreamPart[] = [];
         if (!done) {
           chunks.push({ type: "tool-call", toolCallId: "c", toolName: "probe", input: "{}" });
         } else {
@@ -164,7 +167,11 @@ describe("caching reaches the model call", () => {
             { type: "text-end", id: "t" },
           );
         }
-        chunks.push({ type: "finish", finishReason: done ? "stop" : "tool-calls", usage: USAGE });
+        chunks.push({
+          type: "finish",
+          finishReason: finishReason(done ? "stop" : "tool-calls"),
+          usage: USAGE,
+        });
         return { stream: simulateReadableStream({ chunkDelayInMs: 0, chunks }) };
       },
     });

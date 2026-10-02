@@ -3,15 +3,20 @@ import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
 import { describe, expect, it } from "vitest";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { Terminal } from "@earendil-works/pi-tui";
 
 import { createApprover } from "../src/permissions.js";
 import { TurnOutput } from "../src/tui/output.js";
 import type { SessionState } from "../src/session.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** How many approval questions a frame shows, so each can be answered once. */
+const countPrompts = (frame: string): number =>
+  frame.split("always this tool").length - 1;
+
 const strip = (s: string) =>
   s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "");
 
@@ -45,15 +50,11 @@ class FakeTerminal implements Terminal {
 }
 
 const bashStream = (id: string) =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       { type: "tool-call", toolCallId: id, toolName: "bash", input: JSON.stringify({ command: "echo hi" }) },
-      {
-        type: "finish",
-        finishReason: "tool-calls",
-        usage: { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
-      },
+      { type: "finish", finishReason: finishReason("tool-calls"), usage: v4Usage({ input: 10, output: 1 }) },
     ],
   });
 
@@ -129,24 +130,20 @@ describe("TUI approval does not wedge the run", () => {
   it("answers a pending approval instead of hanging on the first mutating tool", async () => {
     const { startTuiHost } = await import("../src/tui/host.js");
     let call = 0;
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => {
         const index = call++;
         return {
           stream:
             index < 2
               ? bashStream(`c${index}`)
-              : simulateReadableStream<LanguageModelV2StreamPart>({
+              : simulateReadableStream<LanguageModelV4StreamPart>({
                   chunkDelayInMs: 0,
                   chunks: [
                     { type: "text-start", id: "t" },
                     { type: "text-delta", id: "t", delta: "done" },
                     { type: "text-end", id: "t" },
-                    {
-                      type: "finish",
-                      finishReason: "stop",
-                      usage: { inputTokens: 5, outputTokens: 1, totalTokens: 6 },
-                    },
+                    { type: "finish", finishReason: finishReason("stop"), usage: v4Usage({ input: 5, output: 1 }) },
                   ],
                 }),
         };
@@ -189,16 +186,37 @@ describe("TUI approval does not wedge the run", () => {
     terminal.type("run echo");
     terminal.onInput?.("\r");
 
-    // Answer every approval the way a user would, and require the run to finish.
+    /**
+     * Answer every approval the way a user would, and require the run to finish.
+     *
+     * Polls on a deadline rather than a fixed number of iterations. The original
+     * budget was 40 iterations of 50ms, which was chosen when the SDK loaded in
+     * milliseconds; on v7 the module graph is several times larger and first-token
+     * latency is correspondingly slower, so the same budget intermittently expired
+     * before the run had produced a frame to answer. A fixed iteration count is a
+     * guess about someone else's load time, and it fails on the slow machine, not
+     * the fast one.
+     *
+     * Only re-answers while the question is still on screen, so two approvals in
+     * one turn each get a keystroke — the model calls `bash` twice before it
+     * writes its final message.
+     */
     let sawPrompt = false;
-    for (let i = 0; i < 40 && state.turns === 0; i += 1) {
-      await sleep(50);
+    let answered = 0;
+    const deadline = Date.now() + 15_000;
+    while (state.turns === 0 && Date.now() < deadline) {
+      await sleep(25);
       const frame = strip(terminal.written.split("\u001b[?2026h").slice(-1)[0] ?? "");
       if (frame.includes("always this tool")) {
         sawPrompt = true;
-        terminal.type("y");
-        terminal.onInput?.("\r");
-        await sleep(50);
+        // The prompt stays on screen until the run moves on, so count how many
+        // are outstanding rather than typing into a question already answered.
+        if (answered < countPrompts(frame)) {
+          answered += 1;
+          terminal.type("y");
+          terminal.onInput?.("\r");
+          await sleep(50);
+        }
       }
     }
 

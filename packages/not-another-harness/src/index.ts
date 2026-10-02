@@ -47,16 +47,18 @@ export { DEFAULT_CAPS, capHead, capTail, sliceFileLines, toLines } from "./caps.
 export { globToRegExp, globStaticPrefix, hasGlobMagic } from "./glob.js";
 export { estimateMessageTokens, estimateRequestTokens, estimateTextTokens } from "./estimate.js";
 /*
- * The cognitive layer lives here rather than in a shared package.
+ * The cognitive layer lives in `@astracollab/cogmem`, next to the client for
+ * the service that runs it, so the two cannot disagree about what a memory is or
+ * when a body earns its tokens.
  *
- * This package ships as a binary, and a binary that pulls its memory layer from
- * another published package inherits that package's release cadence, its
- * semver, and its breaking changes. It is deliberately self-contained.
+ * Re-exported here because this package is how the CLI reaches it, and
+ * `packages/nah` imports `CognitiveMemory` from this package's public API.
+ * Dropping the re-export would break a published package for no gain — new code
+ * should import from `@astracollab/cogmem` directly.
  *
- * `packages/cognitive-memory` is the same layer published for the hosted
- * service, and `scripts/sync-cognitive.ts` copies it here; a test in this
- * package fails if the two have drifted. Duplication that CI polices is a
- * different thing from duplication that quietly rots.
+ * The arbiter is a separate entry point there because it is the only part needing
+ * `ai` and `zod`. This package already peers on both, so re-exporting it keeps the
+ * previous surface exactly.
  */
 export {
   CognitiveMemory,
@@ -86,18 +88,12 @@ export {
   type ArbiterFn,
   type CognitiveMemoryOptions,
   type CognitiveMemoryStateSnapshot,
-} from "./cognitive-memory/index.js";
+} from "@astracollab/cogmem";
 
-/*
- * The arbiter is imported from its own module rather than through the
- * layer's index, because the published copy keeps it out of the main entry — it
- * is the only part needing `ai` and `zod`. The vendored files stay byte-identical
- * to the published ones, and the export surface of this package is unchanged.
- */
 export {
   createModelArbiter,
   type CreateModelArbiterOptions
-} from "./cognitive-memory/arbiter.js";
+} from "@astracollab/cogmem/arbiter";
 export type {
   HarnessEvent,
   HarnessRun,

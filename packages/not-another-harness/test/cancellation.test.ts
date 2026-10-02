@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 
 import { runAgent } from "../src/agent.js";
 import { createNodeEnvironment } from "../src/node.js";
 import { createCodingTools } from "../src/tools.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const bashStream = (id: string, command: string) =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       {
@@ -21,8 +22,8 @@ const bashStream = (id: string, command: string) =>
       },
       {
         type: "finish",
-        finishReason: "tool-calls",
-        usage: { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
+        finishReason: finishReason("tool-calls"),
+        usage: v4Usage({ input: 10, output: 1 }),
       },
     ],
   });
@@ -80,7 +81,7 @@ describe("bash tool cannot hang", () => {
 describe("aborting interrupts a running tool", () => {
   it("stops a long command promptly instead of waiting it out", async () => {
     let call = 0;
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => ({ stream: bashStream(`c${call++}`, "sleep 30") }),
     });
     const controller = new AbortController();
@@ -118,7 +119,7 @@ describe("aborting interrupts a running tool", () => {
 
   it("run.interrupt() also reaches an executing tool", async () => {
     let call = 0;
-    const model = new MockLanguageModelV2({
+    const model = new MockLanguageModelV4({
       doStream: async () => ({ stream: bashStream(`c${call++}`, "sleep 30") }),
     });
     const run = runAgent({

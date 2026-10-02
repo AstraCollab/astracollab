@@ -71,7 +71,18 @@ export interface Reconciliation {
 }
 
 export interface TurnExtractorService {
-  readonly extract: (turn: { readonly userMessage: string; readonly assistantResponse: string }) => Effect.Effect<TurnExtraction>
+  /**
+   * Pull durable facts out of a finished turn.
+   *
+   * `allowModel: false` keeps the call entirely on the deterministic rules, which
+   * is how an organisation opts out of paying for extraction without the
+   * deployment having to remove the model key from under every other tenant.
+   */
+  readonly extract: (turn: {
+    readonly userMessage: string
+    readonly assistantResponse: string
+    readonly allowModel?: boolean | undefined
+  }) => Effect.Effect<TurnExtraction>
   readonly reconcile: (input: {
     readonly items: ReadonlyArray<{ readonly candidate: string; readonly remember: ReadonlyArray<string> }>
   }) => Effect.Effect<Array<Reconciliation>>
@@ -162,7 +173,7 @@ const makeTurnExtractor = Effect.gen(function* () {
   })
 
   const extract: TurnExtractorService["extract"] = (turn) => {
-    if (!enabled) return Effect.succeed(EMPTY_TURN)
+    if (!enabled || turn.allowModel === false) return Effect.succeed(EMPTY_TURN)
 
     const ask = Effect.flatMap(LanguageModel.LanguageModel, (model) =>
       model.generateObject({

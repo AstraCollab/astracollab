@@ -3,14 +3,15 @@ import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { Terminal } from "@earendil-works/pi-tui";
 import { createJsonlSessionStore } from "@astracollab/not-another-harness";
 
 import { handleSlashCommand } from "../src/repl.js";
 import { TurnOutput } from "../src/tui/output.js";
 import type { SessionState } from "../src/session.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
 const strip = (s: string) =>
   s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "");
@@ -45,13 +46,13 @@ class FakeTerminal implements Terminal {
 }
 
 const textStream = (text: string) =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       { type: "text-start", id: "t" },
       { type: "text-delta", id: "t", delta: text },
       { type: "text-end", id: "t" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 } },
+      { type: "finish", finishReason: finishReason("stop"), usage: v4Usage({ input: 3, output: 1 }) },
     ],
   });
 

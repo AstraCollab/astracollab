@@ -1,28 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { MockLanguageModelV2 } from "ai/test";
+import { MockLanguageModelV4 } from "ai/test";
 import { simulateReadableStream } from "ai";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 
 import { runAgent } from "../src/agent.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
-const USAGE = { inputTokens: 100, outputTokens: 10, totalTokens: 110 };
+const USAGE = v4Usage({ input: 100, output: 10 });
 
-const modelReturning = (finishReason: "stop" | "length" | "tool-calls", chunks: LanguageModelV2StreamPart[]) =>
-  new MockLanguageModelV2({
+const modelReturning = (reason: "stop" | "length" | "tool-calls", chunks: LanguageModelV4StreamPart[]) =>
+  new MockLanguageModelV4({
     doStream: async () => ({
-      stream: simulateReadableStream<LanguageModelV2StreamPart>({
+      stream: simulateReadableStream<LanguageModelV4StreamPart>({
         chunkDelayInMs: 0,
-        chunks: [...chunks, { type: "finish", finishReason, usage: USAGE }],
+        chunks: [...chunks, { type: "finish", finishReason: finishReason(reason), usage: USAGE }],
       }),
     }),
   });
 
-const runTo = async (model: MockLanguageModelV2): Promise<{ reason: string; wrapUp: boolean }> => {
+const runTo = async (model: MockLanguageModelV4): Promise<{ reason: string; wrapUp: boolean }> => {
   const run = runAgent({
     model: Object.assign(model, {
       modelId: "test/model",
       provider: "openrouter",
-      specificationVersion: "v2",
     }) as never,
     system: "s",
     prompt: "go",
@@ -38,7 +38,7 @@ const runTo = async (model: MockLanguageModelV2): Promise<{ reason: string; wrap
   return { reason, wrapUp };
 };
 
-const textChunks: LanguageModelV2StreamPart[] = [
+const textChunks: LanguageModelV4StreamPart[] = [
   { type: "text-start", id: "t" },
   { type: "text-delta", id: "t", delta: "an answer" },
   { type: "text-end", id: "t" },
@@ -62,8 +62,7 @@ describe("output-cap stop is named for what it is", () => {
       model: Object.assign(modelReturning("tool-calls", [{ type: "tool-call", toolCallId: "c", toolName: "x", input: "{}" }]), {
         modelId: "test/model",
         provider: "openrouter",
-        specificationVersion: "v2",
-      }) as never,
+        }) as never,
       system: "s",
       prompt: "go",
       tools: {},
@@ -85,13 +84,13 @@ describe("output-cap stop is named for what it is", () => {
     // 8k starved a reasoning model: thinking is drawn from the same allowance,
     // so one verbose step ended as truncated rather than done.
     let seen = 0;
-    const probe = new MockLanguageModelV2({
+    const probe = new MockLanguageModelV4({
       doStream: async (options: { maxOutputTokens?: number }) => {
         seen = options.maxOutputTokens ?? 0;
         return {
-          stream: simulateReadableStream<LanguageModelV2StreamPart>({
+          stream: simulateReadableStream<LanguageModelV4StreamPart>({
             chunkDelayInMs: 0,
-            chunks: [...textChunks, { type: "finish", finishReason: "stop", usage: USAGE }],
+            chunks: [...textChunks, { type: "finish", finishReason: finishReason("stop"), usage: USAGE }],
           }),
         };
       },

@@ -1,26 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { Terminal } from "@earendil-works/pi-tui";
 
 import { startTuiHost } from "../src/tui/host.js";
 import type { SessionState } from "../src/session.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
-const USAGE = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+const USAGE = v4Usage({ input: 1, output: 1 });
 const strip = (value: string): string =>
   value
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/\u001b\]8;;\u0007/g, "");
 
 const textStream = (text: string) =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       { type: "text-start", id: "t" },
       { type: "text-delta", id: "t", delta: text },
       { type: "text-end", id: "t" },
-      { type: "finish", finishReason: "stop", usage: USAGE },
+      { type: "finish", finishReason: finishReason("stop"), usage: USAGE },
     ],
   });
 
@@ -120,7 +121,7 @@ const withHost = async (
 ): Promise<void> => {
   /** Every prompt the model was actually sent, for asserting on content. */
   const prompts: string[] = [];
-  const model = new MockLanguageModelV2({
+  const model = new MockLanguageModelV4({
     doStream: async (options) => {
       // The provider receives one `prompt` array of system + user turns; there
       // is no separate `messages` key, and a multi-line user turn arrives as an

@@ -1,4 +1,4 @@
-import { tool } from "ai";
+import { tool, type Tool } from "ai";
 import { z } from "zod";
 import type { SessionTaskLedger } from "@astracollab/not-another-harness";
 import type { SessionState } from "./session.js";
@@ -56,7 +56,7 @@ const unknownIdError = (kind: "step" | "check", requested: string, ids: string[]
     ? `Error: no ${kind} with id "${requested}". Valid ${kind} ids: ${ids.join(", ")}.`
     : `Error: the plan has no ${kind}s yet.`;
 
-export const createTaskLedgerTool = (state: SessionState, approve: Approver) => {
+export const createTaskLedgerTool = (state: SessionState, approve: Approver): Tool => {
   let pending: Promise<unknown> = Promise.resolve();
   const execute = async (input: z.infer<typeof taskInput>, signal?: AbortSignal): Promise<string> => {
     if (input.action === "discover_checks") {

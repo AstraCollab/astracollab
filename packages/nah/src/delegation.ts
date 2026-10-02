@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { tool } from "ai";
+import { tool, type Tool } from "ai";
 import { z } from "zod";
 import { createCodingTools, runAgent, type HarnessRunResult } from "@astracollab/not-another-harness";
 import { createNodeEnvironment } from "@astracollab/not-another-harness/node";
@@ -26,7 +26,7 @@ const runGit = async (cwd: string, args: string[]) => {
   return { stdout: result.stdout, stderr: result.stderr };
 };
 
-export const createDelegationTool = (options: DelegateToolOptions) => {
+export const createDelegationTool = (options: DelegateToolOptions): Tool => {
   let activeDelegates = 0;
   return tool({
     description: [

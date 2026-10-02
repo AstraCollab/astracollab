@@ -8,7 +8,7 @@ import { Forbidden, Unauthorized, type CognitiveMemoryError } from "./domain/err
 import { MemoryEngine, engineLayer } from "./engine/memory-engine"
 import { TurnExtractor } from "./engine/turn-extractor"
 import { respondWith } from "./http/respond"
-import { Keys, requireScope } from "./services/keys"
+import { Keys, requireScope, type Caller } from "./services/keys"
 import { MemoryStore } from "./services/memory-store"
 
 /**
@@ -83,6 +83,32 @@ export const authorize = (request: Request, scope: string) =>
     yield* requireScope(caller, scope)
     return caller
   })
+
+/**
+ * Note that a request happened.
+ *
+ * Written after the response is decided and the failure ignored, for the same
+ * reason `/v1/context` does it inline: bookkeeping that is allowed to fail must
+ * not be able to fail the work it is bookkeeping for. `injectedTokens` stays null
+ * for routes that put nothing in a prompt, which is most of them.
+ */
+export const account = (
+  caller: Caller,
+  route: string,
+  injectedTokens: number | null = null
+): Effect.Effect<void, never, MemoryStore> =>
+  Effect.gen(function* () {
+    const store = yield* MemoryStore
+    const at = Date.now()
+    yield* store.recordUsage({
+      id: `use-${at.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      organizationId: caller.organizationId,
+      apiKeyId: caller.keyId,
+      route,
+      injectedTokens,
+      now: at
+    })
+  }).pipe(Effect.ignore)
 
 /** The signed-in user, from the session cookie. */
 export const currentSession = Effect.gen(function* () {

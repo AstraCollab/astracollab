@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CognitiveMemory } from "../src/cognitive-memory/memory.js";
+import { CognitiveMemory } from "../src/index.js";
 
 let memCounter = 0;
 const mem = (content: string, domains: string[] = []) => ({

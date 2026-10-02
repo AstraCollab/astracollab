@@ -1,4 +1,5 @@
 import { Effect } from "effect"
+import { extractIdentifiers } from "@astracollab/cogmem"
 
 import { ContextBody } from "@/server/domain/api"
 import { decodeBody, readJson } from "@/server/http/respond"
@@ -38,20 +39,63 @@ const build = (request: Request) =>
       ...(body.maxTokens === undefined ? {} : { maxTokens: body.maxTokens })
     })
 
+    // Which deterministic signals fired, and what they cost. Recorded rather
+    // than recomputed by the dashboard, because "why was this included" is only
+    // answerable at the moment the block was built.
+    const identifiers = body.userMessage === undefined ? [] : extractIdentifiers(body.userMessage)
+    const reasons: Record<string, number> = {}
+    for (const entry of report.entries) {
+      reasons[entry.reason] = (reasons[entry.reason] ?? 0) + 1
+    }
+
     // Accounted for after the fact and never in the response path: a usage write
     // that failed must not turn a successful context build into a 500.
-    yield* Effect.promise(() =>
-      store
+    yield* Effect.promise(() => {
+      const at = Date.now()
+      const usage = store
         .recordUsage({
-          id: `use-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          id: `use-${at.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
           organizationId: caller.organizationId,
           apiKeyId: caller.keyId,
           route: "POST /v1/context",
           injectedTokens: report.totalTokens,
-          now: Date.now()
+          now: at
         })
         .pipe(Effect.runPromise)
-    ).pipe(Effect.ignore)
+      const log = store
+        .recordInjection({
+          id: `inj-${at.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          organizationId: caller.organizationId,
+          apiKeyId: caller.keyId,
+          tokens: report.totalTokens,
+          truncated: report.truncated,
+          indexLines: report.entries.filter((entry) => entry.reason === "index").length,
+          bodies: report.entries.filter((entry) => entry.body !== undefined).length,
+          identifiers,
+          reasons,
+          entries: report.entries.map((entry) => ({
+            id: entry.id,
+            tier: entry.tier,
+            reason: entry.reason,
+            gist: entry.gist,
+            tokens: entry.tokens
+          })),
+          text: report.text,
+          now: at
+        })
+        .pipe(Effect.runPromise)
+      // Being in a prompt is the use. Counted here, on the path that actually
+      // serves an agent — a dashboard preview builds the same block and must
+      // leave the counters alone, or "most used" measures curiosity.
+      const counted = store
+        .touchMany(
+          caller.organizationId,
+          report.entries.map((entry) => entry.id),
+          at
+        )
+        .pipe(Effect.runPromise)
+      return Promise.all([usage, log, counted])
+    }).pipe(Effect.ignore)
 
     return toContextView(report)
   })

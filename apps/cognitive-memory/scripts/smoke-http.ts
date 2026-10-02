@@ -270,6 +270,173 @@ async function main(): Promise<void> {
   check("GET /v1/stats counts the memories", stats.status === 200 && num(obj(obj(stats.body).memories).total) >= 2, stats.body)
   check("GET /v1/stats reports the active tension", num(obj(obj(stats.body).tensions).active) >= 1, stats.body)
 
+  // 11. The dashboard surface, authenticated by session rather than by key. The
+  // whole point of that split is that opening a page costs no key, so it is
+  // worth checking that the pages work *only* with a session.
+  const dashboardAnonymous = await call("GET", "/api/dashboard/overview")
+  check("GET /dashboard/overview without a session is 401", dashboardAnonymous.status === 401, dashboardAnonymous.body)
+
+  const overview = await call("GET", "/api/dashboard/overview", { cookie })
+  check(
+    "GET /dashboard/overview reports the store",
+    overview.status === 200 && num(obj(overview.body.stats).total) >= 2,
+    overview.body.stats
+  )
+  check(
+    "the overview carries both the override and the default",
+    num(obj(obj(overview.body.budget).effective).maxTotalTokens) === 2000,
+    overview.body.budget
+  )
+  check("the overview flags no configuration problems", arr(overview.body.problems).length === 0, overview.body.problems)
+
+  const analytics = await call("GET", "/api/dashboard/analytics?range=7d", { cookie })
+  const daily = arr(analytics.body.daily)
+  check("GET /dashboard/analytics returns one bucket per day", analytics.status === 200 && daily.length === 7, analytics.body)
+  check(
+    "the builds it just made are counted",
+    num(obj(analytics.body.totals).builds) >= 3,
+    analytics.body.totals
+  )
+  check(
+    "the reason mix is broken down",
+    arr(analytics.body.reasons).some((entry) => str(obj(entry).label) === "index"),
+    analytics.body.reasons
+  )
+  check(
+    "spend is attributed to the key that caused it",
+    arr(analytics.body.keys).some((row) => num(row.tokens) > 0),
+    analytics.body.keys
+  )
+
+  const activity = await call("GET", "/api/dashboard/activity", { cookie })
+  const firstEvent = arr(activity.body.events)[0]
+  check(
+    "GET /dashboard/activity replays the block that was sent",
+    activity.status === 200 && arr(activity.body.events).length > 0 && str(obj(firstEvent).text).length > 0,
+    firstEvent
+  )
+  check(
+    "each event keeps its reasons and identifiers",
+    arr(obj(firstEvent).entries).length > 0 && obj(firstEvent).reasons !== null,
+    firstEvent
+  )
+  check(
+    "the activity log is not reachable with a key",
+    (await call("GET", "/api/dashboard/activity", { key: apiKey })).status === 401
+  )
+
+  // 12. Editing through the dashboard, including the property that matters:
+  // a correction must not promote a memory back into every prompt.
+  const library = await call("GET", "/api/dashboard/memories?sort=accessed&limit=5", { cookie })
+  const libraryRows = arr(library.body.memories)
+  check("GET /dashboard/memories pages the store", library.status === 200 && libraryRows.length > 0, library.body)
+  check("it reports facets for the filters", num(obj(obj(library.body.facets).tiers).L1) >= 0, library.body.facets)
+
+  const target = str(obj(libraryRows[0]).id)
+  const beforeEdit = num(obj(libraryRows[0]).accessCount)
+  const edited = await call("PATCH", `/api/dashboard/memories/${target}`, {
+    cookie,
+    body: { content: "The build id for staging is ZQ7X4M2K and it runs on port 8443", domains: ["deploy"] }
+  })
+  check("PATCH /dashboard/memories/:id rewrites the memory", edited.status === 200, edited.body)
+  check(
+    "an edit does not reset the access history",
+    num(obj(edited.body.memory).accessCount) === beforeEdit,
+    obj(edited.body.memory).accessCount
+  )
+
+  const emptyPatch = await call("PATCH", `/api/dashboard/memories/${target}`, { cookie, body: {} })
+  check("an empty patch is refused rather than silently accepted", emptyPatch.status === 400, emptyPatch.body)
+
+  const search = await call("GET", "/api/dashboard/memories?q=ZQ7X4M2K", { cookie })
+  check(
+    "the search finds what was just written",
+    arr(search.body.memories).some((row) => str(obj(row).id) === target),
+    search.body
+  )
+
+  const explain = await call("POST", "/api/dashboard/recall", {
+    cookie,
+    body: { query: "which port does staging run on", limit: 3 }
+  })
+  check(
+    "POST /dashboard/recall explains the match",
+    explain.status === 200 && strs(obj(arr(explain.body.results)[0]).matched).length > 0,
+    explain.body
+  )
+
+  const archived = await call("POST", "/api/dashboard/memories/bulk", {
+    cookie,
+    body: { ids: [target], action: "archive" }
+  })
+  check("a bulk action reports what it moved", archived.status === 200 && num(archived.body.affected) === 1, archived.body)
+  check(
+    "archiving really moved the row",
+    str(obj(arr((await call("GET", "/api/dashboard/memories?q=ZQ7X4M2K", { cookie })).body.memories)[0]).tier) === "L3"
+  )
+
+  // 13. A budget change has to take effect on the very next build, which is the
+  // property that makes the settings page worth having.
+  const lowered = await call("PATCH", "/api/dashboard/settings", { cookie, body: { maxTotalTokens: 40 } })
+  check("PATCH /dashboard/settings saves an override", lowered.status === 200, lowered.body)
+  const tightBuild = await call("POST", "/api/v1/context", { key: apiKey, body: { userMessage: "ship it" } })
+  check(
+    "the new ceiling is enforced on the next build",
+    num(tightBuild.body.totalTokens) <= 40 && tightBuild.body.truncated === true,
+    tightBuild.body
+  )
+  const restored = await call("PATCH", "/api/dashboard/settings", { cookie, body: { maxTotalTokens: null } })
+  check(
+    "clearing the override returns to the deployment default",
+    num(obj(restored.body.effective).maxTotalTokens) === 2000,
+    restored.body.effective
+  )
+
+  // 14. Self-model and tensions through the dashboard, including the reopen path.
+  const selfModel = await call("GET", "/api/dashboard/self-model", { cookie })
+  check(
+    "the self-model arrives with its samples",
+    selfModel.status === 200 && arr(selfModel.body.outcomes).some((row) => str(row.domain) === "database"),
+    selfModel.body.selfModel
+  )
+  const dashboardTension = await call("POST", "/api/dashboard/tensions", {
+    cookie,
+    body: {
+      claimA: "The cache lives in Redis",
+      claimB: "There is no cache in this project",
+      impact: "low",
+      actionableQuestion: "Is there a cache?"
+    }
+  })
+  check("POST /dashboard/tensions records a contradiction by hand", dashboardTension.status === 201, dashboardTension.body)
+  const newTensionId = str(obj(dashboardTension.body.tension).id)
+  const resolvedTension = await call("POST", `/api/dashboard/tensions/${newTensionId}`, {
+    cookie,
+    body: { resolvedBy: "smoke", pattern: "ask whether a cache exists before assuming one" }
+  })
+  check(
+    "resolving keeps the pattern",
+    str(obj(resolvedTension.body.tension).pattern).includes("ask whether")
+  )
+  const reopened = await call("PATCH", `/api/dashboard/tensions/${newTensionId}`, {
+    cookie,
+    body: { status: "active" }
+  })
+  check("a resolved tension can be reopened", str(obj(reopened.body.tension).status) === "active", reopened.body)
+
+  const pruned = await call("POST", "/api/dashboard/settings", { cookie, body: { action: "prune" } })
+  check(
+    "pruning uses the retention window and removes nothing from a fresh log",
+    pruned.status === 200 && num(pruned.body.retentionDays) === 90,
+    pruned.body
+  )
+  await call("PATCH", "/api/dashboard/settings", { cookie, body: { retentionDays: 0 } })
+  const pruneZero = await call("POST", "/api/dashboard/settings", { cookie, body: { action: "prune" } })
+  check(
+    "retention 0 keeps the log rather than deleting it",
+    num(obj(pruneZero.body.deleted).injections) === 0,
+    pruneZero.body
+  )
   const other = await getAuth().api.signUpEmail({
     body: { email: `other-${stamp}@example.test`, password, name: "Other" },
     asResponse: true
@@ -289,6 +456,21 @@ async function main(): Promise<void> {
 
   const crossRead = await call("GET", `/api/v1/memories/${str(obj(arr(stored.body.stored)[0]).id)}`, { key: str(otherKey.body.key) })
   check("one organisation cannot read another's memory by id", crossRead.status === 404, crossRead.body)
+
+  // The dashboard resolves the organisation from the session, never from a
+  // request field, so a second session must not be able to reach the first
+  // one's memory by asking for it.
+  const crossEdit = await call("PATCH", `/api/dashboard/memories/${target}`, {
+    cookie: otherCookie,
+    body: { content: "written by another organisation" }
+  })
+  check("another organisation cannot edit a memory through the dashboard", crossEdit.status === 404, crossEdit.body)
+  const crossOverview = await call("GET", "/api/dashboard/overview", { cookie: otherCookie })
+  check(
+    "and the dashboard only ever shows its own organisation",
+    crossOverview.status === 200 && num(obj(crossOverview.body.stats).total) === 0,
+    crossOverview.body.stats
+  )
   void otherOrg
 }
 

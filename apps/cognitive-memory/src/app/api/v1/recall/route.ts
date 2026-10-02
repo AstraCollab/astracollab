@@ -3,8 +3,9 @@ import { Effect } from "effect"
 import { RecallBody } from "@/server/domain/api"
 import { decodeBody, readJson } from "@/server/http/respond"
 import { toRecallView } from "@/server/http/views"
-import { authorize, MemoryEngine, respond } from "@/server/runtime"
+import { authorize, account, MemoryEngine, respond } from "@/server/runtime"
 import { Scope } from "@/server/services/keys"
+import { MemoryStore } from "@/server/services/memory-store"
 
 /**
  * Deterministic recall: "what do you actually know about X?".
@@ -27,6 +28,20 @@ const recall = (request: Request) =>
       query: body.query,
       ...(body.limit === undefined ? {} : { limit: body.limit })
     })
+
+    // A recall is a use too, and it is the only signal that a memory is still
+    // wanted after it has fallen out of the index. Best-effort, like the usage
+    // row: counting is never worth failing the caller's lookup.
+    yield* Effect.gen(function* () {
+      const store = yield* MemoryStore
+      yield* store.touchMany(
+        caller.organizationId,
+        hits.map((hit) => hit.item.id),
+        Date.now()
+      )
+    }).pipe(Effect.ignore)
+
+    yield* account(caller, "POST /v1/recall")
 
     return {
       ...toRecallView(hits),

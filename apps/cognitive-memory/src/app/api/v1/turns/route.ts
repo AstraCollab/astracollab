@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { TurnBody } from "@/server/domain/api"
 import { decodeBody, readJson } from "@/server/http/respond"
 import { toLearnView } from "@/server/http/views"
-import { authorize, MemoryEngine, respond } from "@/server/runtime"
+import { authorize, account, MemoryEngine, respond } from "@/server/runtime"
 import { Scope } from "@/server/services/keys"
 
 /**
@@ -32,6 +32,8 @@ const learn = (request: Request) =>
       assistantResponse: body.assistantResponse,
       ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId })
     })
+
+    yield* account(caller, "POST /v1/turns")
 
     return toLearnView(outcome)
   })

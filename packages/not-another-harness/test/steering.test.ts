@@ -1,30 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
-import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
+import { MockLanguageModelV4 } from "ai/test";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 
 import { runAgent } from "../src/agent.js";
 import type { HarnessEvent, HarnessRun } from "../src/types.js";
+import { finishReason, v4Usage } from "./helpers/ai.js";
 
-const USAGE = { inputTokens: 100, outputTokens: 20, totalTokens: 120 };
+const USAGE = v4Usage({ input: 100, output: 20 });
 
 const textStream = (text: string) =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       { type: "text-start", id: "t1" },
       { type: "text-delta", id: "t1", delta: text },
       { type: "text-end", id: "t1" },
-      { type: "finish", finishReason: "stop", usage: USAGE },
+      { type: "finish", finishReason: finishReason("stop"), usage: USAGE },
     ],
   });
 
 const toolCallStream = (id: string) =>
-  simulateReadableStream<LanguageModelV2StreamPart>({
+  simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
       { type: "tool-call", toolCallId: id, toolName: "read", input: JSON.stringify({ path: "x" }) },
-      { type: "finish", finishReason: "tool-calls", usage: USAGE },
+      { type: "finish", finishReason: finishReason("tool-calls"), usage: USAGE },
     ],
   });
 
@@ -32,10 +33,10 @@ const toolCallStream = (id: string) =>
 const scripted = (steps: Array<"tool" | string>) => {
   const prompts: string[] = [];
   let index = 0;
-  const model = new MockLanguageModelV2({
+  const model = new MockLanguageModelV4({
     doStream: async ({ prompt }) => {
       prompts.push(JSON.stringify(prompt));
-      const plan = steps[Math.min(index, steps.length - 1)];
+      const plan = steps[Math.min(index, steps.length - 1)] ?? "done";
       index += 1;
       return { stream: plan === "tool" ? toolCallStream(`call-${index}`) : textStream(plan) };
     },

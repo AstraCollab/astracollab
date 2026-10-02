@@ -12,7 +12,7 @@
  * that prefix, and the SDK sends reasoning back by default, so transcript editing
  * is not available to us at all. Producing less output in the first place is.
  */
-import { tool } from "ai";
+import { tool, type Tool } from "ai";
 import { z } from "zod";
 
 import type { ToolEnvironment } from "./types.js";
@@ -98,7 +98,15 @@ const rank = (entries: Signature[], query: string): Signature[] => {
     .map((s) => s.entry);
 };
 
-export const createOutlineTool = (env: ToolEnvironment, options: OutlineOptions = {}) =>
+/**
+ * Annotated rather than inferred.
+ *
+ * `tool()` returns a type that reaches into `@ai-sdk/provider-utils`, so leaving
+ * it inferred produces a declaration file that cannot name its own return type
+ * (TS2742) — the build passes, and the published `.d.ts` is unusable. `Tool` is
+ * exported from `ai` itself, so this annotation survives a version bump.
+ */
+export const createOutlineTool = (env: ToolEnvironment, options: OutlineOptions = {}): Tool =>
   tool({
     description:
       "Map a source tree before reading it. Returns top-level signatures as `file:line  signature` — functions, classes, interfaces, types and top-level constants — without any file bodies. " +

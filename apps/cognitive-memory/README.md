@@ -62,6 +62,32 @@ const { context, learning } = await runTurn(
 finished exchange, and records how the domain went — in that order, and without
 letting a memory failure take down a turn that already succeeded.
 
+## The dashboard
+
+Ten pages, all authenticated by the session cookie rather than by an API key.
+Reaching for a key to look at your own memory would train exactly the habit this
+service is trying to discourage, so `/api/dashboard/*` never accepts one — and the
+agent-facing `/v1/*` never accepts a session. Two entry points, two
+authenticators, each with the authority it actually needs.
+
+| | |
+| --- | --- |
+| `/dashboard` | What needs a human: contradictions nobody resolved, domains the agent keeps failing in, whether the budget is truncating |
+| `/dashboard/context` | The exact block your agent would be given, for any message, with the reason and token cost of every line |
+| `/dashboard/activity` | Every context build, with the block that was actually sent — not the one the planner would produce today |
+| `/dashboard/memory` | Search, filter, edit, retier, bulk-forget, and a recall inspector that names the terms that matched |
+| `/dashboard/tensions` | Contradictions by status, with resolve, reopen, and the reusable pattern a resolution revealed |
+| `/dashboard/self-model` | Reliability per domain, every sample behind the score, and a form to record an outcome |
+| `/dashboard/analytics` | Tokens per turn, the reason mix, spend per endpoint and per key, tier distribution |
+| `/dashboard/start` | SDK and curl snippets, plus a live tester that sends real requests with a key you paste |
+| `/dashboard/keys` | Issue, scope, expire and revoke agent credentials |
+| `/dashboard/settings` | Budgets, extraction, retention, the organisation, and the danger zone |
+
+Budgets are per organisation and every override is nullable, where `null` means
+"inherit the deployment default" — so turning one back on is a click rather than a
+guess at what the deployment default was last week, and the page shows both
+numbers because a setting that silently reverts is worse than no setting at all.
+
 ## How a turn works
 
 1. **Capture.** Deterministic patterns first: URLs, assignments, stated
@@ -86,6 +112,13 @@ letting a memory failure take down a turn that already succeeded.
 
 77% fewer tokens than injecting everything, with recall that does not depend on
 a model being available.
+
+Every context build is also recorded — the block, the reason each line was
+included, its token cost, and the identifiers the triggering message named. That
+is what makes the analytics page an argument rather than a decoration: 118k
+tokens is a number with no action attached, and "104k of it was index lines and
+2k was full bodies" says the store has nothing worth promoting, which has the
+opposite fix from raising the ceiling.
 
 ## Credentials
 
@@ -119,14 +152,14 @@ ordinary `async` functions that await a `Response`.
 
 ```sh
 pnpm --filter cognitive-memory dev            # dev server
-pnpm --filter cognitive-memory test           # engine, auth, rules (37 tests)
+pnpm --filter cognitive-memory test           # engine, dashboard, rules (56 tests)
 pnpm --filter cognitive-memory typecheck
 pnpm --filter cognitive-memory db:generate     # drizzle-kit generate
 pnpm --filter cognitive-memory db:migrate      # apply migrations
 pnpm --filter cognitive-memory auth:generate   # regenerate the Better Auth schema
 pnpm --filter cognitive-memory measure         # the numbers above
 pnpm --filter cognitive-memory smoke           # in-process smoke run
-pnpm --filter cognitive-memory smoke:http      # 32 checks over real HTTP
+pnpm --filter cognitive-memory smoke:http      # 63 checks over real HTTP
 
 pnpm --filter @astracollab/cogmem build   # SDK: ESM + CJS + .d.ts
 pnpm --filter @astracollab/cogmem test
@@ -134,7 +167,9 @@ pnpm --filter @astracollab/cogmem test
 
 ## Configuration
 
-Every value is optional in development; see
+Environment values set the **deployment defaults**; each organisation can
+override the three budgets from the dashboard, and `null` means it follows the
+deployment again. Every value is optional in development; see
 [`.env.example`](apps/cognitive-memory/.env.example).
 
 | Variable | Default | |
@@ -146,17 +181,23 @@ Every value is optional in development; see
 | `COGNITIVE_MEMORY_MODEL_API_KEY` | — | Enables model-backed extraction |
 | `COGNITIVE_MEMORY_MODEL_BASE_URL` | OpenAI | Any OpenAI-compatible gateway |
 | `COGNITIVE_MEMORY_MODEL_NAME` | `gpt-4o-mini` | |
+| `COGNITIVE_MEMORY_ENV` | `dev` / `prod` | The segment of a minted key |
 | `BETTER_AUTH_SECRET` | dev fallback | **Required in production** |
 | `BETTER_AUTH_URL` | `http://localhost:3000` | |
 
-An unusable value is reported by `/api/v1/health` rather than thrown during
-module load, which would take down `next build` instead of the one request that
-needed the setting.
+An unusable value is reported by `/api/v1/health` and on the dashboard's overview
+rather than thrown during module load, which would take down `next build` instead
+of the one request that needed the setting.
+
+The settings that are per organisation rather than per deployment — budgets,
+whether model extraction runs, how long the logs are kept — live in
+`organization_settings` rather than the environment, because a hosted instance has
+many tenants who cannot be expected to agree on one token ceiling.
 
 ## Documentation
 
 - Service reference: [/docs](apps/cognitive-memory/src/app/docs/page.tsx) — the
   model, tiers, capture rules, reconciliation, injection, recall, tensions,
-  self-model, API surface and credentials.
+  self-model, API surface, the dashboard page by page, and credentials.
 - Engine commentary lives next to the code it explains; the reasoning behind each
   threshold is in the comment, because the numbers are only defensible with it.
