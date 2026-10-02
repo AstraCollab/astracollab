@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+/*
+ * The Studio wears the docs site's palette: zinc-950 ground, violet accent,
+ * hairlines at 8% white, and mono micro-labels. Same utilities, same values —
+ * so a card here and a card on /docs/memory are the same object, not two things
+ * that look alike.
+ *
+ * Only the scale is redefined. Everything else is stock Tailwind, which is the
+ * point: the marketing site uses a terminal-green theme in custom tokens, the
+ * docs use the default zinc/violet, and a data tool wants the latter.
+ */
+
+@theme {
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --color-ink: #09090b;
+  --color-surface: #101012;
+  --color-line: rgba(255, 255, 255, 0.08);
+  --color-line-soft: rgba(255, 255, 255, 0.05);
+  --color-line-strong: rgba(255, 255, 255, 0.14);
+  --color-accent: #a78bfa;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-ink);
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    background-color: #09090b;
+    color: #e4e4e7;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* The docs' scrollbar treatment: invisible until wanted. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.16);
+    background-clip: content-box;
+  }
+  ::selection {
+    background: rgba(167, 139, 250, 0.28);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+}
+
+@layer components {
+  /*
+   * The eyebrow: the docs' one recurring typographic device, and the thing that
+   * makes a label read as a field name rather than as a heading.
+   */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    line-height: 1.4;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #52525b;
+  }
+
+  .panel {
+    border: 1px solid var(--color-line);
+    border-radius: 0.75rem;
+    background: rgba(255, 255, 255, 0.025);
+  }
+
+  .panel-flat {
+    border: 1px solid var(--color-line-soft);
+    border-radius: 0.75rem;
+    background: #0b0b0d;
+  }
+
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* The grid the docs page sits on, at the same 2.5% it uses. */
+  .grid-field {
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+    background-size: 72px 72px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

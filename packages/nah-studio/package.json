@@ -1,0 +1,65 @@
+{
+  "name": "nah-studio",
+  "version": "0.0.1-beta.1",
+  "description": "The nah Studio: a dashboard for watching agents, with traces, evaluations and chat. Started by `nah` with /studio.",
+  "type": "module",
+  "bin": {
+    "nah-studio": "./dist/cli.js"
+  },
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "license": "MIT",
+  "author": "AstraCollab",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/astracollab/astracollab.git",
+    "directory": "packages/nah-studio"
+  },
+  "keywords": [
+    "agent",
+    "observability",
+    "tracing",
+    "telemetry",
+    "studio",
+    "dashboard",
+    "nah"
+  ],
+  "scripts": {
+    "build": "vite build --config vite.ui.config.ts && vite build",
+    "dev": "vite --config vite.ui.config.ts",
+    "test": "vitest run",
+    "lint": "tsc --noEmit && tsc --noEmit -p tsconfig.ui.json",
+    "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.ui.json"
+  },
+  "dependencies": {
+    "@astracollab/not-another-harness": "workspace:*",
+    "ai": "^7.0.127",
+    "nah": "workspace:*"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "^4.0.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^22.19.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.19",
+    "vite-plugin-dts": "^4.3.0",
+    "vitest": "^3.2.4"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": false
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
