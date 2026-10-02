@@ -12,13 +12,29 @@ import { finishReason, v4Usage } from "./helpers/ai.js";
 /** Sonnet's published figures, so the dollar arithmetic is checkable by eye. */
 const RATES = { input: 3, output: 15 };
 
-const probeTool = () => ({ probe: tool({ inputSchema: z.object({}), execute: async () => "ok" }) });
+/**
+ * The schema declares its fields rather than `z.object({})`.
+ *
+ * The repeat detector compares the *validated* tool input, and a zod object
+ * strips keys it does not declare — so an empty schema flattens every step's
+ * differing argument to `{}` and makes a progressing fixture look like the same
+ * call repeated. Comparing what the tool can actually act on is the right rule;
+ * the fixture just has to let the detector see the difference.
+ */
+const probeTool = () => ({
+  probe: tool({ inputSchema: z.object({ step: z.number().optional() }), execute: async () => "ok" }),
+});
 
-const toolCallStream = (id: string, usage: LanguageModelV4Usage) =>
+const toolCallStream = (
+  id: string,
+  usage: LanguageModelV4Usage,
+  toolName = "probe",
+  input: unknown = {},
+) =>
   simulateReadableStream<LanguageModelV4StreamPart>({
     chunkDelayInMs: 0,
     chunks: [
-      { type: "tool-call", toolCallId: id, toolName: "probe", input: "{}" },
+      { type: "tool-call", toolCallId: id, toolName, input: JSON.stringify(input) },
       { type: "finish", finishReason: finishReason("tool-calls"), usage },
     ],
   });
@@ -89,20 +105,39 @@ describe("spend budget", () => {
       new MockLanguageModelV4({
         doStream: async () => ({
           stream: toolCallStream(
-            "c",
+            `c${cached ? "cached" : "fresh"}`,
             cached
               ? v4Usage({ input: 100_000, output: 500, cacheRead: 99_000 })
-              : v4Usage({ input: 100_000, output: 500 })
+              : v4Usage({ input: 100_000, output: 500 }),
+            "edit",
+            { step: cached ? "cached" : "fresh", n: Math.random() }
           ),
         }),
       });
+
+    // Named `edit` so the no-progress guard, which watches for a run that stops
+    // changing things, treats this as a progressing run. The test is about which
+    // ceiling stops it, and a fixture that never mutates would be stopped by the
+    // other one first — which says nothing about money.
+    // The schema keeps its fields. The repeat detector compares the *validated*
+    // input, and a zod object strips keys it does not declare — so `z.object({})`
+    // would flatten every step's differing argument to `{}` and make a
+    // progressing run look like an identical call repeated. Comparing what the
+    // tool can actually act on is the right rule; the fixture just has to let it
+    // see the difference.
+    const editingTool = () => ({
+      edit: tool({
+        inputSchema: z.object({ step: z.string(), n: z.number() }),
+        execute: async () => "ok",
+      }),
+    });
 
     const runOne = async (cached: boolean, maxSpendUsd: number) => {
       const run = runAgent({
         model: makeModel(cached),
         system: "s",
         prompt: "go",
-        tools: probeTool(),
+        tools: editingTool(),
         maxSteps: 100,
         maxTokens: 0,
         rates: RATES,
@@ -394,7 +429,7 @@ describe("compaction trigger uses the whole request", () => {
       doStream: async () => {
         call += 1;
         return call < 6
-          ? { stream: toolCallStream(`c${call}`, v4Usage({ input: 5_000, output: 500 })) }
+          ? { stream: toolCallStream(`c${call}`, v4Usage({ input: 5_000, output: 500 }), "probe", { step: call }) }
           : { stream: textStream("done") };
       },
     });
@@ -419,7 +454,14 @@ describe("no ceiling unless one is asked for", () => {
     return new MockLanguageModelV4({
       doStream: async () => {
         call += 1;
-        return { stream: call <= steps ? toolCallStream(`c${call}`, usage) : textStream("finished") };
+        // A varying argument, so this reads as "a run that keeps going" rather than
+        // "a run that repeats itself" — which is the detector's case, not these
+        // tests'.
+        return {
+          stream: call <= steps
+            ? toolCallStream(`c${call}`, usage, "probe", { step: call })
+            : textStream("finished"),
+        };
       },
     });
   };

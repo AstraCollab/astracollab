@@ -10,9 +10,9 @@
  */
 import { tool, type Tool } from "ai";
 import { z } from "zod";
-import type { CognitiveMemory } from "@astracollab/not-another-harness";
+import type { SessionMemory } from "./memory-backend.js";
 
-export const createRecallTool = (getMemory: () => CognitiveMemory | undefined): Tool =>
+export const createRecallTool = (getMemory: () => SessionMemory | undefined): Tool =>
   tool({
     description:
       "Search your memory of this project for earlier facts, preferences and conventions. " +
@@ -31,7 +31,10 @@ export const createRecallTool = (getMemory: () => CognitiveMemory | undefined): 
       const memory = getMemory();
       if (!memory) return "No memory is available in this session.";
 
-      const results = memory.search(query, limit ?? 6);
+      // The adapters absorb their own failures, so this is [] rather than a
+      // thrown error: a backend that is down must not look like a tool the model
+      // misused. The empty answer below tells it what to say instead of guessing.
+      const results = await memory.search(query, limit ?? 6);
       if (results.length === 0) {
         return `No stored memory matches "${query}". If you were not told, say so rather than guessing.`;
       }

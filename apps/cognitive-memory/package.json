@@ -5,7 +5,7 @@
   "description": "Cognitive Memory \u2014 a memory service for LLM agents. Deterministic four-tier memory exposed as a credentialed storage layer.",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "pnpm --filter @astracollab/cogmem build && next build",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",

@@ -187,11 +187,21 @@ describe("runAgent", () => {
     const wrapUp = events.find((e) => e.type === "wrap-up");
     expect(wrapUp).toEqual({ type: "wrap-up", reason: "max-steps" });
 
-    // The instruction reaches the model, which is the whole point.
-    const lastUser = [...result.messages].reverse().find((m) => m.role === "user");
-    expect(typeof lastUser?.content === "string" ? lastUser.content : "").toContain(
-      "out of budget",
-    );
+    // The instruction reaches the model, which is the whole point, and it names
+    // the step ceiling rather than a budget that does not exist. It used to open
+    // with "you are out of budget" no matter why the run was stopping, so a run
+    // cut short by steps handed off in terms of money and sent the reader
+    // looking for a spend problem that was never there.
+    // Find the wrap-up by what it says, not by being last: this fixture loops on an
+    // identical `read` call, which the repeat detector correctly flags on the
+    // third pass, so there is now a second harness message in the transcript and
+    // "the last user message" is the warning rather than the handoff.
+    const wrapUpText = [...result.messages]
+      .reverse()
+      .map((m) => (typeof m.content === "string" ? m.content : ""))
+      .find((text) => text.includes("Hand off cleanly"));
+    expect(wrapUpText).toContain("step limit");
+    expect(wrapUpText).not.toContain("out of budget");
   });
 
   it("wraps up at most once, even when the wrap-up step hits the ceiling again", async () => {
@@ -353,7 +363,7 @@ describe("runAgent", () => {
         return {
           stream:
             index < 8
-              ? toolCallStream("read", { path: "x" }, `call-${index}`, undefined, v4Usage({ input: 20_000, output: 500 }))
+              ? toolCallStream("read", { path: `file-${index}` }, `call-${index}`, undefined, v4Usage({ input: 20_000, output: 500 }))
               : textStream("done"),
         };
       },
@@ -388,7 +398,7 @@ describe("runAgent", () => {
         return {
           stream:
             index < 4
-              ? toolCallStream("read", { path: "x" }, `call-${index}`, undefined, v4Usage({ input: 40_000, output: 500 }))
+              ? toolCallStream("read", { path: `file-${index}` }, `call-${index}`, undefined, v4Usage({ input: 40_000, output: 500 }))
               : textStream("done"),
         };
       },
@@ -574,7 +584,7 @@ describe("budget triage", () => {
             stream: simulateReadableStream<LanguageModelV4StreamPart>({
               chunkDelayInMs: 0,
               chunks: [
-                { type: "tool-call", toolCallId: `c${step}`, toolName: "probe", input: "{}" },
+                { type: "tool-call", toolCallId: `c${step}`, toolName: "probe", input: JSON.stringify({ step }) },
                 {
                   type: "finish",
                   finishReason: finishReason("tool-calls"),
@@ -594,7 +604,7 @@ describe("budget triage", () => {
       system: "s",
       prompt: "do a long task",
       messages: history,
-      tools: { probe: tool({ inputSchema: z.object({}), execute: async () => "ok" }) },
+      tools: { probe: tool({ inputSchema: z.object({ step: z.number() }), execute: async () => "ok" }) },
       // Not enough to replay an ever-growing transcript, but enough once it is
       // compacted. Without triage this run dies part-way through.
       maxTokens: 120_000,
@@ -653,7 +663,7 @@ describe("budget triage", () => {
       model,
       system: "s",
       prompt: "go",
-      tools: { probe: tool({ inputSchema: z.object({}), execute: async () => "ok" }) },
+      tools: { probe: tool({ inputSchema: z.object({ step: z.number() }), execute: async () => "ok" }) },
       maxTokens: 45_000,
       maxOutputTokens: 1_000,
       compaction: "truncate",

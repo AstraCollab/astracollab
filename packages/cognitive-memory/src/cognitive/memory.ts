@@ -162,11 +162,11 @@ export class CognitiveMemory {
     if (options.userMessage) {
       const gate = runFastGate(options.userMessage);
       if (gate.action === "inject_caution" && gate.cautionNote) {
-        sections.push(`### ⚠️ Premise Correction Notice\n${gate.cautionNote}`);
+        sections.push(`### ⚠️ Correction Detected In This Message\n${gate.cautionNote}`);
       }
     }
 
-    // Proprioceptive guardrails: domains this agent is weak in.
+    // Weak-domain warnings: domains this agent is unreliable in.
     const weakDomains = this.selfModel.activeDomains
       .map((d) => ({ d, capability: this.selfModel.domains[d] }))
       .filter((x) => x.capability && x.capability.reliabilityScore < 0.75);
@@ -190,7 +190,7 @@ export class CognitiveMemory {
           cap.knownFailurePatterns.join("; ") || "be careful"
         }`;
       });
-      sections.push(`### Proprioceptive Guardrails (High Attention Required)\n${lines.join("\n")}`);
+      sections.push(`### Weak Domains — Under 75% Reliability\n${lines.join("\n")}`);
     }
 
     // Index: one line per memory, bodies withheld unless a trigger earned them.
@@ -216,7 +216,7 @@ export class CognitiveMemory {
       );
     }
 
-    // Active tensions earn full bodies: they are prompts to clarify, not trivia.
+    // Unresolved contradictions earn full bodies: they are prompts to clarify, not trivia.
     const activeTensions = [...this.activeTensions.values()].filter((t) => t.status === "active");
     if (activeTensions.length > 0) {
       const lines = activeTensions.map((t) => {
@@ -233,7 +233,7 @@ export class CognitiveMemory {
         );
         return `- [${t.impact.toUpperCase()}] "${t.claimA.statement}" conflicts with "${t.claimB.statement}". Ask: ${t.actionableQuestion}`;
       });
-      sections.push(`### Active Knowledge Tensions (Contradictions)\n${lines.join("\n")}`);
+      sections.push(`### Unresolved Contradictions\n${lines.join("\n")}`);
     }
 
     return {

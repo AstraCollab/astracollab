@@ -24,7 +24,39 @@ import type {
   HarnessUsage,
 } from "./types.js";
 
-const DEFAULT_MAX_STEPS = 32;
+/**
+ * No step ceiling, by default.
+ *
+ * It used to be 32, which is not a number anyone chose from evidence — it is a
+ * round number that was low enough to feel safe. It bound the *long* tasks and
+ * ignored the short ones: across fifteen recorded turns, the median finished in
+ * 15 steps and the largest natural completion was 30, while 20% of turns were
+ * truncated at the cap. That is the shape of a limit that fires on task length
+ * rather than on anything wrong with the run.
+ *
+ * A real task was cut by it. Resolving a git merge conflict took 27 shell calls
+ * — merge-base archaeology, a safety branch, a commit, the merge itself,
+ * `checkout --ours` across the conflicts, an install, a `git rm` — and stopped at
+ * 32 having done none of the verification, with the model reporting "I ran out
+ * of budget before verification, so I stopped rather than push an unverified
+ * merge". Its context was 32k with a 99% cache hit rate. Nothing was under
+ * pressure; the counter simply ran out.
+ *
+ * The three mature harnesses agree. Claude's Agent SDK documents `maxTurns` with
+ * a default of "No limit" and says "without limits, the loop runs until Claude
+ * finishes on its own". opencode is `agent.steps ?? Infinity`, with no global or
+ * CLI flag to set it. Claude Code's interactive mode has no turns setting at all;
+ * `--max-turns` is print-mode only.
+ *
+ * So the ceiling is opt-in here too, for the same audience they describe —
+ * unattended and batch callers who want a bound and will read the stop reason.
+ * An interactive run ends when the task is done, the context window is full, or
+ * a human interrupts.
+ *
+ * What replaces it is not a bigger number: see `NO_PROGRESS_STEPS`, which bounds
+ * the one failure a cap was ever for.
+ */
+const DEFAULT_MAX_STEPS = Number.POSITIVE_INFINITY;
 /**
  * The deprecated token rail is **off** by default.
  *
@@ -64,19 +96,77 @@ const COMPACTION_RESERVE_MULTIPLIER = 2;
 const OUTPUT_HEADROOM_TOKENS = 8_000;
 
 /**
+ * Consecutive non-mutating steps before the run is declared stuck.
+ *
+ * This is what a step cap was actually for, so it is what replaced one. Every
+ * mature harness bounds the same thing and none of them count steps:
+ *
+ * - Claude Code's goal mode stops "if Claude keeps answering the evaluator
+ *   without making progress (no tool use for several turns in a row)".
+ * - opencode does not stop at all; it guards the loop itself, asking permission
+ *   when the same tool gets the same input three times running.
+ *
+ * A step counter cannot tell those apart, which is why it kept cutting working
+ * runs: step 32 of a merge resolution looks exactly like step 32 of a loop.
+ * "Has it changed anything lately" can tell them apart, because a stuck run stops
+ * mutating and a working one does not.
+ *
+ * 15 rather than 3 because the signal is coarse — several read-only steps are
+ * normal inside a real task (check the output of the last edit, read a file
+ * before editing it) — so this wants a margin, not a hair trigger. The nudge
+ * below fires far earlier on the same signal, which means a run heading for this
+ * has already been told.
+ */
+const NO_PROGRESS_STEPS = 15;
+
+/**
+ * Why a run is being wound up, in the model's own terms.
+ *
+ * It used to say "you are out of budget" unconditionally, which was already
+ * untrue when there is no spend rail — this package has had no default ceiling
+ * for money since the dollar rail was removed — and stayed untrue after the step
+ * cap went with it. A model told it is out of budget when it is out of steps
+ * writes a handoff about money, and a human reading that handoff looks for a
+ * spend problem that does not exist. It happened: a merge task was cut at the
+ * step ceiling and handed off with "I ran out of budget before verification".
+ *
+ * So the reason is named, and it is the reason the run actually stopped.
+ */
+const stopReasonExplanation = (why: HarnessStopReason): string => {
+  switch (why) {
+    case "max-steps":
+      return `This run has a step limit of ${"the configured maximum"}, and it has been reached.`;
+    case "max-tokens":
+      return "This run has reached its spend or token limit.";
+    case "max-output":
+      return "A reply was cut off by the per-step output cap, so this run is stopping here.";
+    case "max-context":
+      return "The context window is full, even after compacting.";
+    case "no-progress":
+      return (
+        `Nothing has changed in the working tree for the last stretch of steps, so this run is stopping rather ` +
+        "than spend the rest of the session going in circles. If you were in fact making progress, say what " +
+        "you were doing and what is left."
+      );
+    default:
+      return "This run is stopping early.";
+  }
+};
+
+/**
  * The instruction that turns a hard stop into a resumable state.
  *
- * A run that stops on a budget with nothing committed loses everything since the
- * last commit, and the next session has to reconstruct it from a half-finished
- * diff. Anthropic's long-running-harness work describes exactly this failure —
- * an agent running out of context mid-implementation and leaving a feature the
- * next session "must guess about" — and notes it happens even with compaction.
+ * A run that stops with nothing committed loses everything since the last
+ * commit, and the next session has to reconstruct it from a half-finished diff.
+ * Anthropic's long-running-harness work describes exactly this failure — an agent
+ * running out of context mid-implementation and leaving a feature the next
+ * session "must guess about" — and notes it happens even with compaction.
  *
  * So the last request is spent on handing off rather than on more work.
  */
-const WRAP_UP_INSTRUCTION = `You are out of budget for this run. Stop starting new work and hand off cleanly.
+const WRAP_UP_INSTRUCTION = (why: HarnessStopReason): string => `${stopReasonExplanation(why)}
 
-Do exactly this, in order:
+Hand off cleanly. Do exactly this, in order:
 1. If you have made any file changes, verify the build/tests still pass and commit the working state with a descriptive message. If something is broken, say so plainly rather than committing it as if it were fine.
 2. Update your task ledger so every step reflects reality, including which steps are incomplete.
 3. Write a short handoff covering: what is done, what is verified working, and what remains — as concrete next actions with file paths.
@@ -116,6 +206,47 @@ const EXPLORATION_NUDGE = (step: number): string =>
  */
 const MUTATING_TOOL_NAMES = new Set(["edit", "write", "bash", "multi_edit", "notebook_edit", "apply_patch"]);
 
+/**
+ * How many identical tool calls in a row count as a loop.
+ *
+ * opencode's `DOOM_LOOP_THRESHOLD`, and the reason it is worth copying rather than
+ * inventing: no step limit catches the case it is usually worried about. An agent
+ * that has genuinely run out of road stops returning for more road, whereas one
+ * stuck in a loop keeps calling tools and burns the whole budget getting nowhere.
+ * A progress signal misses that one too, because the loop may well be rewriting
+ * the same file on every pass — so it needs its own detector.
+ *
+ * Three is opencode's number and it is the right one. Two repeats are ordinary
+ * deliberation: run a test, read the failure, run it again with a flag.
+ */
+const REPEAT_CALL_THRESHOLD = 3;
+
+/**
+ * Ignored warnings before a repeated call ends the run.
+ *
+ * Three, which lands the stop at six identical steps in a row. The first
+ * detection warns and the model gets room to change approach, because iterating
+ * on a call is ordinary — read the file, run the test, read the failure, run it
+ * with a flag — and those all differ in their arguments, which is the point of
+ * comparing the whole call and not just its name.
+ *
+ * Past that it is not iteration. Six identical steps means the call is not
+ * telling the model anything it did not have.
+ *
+ * This is load-bearing rather than advisory, which is why the threshold is not
+ * "never". `bash` counts as progress because the harness cannot see whether a
+ * command changed anything, so a shell-driven loop never trips
+ * `NO_PROGRESS_STEPS` no matter how long it runs. If the detector only warned,
+ * this class of loop would be the one failure nothing bounded.
+ */
+const REPEAT_STRIKE_LIMIT = 3;
+
+const REPEAT_CALL_WARNING = (toolName: string): string =>
+  `You have made the identical \`${toolName}\` call three steps running and nothing has come of it. The same ` +
+  "call returns the same result, so it is not telling you anything you do not already have.\n" +
+  "Change the approach rather than repeating it: read a different file, widen the search, or say plainly what " +
+  "you are stuck on and what you would need to get past it. If the work is genuinely done, say so and stop.";
+
 const emptyUsage = (): HarnessUsage => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0, estimated: false });
 
 const addUsage = (acc: HarnessUsage, step: Partial<HarnessUsage> | undefined): HarnessUsage => {
@@ -149,6 +280,38 @@ const lastAssistantText = (messages: ModelMessage[]): string => {
     }
   }
   return "";
+};
+
+/**
+ * A comparable identity for one tool call.
+ *
+ * Key order is normalised before serialising, because a repeat detector that
+ * misses a loop because the model emitted the same arguments in a different
+ * order is worse than no detector: it reports a run as stuck when it is merely
+ * inconsistent, and stays quiet on the loop it was written for.
+ */
+const toolCallSignature = (toolName: string, input: unknown): string => {
+  const normalise = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalise);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, v]) => [k, normalise(v)]),
+      );
+    }
+    return value;
+  };
+  let serialised: string;
+  try {
+    serialised = JSON.stringify(normalise(input ?? null));
+  } catch {
+    // A non-serialisable argument is rare, and an unserialisable one cannot be
+    // compared, so it gets a signature nothing else can collide with. Better to
+    // miss a repeat than to report one that is not there.
+    return `${toolName}\\u0000<unserialisable-${Math.random()}>`;
+  }
+  return `${toolName}\\u0000${serialised}`;
 };
 
 const stepHadToolCalls = (stepMessages: ModelMessage[]): boolean =>
@@ -288,7 +451,14 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
   };
 
   const resultPromise = (async (): Promise<HarnessRunResult> => {
-    const maxSteps = Math.max(1, Math.floor(options.maxSteps ?? DEFAULT_MAX_STEPS));
+    /**
+     * `Infinity` by default, so `stepLimit` and the steer arithmetic below need no
+     * special case: `step + Infinity` is `Infinity`, which is the correct answer
+     * for "grant a fresh window" when there was no window to begin with.
+     */
+    const maxSteps = options.maxSteps === undefined
+      ? DEFAULT_MAX_STEPS
+      : Math.max(1, Math.floor(options.maxSteps));
     // Deprecated token budget, still honoured. See `maxSpendUsd` for why a token
     // count is the wrong unit for a spend ceiling.
     const maxTokens = Math.max(0, Math.floor(options.maxTokens ?? DEFAULT_MAX_TOKENS));
@@ -329,7 +499,11 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
      */
     let lastRequestTokens = estimateRequestTokens(options.system, messages);
 
-    events.push({ type: "run-start", stepBudget: maxSteps, tokenBudget: maxTokens });
+    events.push({
+      type: "run-start",
+      stepBudget: Number.isFinite(maxSteps) ? maxSteps : null,
+      tokenBudget: maxTokens,
+    });
 
     // Collapses identical tool calls emitted twice in the same step. The memo is
     // cleared per step, so re-running a command later — after an edit — still
@@ -504,8 +678,40 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
       let step = 0;
       let stepLimit = maxSteps;
       /** Mutating tool calls made this run, which the exploration nudge watches. */
+      /** Mutating tool calls made this run. */
       let mutations = 0;
+      /**
+       * Steps since the run last changed anything.
+       *
+       * The single signal behind both the exploration nudge and the no-progress
+       * stop, so the two can never disagree about whether a run is going
+       * anywhere — and so neither of them is a step counter wearing a costume.
+       */
+      let stepsSinceMutation = 0;
       let nudged = false;
+      /** Tool-call signatures made during the step being assembled. */
+      let stepCallSignatures: string[] = [];
+      /** Whether the step being assembled has changed anything. */
+      let mutatedThisStep = false;
+      /**
+       * Signatures of the last few *steps*, one entry each.
+       *
+       * A single entry per step, not per call: three steps that each made the
+       * identical call is a loop, whereas one step that issued the same call twice
+       * is a model that wanted two things at once and says nothing about progress.
+       */
+      const recentSteps: string[] = [];
+      let repeatWarnedFor = "";
+      /**
+       * Consecutive detections of the same repeat, after the model was warned.
+       *
+       * The warning alone is not a bound. `bash` counts as progress because the
+       * harness cannot tell whether a command changed anything, so a shell-driven
+       * loop mutates its way past `NO_PROGRESS_STEPS` forever — every step looks
+       * like work. This is the only signal that catches it, so it has to end the
+       * run rather than merely observe it.
+       */
+      let repeatStrikes = 0;
       /**
        * Index of the last message that was present when the previous request was
        * sent. The tail cache breakpoint is placed here, so it always marks a
@@ -529,11 +735,16 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
         /**
          * Say the explore-to-edit ratio out loud, once it is bad.
          *
-         * Placed beside the steer queue so a human's message always wins: if
-         * both were pending, the nudge would otherwise be the last thing the
-         * model read and read as a criticism of what they just asked for.
+         * Keyed on `stepsSinceMutation` rather than the absolute step, so it is the
+         * early half of the same measurement the no-progress stop uses later. A
+         * run that has been exploring for six steps after editing gets the same
+         * nudge as one that never edited at all, which is the case that matters.
+         *
+         * Placed beside the steer queue so a human's message always wins: if both
+         * were pending, the nudge would otherwise be the last thing the model read
+         * and read as a criticism of what they just asked for.
          */
-        if (!nudged && step === EXPLORATION_NUDGE_AT_STEP && mutations === 0) {
+        if (!nudged && stepsSinceMutation === EXPLORATION_NUDGE_AT_STEP) {
           nudged = true;
           messages.push({ role: "user", content: EXPLORATION_NUDGE(step) });
         }
@@ -656,7 +867,11 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
             streamedText += part.text;
             events.push({ type: "text-delta", step, text: part.text });
           } else if (part.type === "tool-call") {
-            if (MUTATING_TOOL_NAMES.has(part.toolName)) mutations += 1;
+            if (MUTATING_TOOL_NAMES.has(part.toolName)) {
+              mutations += 1;
+              mutatedThisStep = true;
+            }
+            stepCallSignatures.push(toolCallSignature(part.toolName, part.input));
             events.push({
               type: "tool-call",
               step,
@@ -822,21 +1037,88 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
         const canAffordWrapUp = (): boolean => !spendExhausted(lastRequestTokens);
 
         /**
+         * Progress accounting for this step.
+         *
+         * Reset by any mutating tool call, which is the whole definition of
+         * progress for this purpose. It deliberately does not count `bash` alone
+         * as progress if the command was a no-op — it cannot know that without
+         * parsing, and a run that shells out forever without editing anything is
+         * the exact case the guard exists for. Counting the *call* rather than
+         * its effect is the honest limit of what a harness can see.
+         */
+        if (mutatedThisStep) {
+          stepsSinceMutation = 0;
+          repeatStrikes = 0;
+        } else {
+          stepsSinceMutation += 1;
+        }
+        mutatedThisStep = false;
+
+        /**
+         * opencode's doom-loop detector, adapted.
+         *
+         * Three consecutive steps whose entire tool-call set is the same single
+         * call. That exactness is the point: a step that also did something else
+         * is doing something, and comparing only the *first* call would fire on a
+         * run that reads a file and then greps for it, which is ordinary work.
+         *
+         * Warned rather than stopped, because unlike the step cap this signal can
+         * be a coincidence — a test genuinely failing the same way twice, a build
+         * that needs a flag the model is about to find. opencode asks the user;
+         * a harness cannot, so the next best thing is to put the observation in
+         * front of the model while there is still budget to act on it.
+         */
+        const singleCall = stepCallSignatures.length === 1 ? stepCallSignatures[0] : undefined;
+        recentSteps.push(singleCall ?? `\u0000multi:${stepCallSignatures.length}`);
+        if (recentSteps.length > REPEAT_CALL_THRESHOLD) recentSteps.shift();
+        let looping = false;
+        if (
+          singleCall !== undefined &&
+          recentSteps.length === REPEAT_CALL_THRESHOLD &&
+          recentSteps.every((entry) => entry === singleCall)
+        ) {
+          looping = true;
+          if (repeatWarnedFor !== singleCall) {
+            repeatWarnedFor = singleCall;
+            messages.push({
+              role: "user",
+              content: REPEAT_CALL_WARNING(singleCall.split("\u0000")[0] ?? "tool"),
+            });
+          } else {
+            repeatStrikes += 1;
+          }
+        }
+        stepCallSignatures = [];
+
+        /**
          * A budget or step ceiling is about to end the run. Spend the last
          * affordable request on a clean handoff rather than cutting the agent off
          * mid-task — but only once, and never on a path where the model has
          * already answered or the caller has cancelled.
          */
         const stopFor = (why: HarnessStopReason): boolean => {
-          const affordable = canAffordWrapUp();
-          if (!wrapUpEnabled || wrappedUp || reason === "aborted" || signal?.aborted || !affordable) {
-            reason = why;
+          /**
+           * The wrap-up step runs on a one-step budget of its own, so reaching it
+           * trips `stepLimit` again.
+           *
+           * That is not a second stop — it is the end of the first one — and the
+           * reason the run is ending is still the one that started the wind-down.
+           * Relabelling it here reported every wind-down as a step ceiling, so a
+           * run stopped for making no progress came back saying `max-steps`, an
+           * opt-in limit that, by default, nothing had set.
+           */
+          if (wrappedUp) {
+            if (signal?.aborted) reason = "aborted";
             return true;
           }
           reason = why;
+          const affordable = canAffordWrapUp();
+          if (!wrapUpEnabled || reason === "aborted" || signal?.aborted || !affordable) {
+            return true;
+          }
           wrappedUp = true;
           events.push({ type: "wrap-up", reason: why });
-          messages.push({ role: "user", content: WRAP_UP_INSTRUCTION });
+          messages.push({ role: "user", content: WRAP_UP_INSTRUCTION(why) });
           // Exactly one more step, whatever the step budget said.
           stepLimit = step + 1;
           return false;
@@ -870,8 +1152,26 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           reason = "completed";
           break;
         }
+        /**
+         * The only two ways a run stops for its own reasons.
+         *
+         * `max-steps` only fires when the caller asked for a ceiling, so by
+         * default it never does. What replaced it is the guard that measures the
+         * thing the ceiling was guessing at: a run that has stopped changing
+         * anything. Fifteen non-mutating steps in a row, having just declined to
+         * finish, is not a long task — it is a loop or a stall, and spending the
+         * rest of the session on it produces nothing.
+         *
+         * It sits after the "did the model answer?" check on purpose, so a run
+         * that decides it is finished is never overridden by a stale progress
+         * count from earlier in the turn.
+         */
         if (step >= stepLimit) {
           if (stopFor("max-steps")) break;
+          continue;
+        }
+        if (stepsSinceMutation >= NO_PROGRESS_STEPS || looping || repeatStrikes >= REPEAT_STRIKE_LIMIT) {
+          if (stopFor("no-progress")) break;
           continue;
         }
 

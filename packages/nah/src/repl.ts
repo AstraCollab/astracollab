@@ -14,10 +14,11 @@ import { createApprover, parsePermissionMode, type PermissionMode } from "./perm
 import { c, formatFileChange, formatWorkspaceDiff, renderWelcome, toolLabel, usageLine, type RenderableFileChange } from "./render.js";
 import { renderCommandHelp } from "./commands.js";
 import { listSessionIds, resolveSessionFile } from "./context.js";
-import { createMemoryReconciler, createTurnExtractor, prepareMemory } from "./memory.js";
+import { selectMemory } from "./memory-select.js";
 import { createRecallTool } from "./memory-tool.js";
+import { handleCogmemCommand } from "./cogmem-command.js";
 import { MemoryInjectionLog } from "./memory-injection.js";
-import { adoptUsage, resetUsage, runTurn, type SessionState, type StepRecovery } from "./session.js";
+import { adoptUsage, resetUsage, resolveInjection, runTurn, type SessionState, type StepRecovery } from "./session.js";
 import { createTaskLedgerTool, formatTaskLedger } from "./task-ledger.js";
 import { createDelegationTool } from "./delegation.js";
 import { loadLastModel, saveLastModel } from "./model-preferences.js";
@@ -542,6 +543,40 @@ export const handleSlashCommand = async (
       out.write(`${lines.join("\n")}\n`);
       return "handled";
     }
+    case "steps": {
+      /**
+       * Cap a turn's steps, off by default.
+       *
+       * There is no ceiling unless this is set, and that is deliberate: a step
+       * counter bounds long tasks and ignores short ones, so it cuts the work you
+       * cared about while leaving the work you didn't. What ends a turn instead is
+       * the model saying it is done, the window filling, or you interrupting. If
+       * you want one anyway — an unattended run, a script — set it here rather
+       * than editing the harness default.
+       */
+      if (arg === "off" || arg === "none" || arg === "") {
+        if (arg === "") {
+          out.write(
+            state.turnStepLimit === null
+              ? "no per-turn step ceiling — a turn runs until the task is done\n"
+              : `${state.turnStepLimit} step ceiling per turn\n`,
+          );
+          out.write(c.dim("/steps <n> to cap a turn · /steps off to remove the cap\n"));
+          return "handled";
+        }
+        state.turnStepLimit = null;
+        out.write(c.dim("(no per-turn step ceiling — turns run until the task is done)\n"));
+        return "handled";
+      }
+      const parsed = Number.parseInt(arg, 10);
+      if (!Number.isFinite(parsed) || parsed < 1) {
+        out.write(c.red(`not a step count: ${arg}\n`));
+        return "handled";
+      }
+      state.turnStepLimit = parsed;
+      out.write(c.dim(`(per-turn ceiling: ${parsed} steps — a turn will stop there)\n`));
+      return "handled";
+    }
     case "task":
       if (arg === "clear") {
         try {
@@ -865,13 +900,25 @@ export const handleSlashCommand = async (
         out.write(c.dim("(cognitive memory not active in this session)\n"));
         return "handled";
       }
-      const snapshot = state.cognitiveMemory.getSnapshot();
-      out.write(`${c.bold("Cognitive Memory Cache State")}\n`);
-      out.write(`  Turns processed: ${snapshot.stats.totalTurnsProcessed}\n`);
-      out.write(`  Active tensions: ${snapshot.l0.tensions.filter((t) => t.status === "active").length}\n`);
-      out.write(`  L1 Hot cache items: ${snapshot.l1.length}\n`);
-      out.write(`  L2 Warm store items: ${snapshot.l2.length}\n`);
-      out.write(`  L3 Cold archive items: ${snapshot.l3.length}\n\n`);
+      // One description, whichever backend is live. Reading it is a network call
+      // when the answer is hosted, which is why this is awaited rather than
+      // asking the engine for a snapshot directly.
+      const description = await state.cognitiveMemory.describe();
+      out.write(`${c.bold("Cognitive Memory Cache State")} ${c.dim(`(${description.backend})`)}\n`);
+      out.write(`  Location: ${description.location}\n`);
+      if (description.turnsProcessed !== null) {
+        out.write(`  Turns processed: ${description.turnsProcessed}\n`);
+      }
+      out.write(`  Active tensions: ${description.activeTensions.length}\n`);
+      out.write(`  L1 Hot cache items: ${description.counts.L1}\n`);
+      out.write(`  L2 Warm store items: ${description.counts.L2}\n`);
+      out.write(`  L3 Cold archive items: ${description.counts.L3}\n`);
+      // A backend that is failing has to say so here, or `/memory` reports a
+      // healthy-looking empty cache for a service that is simply unreachable.
+      if (description.degraded) {
+        out.write(`  ${c.yellow("Unreachable:")} ${description.degraded}\n`);
+      }
+      out.write("\n");
 
       // What memory actually cost each turn, and why. There is no public
       // benchmark for pre-inject vs on-demand here, so this is the signal for
@@ -898,35 +945,30 @@ export const handleSlashCommand = async (
         out.write("\n");
       }
 
-      if (snapshot.l1.length > 0) {
-        out.write(`${c.bold("Memories held (shown in full):")}\n`);
-        for (const item of snapshot.l1) {
-          // Show the whole statement. `/memory` exists so a person can check what
-          // was actually learned, and truncating at 80 characters made a
-          // complete memory look like a broken one.
-          const domains = item.metadata.domains.slice(0, 3);
+      if (description.held.length > 0) {
+        out.write(`${c.bold("Memories held")} ${c.dim(`(${description.heldNote})`)}\n`);
+        for (const item of description.held) {
+          const domains = item.domains.slice(0, 3);
           const tag = domains.length > 0 ? c.dim(` (${domains.join(", ")})`) : "";
           out.write(`  • ${item.content}${tag}\n`);
         }
         out.write("\n");
       }
 
-      const activeTensions = snapshot.l0.tensions.filter((t) => t.status === "active");
-      if (activeTensions.length > 0) {
-        out.write(`${c.bold("Active Tensions (Contradictions):")}\n`);
-        for (const t of activeTensions) {
+      if (description.activeTensions.length > 0) {
+        out.write(`${c.bold("Unresolved Contradictions:")}\n`);
+        for (const t of description.activeTensions) {
           out.write(`  🔴 ${c.yellow(`[${t.impact.toUpperCase()}]`)} ${t.id}: ${t.actionableQuestion}\n`);
         }
         out.write("\n");
       }
 
-      const domains = Object.entries(snapshot.l0.selfModel.domains);
-      if (domains.length > 0) {
-        out.write(`${c.bold("Proprioceptive Self-Model:")}\n`);
-        for (const [dom, cap] of domains) {
-          const pct = Math.round(cap.reliabilityScore * 100);
+      if (description.domains.length > 0) {
+        out.write(`${c.bold("Per-Domain Reliability:")}\n`);
+        for (const { domain, reliability, samples } of description.domains) {
+          const pct = Math.round(reliability * 100);
           const color = pct >= 80 ? c.green : pct >= 60 ? c.yellow : c.red;
-          out.write(`  ${dom}: ${color(`${pct}%`)} reliability (${cap.sampleCount} tasks)\n`);
+          out.write(`  ${domain}: ${color(`${pct}%`)} reliability (${samples} tasks)\n`);
         }
       }
       return "handled";
@@ -938,23 +980,30 @@ export const handleSlashCommand = async (
       }
       if (arg.startsWith("resolve ")) {
         const tensionId = arg.slice("resolve ".length).trim();
-        const ok = state.cognitiveMemory.resolveTension(tensionId, {
+        const ok = await state.cognitiveMemory.resolveTension(tensionId, {
           resolvedBy: "manual user resolution",
           pattern: "user resolved in repl",
         });
         if (ok) {
           out.write(c.green(`tension ${tensionId} marked resolved\n`));
         } else {
-          out.write(c.red(`tension ${tensionId} not found\n`));
+          // A hosted resolve can also fail because the service is unreachable, so
+          // the reason is worth showing rather than a bare "not found".
+          out.write(
+            c.red(
+              state.cognitiveMemory.degraded
+                ? `could not resolve: ${state.cognitiveMemory.degraded}\n`
+                : `tension ${tensionId} not found\n`,
+            ),
+          );
         }
         return "handled";
       }
-      const snapshot = state.cognitiveMemory.getSnapshot();
-      const active = snapshot.l0.tensions.filter((t) => t.status === "active");
+      const active = (await state.cognitiveMemory.describe()).activeTensions;
       if (!active.length) {
-        out.write(c.dim("(no active knowledge tensions)\n"));
+        out.write(c.dim("(no unresolved contradictions)\n"));
       } else {
-        out.write(`${c.bold("Active Knowledge Tensions")}\n`);
+        out.write(`${c.bold("Unresolved Contradictions")}\n`);
         for (const t of active) {
           out.write(`  ${c.red("🔴")} ${c.bold(t.id)} ${c.dim(`[${t.impact}]`)}\n`);
           out.write(`     Claim A (${t.claimA.source}): "${t.claimA.statement}"\n`);
@@ -1039,6 +1088,10 @@ const validateTurnSnapshots = async (state: SessionState, chronological: StepRec
 export const startRepl = async (state: SessionState): Promise<void> => {
   const out = process.stdout;
   out.write(renderWelcome({ cwd: state.cwd, model: state.model?.spec ?? null, permissions: state.permissions, sandbox: state.sandboxCwd }));
+  // A memory backend that is not the one the config asked for has to be said out
+  // loud at startup. Otherwise "hosted memory is on" and a local store are
+  // indistinguishable until a fact fails to survive a restart.
+  if (state.memoryNote) out.write(`${c.dim(`memory: ${state.memoryNote}`)}\n`);
   let abort: AbortController | null = null;
   let activeRl: readline.Interface | null = null;
   /** The turn currently streaming, if any. Input steers it instead of queueing. */
@@ -1060,6 +1113,8 @@ export const startRepl = async (state: SessionState): Promise<void> => {
       let openModelPicker = false;
       let openProviderSetup = false;
       let providerRequest = "";
+      let openCogmemSetup = false;
+      let cogmemRequest = "";
       let receivedInput = false;
         const rl = readline.createInterface({
         input: process.stdin,
@@ -1112,6 +1167,12 @@ export const startRepl = async (state: SessionState): Promise<void> => {
             rl.close();
             break;
           }
+          if (input === "/cogmem" || input.startsWith("/cogmem ")) {
+            openCogmemSetup = true;
+            cogmemRequest = input.slice("/cogmem".length).trim();
+            rl.close();
+            break;
+          }
           if (input.startsWith("/")) {
             const result = await handleSlashCommand(input, state, state.cwd, out);
             if (result === "quit") {
@@ -1131,7 +1192,12 @@ export const startRepl = async (state: SessionState): Promise<void> => {
             rl.prompt();
             continue;
           }
-          const turn = runTurn(state, prompt, { signal: abort.signal });
+          // Memory first, and awaited here rather than inside `runTurn`: the
+          // hosted backend has to answer before the request can be composed. A
+          // backend that is slow costs a moment of silence; one that is down
+          // costs nothing, because `resolveInjection` contains the failure.
+          const injection = await resolveInjection(state, prompt);
+          const turn = runTurn(state, prompt, { signal: abort.signal }, injection);
           const turnFileChanges = state.activeFileChanges ?? [];
           const turnRef: ActiveTurn = { steer: (text) => turn.steer(text) };
           activeTurn = turnRef;
@@ -1210,6 +1276,17 @@ export const startRepl = async (state: SessionState): Promise<void> => {
         await setupProvider(state, providerRequest, out);
         continue;
       }
+      if (openCogmemSetup) {
+        // `status` only reads, so it is worth allowing without a terminal: it is
+        // the one subcommand someone might want from a pipe.
+        const readOnly = /^(status)?$/i.test(cogmemRequest);
+        if (!process.stdin.isTTY && !readOnly) {
+          out.write(c.red("Cogmem setup needs an interactive terminal. /cogmem status still works.\n"));
+          continue;
+        }
+        await handleCogmemCommand({ state, out }, cogmemRequest);
+        continue;
+      }
       if (!receivedInput) keepRunning = false;
     }
   } finally {
@@ -1259,13 +1336,10 @@ export const makeState = async (opts: {
   }
   // Memory: model-backed extraction plus on-disk persistence, so what a turn
   // teaches survives into the next session. Extraction uses the same model.
-  const prepared = await prepareMemory({
+  const selection = await selectMemory({
     cwd: opts.cwd,
     persist: !opts.noSession,
-    extractor: model ? createTurnExtractor(model.model) : null,
-    // Adjudicates near-duplicates. Lexical overlap cannot: it peaks on identical
-    // strings and bottoms out on the paraphrases that add information.
-    reconciler: model ? createMemoryReconciler(model.model) : null,
+    model: model ? model.model : null,
   });
 
   const { createCodingTools, createJsonlSessionStore } = await import(
@@ -1337,11 +1411,13 @@ export const makeState = async (opts: {
     // Null means "use the context-scaled default", which is the point: a turn
     // should not inherit a ceiling sized for a different amount of context.
     turnSpendLimitUsd: null,
+    turnStepLimit: null,
     permissions: opts.permissions ?? "yolo",
     sandboxCwd: cwdLabel,
     workspaceRoot: opts.sandbox == null ? workspaceRoot : undefined,
     destroySandbox,
-    cognitiveMemory: prepared.memory,
+    cognitiveMemory: selection.memory,
+    ...(selection.note === undefined ? {} : { memoryNote: selection.note }),
     memoryInjectionLog: new MemoryInjectionLog(),
   };
   model?.setStatusHandler((status) => { state.providerStatus = status; });

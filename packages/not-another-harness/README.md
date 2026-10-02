@@ -195,6 +195,40 @@ it as a handoff rather than a failure, and sets `wrappedUp` on the result. The
 step is skipped when it would not be affordable, so the harness never overspends
 to say goodbye.
 
+## No step ceiling, and what bounds a run instead
+
+**There is no step limit by default.** A turn ends when the model says it is done,
+when the context window is full, or when a human interrupts it.
+
+There used to be a default of 32, and it was the wrong kind of limit. It bound
+long tasks and ignored short ones — across fifteen recorded turns the median
+finished in 15 steps, the longest natural completion was 30, and 20% of turns were
+truncated at the cap. A real git merge was cut at 32 having done none of its
+verification, and handed off saying it had "run out of budget", which it had not.
+
+Every mature harness agrees. Claude's Agent SDK documents `maxTurns` with a
+default of "No limit". opencode is `agent.steps ?? Infinity`. Claude Code's
+interactive mode has no turns setting at all.
+
+`maxSteps` still exists, opt-in, for unattended and batch callers who want a bound
+and will read the stop reason.
+
+What replaced the ceiling is not a bigger number — it is the thing the ceiling was
+guessing at. Two guards, both measuring progress rather than length:
+
+- **`no-progress`** — fifteen consecutive steps without changing anything, having
+  just declined to finish. This is the same condition Claude Code uses for its
+  goal loop ("no tool use for several turns in a row"). A stuck run stops mutating
+  and a working one does not; a step counter cannot tell those apart, which is
+  exactly why it kept cutting working runs.
+- **A repeated-call warning** — the same tool with the same input three steps
+  running, opencode's `DOOM_LOOP_THRESHOLD`. Needed separately, because a loop can
+  rewrite the same file on every pass and so never trips a progress signal.
+
+Both share one measurement with the exploration nudge, which fires at seven
+non-mutating steps: nudge early, stop late, and no mechanism that only fires on
+the failure it was written for.
+
 ## Budgets and compaction
 
 ```ts
@@ -203,7 +237,7 @@ const run = runAgent({
   prompt,
   system,
   tools,
-  maxSteps: 32,              // default: 32
+  maxSteps: Infinity,        // default: no ceiling — opt in for unattended runs
   maxSpendUsd: 5,            // cumulative $ ceiling; needs `rates`
   rates: { input: 3, output: 15 },
   maxContextTokens: 180_000, // per-request ceiling vs the model's window
@@ -251,7 +285,7 @@ Semantics, matching Pi and opencode:
 - **Steers reach the model as plain user messages**, indistinguishable from any other user turn. Nothing marks them, so the model simply sees them in history.
 - **Steers jump ahead of follow-ups**, and each keeps its order.
 - **A pending message prevents the run from ending.** If the model produces its final answer while a follow-up is queued, the run continues instead of discarding it.
-- **A delivered message grants a fresh step window**, so `maxSteps` cannot silently drop something a human deliberately sent.
+- **A delivered message grants a fresh step window**, so an explicit `maxSteps` cannot silently drop something a human deliberately sent.
 - **Queued messages survive `interrupt()`**, so the host can replay them. `steer()`/`followUp()` return `false` once the run has settled rather than accepting input that would be lost.
 
 Events: `user-message` fires twice per message — `phase: "queued"` when accepted and `phase: "delivered"` when it actually enters the transcript. Render a pending chip on the first and clear it on the second.
@@ -259,7 +293,7 @@ Events: `user-message` fires twice per message — `phase: "queued"` when accept
 ## Cognitive Memory Cache
 
 `@astracollab/not-another-harness` includes an intelligent 4-tier cache layer (`CognitiveMemory`):
-- **L0 (Registers)**: Always injected into the prompt. Stores the agent's proprioceptive self-model (domains, reliability scores, failure pattern guardrails) and active knowledge tensions (contradictions).
+- **L0 (Registers)**: Always injected into the prompt. Stores the agent's per-domain reliability record (scores, failure patterns) and any unresolved contradiction.
 - **L1 (Hot Cache)**: Pre-staged prompt context prepared asynchronously at the end of the previous turn.
 - **L2 (Warm Store)**: Indexed memories ready for promotion by the Arbiter.
 - **L3 (Cold Archive)**: Persistent memory store.

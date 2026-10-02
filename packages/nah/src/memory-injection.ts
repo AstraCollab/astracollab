@@ -15,9 +15,10 @@
 import type { ModelMessage } from "ai";
 import {
   extractIdentifiers,
-  type CognitiveMemory,
   type MemoryInjectionReport,
 } from "@astracollab/not-another-harness";
+
+import type { SessionMemory } from "./memory-backend.js";
 
 /** Flatten a transcript into one lowercased blob for "have we already seen this". */
 const transcriptText = (messages: readonly ModelMessage[]): string =>
@@ -38,19 +39,23 @@ const transcriptText = (messages: readonly ModelMessage[]): string =>
  * Only identifiers absent from the transcript qualify: if the user is already
  * repeating something visible, the model has it and spending tokens on it is
  * waste.
+ *
+ * Async because `search` is: the local engine ranks in-process, and the hosted
+ * backend asks a service. Callers are on the pre-request path and already await
+ * one memory call, so this adds no new wait that was not there.
  */
-export const detectMemoryTriggers = (
-  memory: CognitiveMemory | undefined,
+export const detectMemoryTriggers = async (
+  memory: SessionMemory | undefined,
   userMessage: string,
   transcript: readonly ModelMessage[],
-): string[] => {
+): Promise<string[]> => {
   if (!memory) return [];
   const seen = transcriptText(transcript);
   const unseen = extractIdentifiers(userMessage).filter((id) => !seen.includes(id.toLowerCase()));
   if (unseen.length === 0) return [];
 
   const forced: string[] = [];
-  for (const { item } of memory.search(unseen.join(" "), 12)) {
+  for (const { item } of await memory.search(unseen.join(" "), 12)) {
     const haystack = item.content.toLowerCase();
     if (unseen.some((id) => haystack.includes(id.toLowerCase()))) {
       forced.push(item.id);

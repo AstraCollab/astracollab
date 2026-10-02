@@ -357,7 +357,10 @@ export type PreparedMemory = {
  */
 export const prepareMemory = async (options: MemoryOptions): Promise<PreparedMemory> => {
   const path = memoryFileFor(options.cwd);
-  const persist = options.persist !== false;
+  // `NAH_MEMORY_NOPERSIST=1` is the documented escape hatch for "do not touch my
+  // disk", and it is read here rather than in the CLI so the SDK path gets it too.
+  // `--no-session` still wins on its own: either switch turns persistence off.
+  const persist = options.persist !== false && process.env.NAH_MEMORY_NOPERSIST !== "1";
   // Opened eagerly rather than inside `onPersist`, so a first run pays for the
   // schema and the legacy import once instead of on the first turn's background
   // work, where a thrown error would be invisible.
@@ -401,6 +404,10 @@ export const prepareMemory = async (options: MemoryOptions): Promise<PreparedMem
 
   const memory = new CognitiveMemory({
     ...(extract ? { extract } : {}),
+    // Forwarded, not merely accepted. The engine only ever calls `reconcile`,
+    // and a `reconciler` that is built and then dropped leaves deduplication
+    // silently inert: restatements accumulate while everything looks healthy.
+    ...(options.reconciler ? { reconcile: options.reconciler } : {}),
     ...(persist && store
       ? {
           onPersist: async (snapshot) => {

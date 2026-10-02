@@ -82,6 +82,10 @@ describe("command registry", () => {
     const exclusive = exclusiveCommands();
     expect(exclusive.has("model")).toBe(true);
     expect(exclusive.has("provider")).toBe(true);
+    // `/cogmem` asks questions and takes a key paste, so it needs the terminal
+    // released the same way. Miss this and readline paints over the alternate
+    // screen and the prompt is never answered.
+    expect(exclusive.has("cogmem")).toBe(true);
     // These must stay available mid-turn, just deferred.
     expect(exclusive.has("stats")).toBe(false);
     expect(exclusive.has("task")).toBe(false);

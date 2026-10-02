@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import * as nodePath from "node:path";
 import type { ModelMessage } from "ai";
 import { detectMemoryTriggers } from "./memory-injection.js";
 import {
@@ -8,6 +9,7 @@ import {
   type HarnessEvent,
   type HarnessRunResult,
   type JsonlSessionStore,
+  type MemoryInjectionReport,
   type SessionTaskLedger,
   type WorkspaceSnapshot,
 } from "@astracollab/not-another-harness";
@@ -80,6 +82,14 @@ export type SessionState = {
    * nothing is picked automatically.
    */
   turnSpendLimitUsd: number | null;
+  /**
+   * Explicit per-turn step ceiling, or null for none.
+   *
+   * Null is the normal state and matches the harness default: a turn runs until
+   * the model says it is done, the window fills, or a human interrupts. Set one
+   * only if you want an unattended run bounded — nothing here picks a number.
+   */
+  turnStepLimit: number | null;
   /** Approval policy for mutating tools (edit/write/bash). */
   permissions: PermissionMode;
   /**
@@ -104,8 +114,23 @@ export type SessionState = {
   workspaceRoot?: string;
   /** Tear down a remote sandbox (no-op for local sessions). */
   destroySandbox?: () => Promise<void>;
-  /** Cognitive Memory cache layer */
-  cognitiveMemory?: import("@astracollab/not-another-harness").CognitiveMemory;
+  /**
+   * The memory backend for this session.
+   *
+   * Either the in-process engine over SQLite or the hosted service, behind
+   * `SessionMemory` — the field name is the concept, not the class. Swapping it
+   * is what `/cogmem` does, and the recall tool reads it through a getter so it
+   * follows the swap.
+   */
+  cognitiveMemory?: import("./memory-backend.js").SessionMemory;
+  /**
+   * Why memory is not what the config asked for, printed once at startup.
+   *
+   * Set when hosted memory is enabled but unreachable, or when it is in use. A
+   * silent fallback looks exactly like working memory until a fact fails to
+   * survive a restart.
+   */
+  memoryNote?: string;
 };
 
 export type StepRecovery = {
@@ -199,6 +224,62 @@ export const composeTurnRequest = (
   };
 };
 
+/** The prompt block for one turn, and the report `/memory` logs it from. */
+export type ResolvedInjection = {
+  text: string;
+  report: MemoryInjectionReport;
+};
+
+const NO_INJECTION: ResolvedInjection = {
+  text: "",
+  report: { text: "", entries: [], totalTokens: 0, truncated: false },
+};
+
+/**
+ * Ask the backend what this turn should be told, before the request is built.
+ *
+ * Split out of `runTurn` because that function is synchronous and returns a
+ * handle, and the hosted backend cannot answer without a round trip. The
+ * alternative — making `runTurn` async — would push a memory failure into every
+ * caller, including the ones that never touch memory, so the wait lives where
+ * the decision does.
+ *
+ * Contained for the same reason the adapters contain their own failures: a
+ * backend that throws here would otherwise take down a turn before the model was
+ * ever called, and an empty prompt is a worse turn rather than a failed one.
+ */
+export const resolveInjection = async (
+  state: Pick<SessionState, "cognitiveMemory" | "memoryInjectionLog" | "messages">,
+  prompt: string,
+): Promise<ResolvedInjection> => {
+  const memory = state.cognitiveMemory;
+  if (!memory) return NO_INJECTION;
+  try {
+    const forced = await detectMemoryTriggers(memory, prompt, state.messages);
+    const report = await memory.planInjection({ userMessage: prompt, forceFull: forced });
+    state.memoryInjectionLog?.record(report);
+    return { text: report.text, report };
+  } catch (error) {
+    if (process.env.NAH_MEMORY_DEBUG === "1") {
+      console.log(`  [memory] injection failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return NO_INJECTION;
+  }
+};
+
+/**
+ * A stable id for this conversation, so the service can group what it learns.
+ *
+ * Derived from the session file rather than generated, because resuming a session
+ * should not look like a second conversation to the service — the memories
+ * belong to the same thread of work.
+ */
+const sessionIdFor = (state: Pick<SessionState, "store" | "sessionBasePath">): string => {
+  const path = state.store?.path ?? state.sessionBasePath;
+  const stem = path ? nodePath.basename(path).replace(/\.jsonl$/, "") : "";
+  return stem ? `nah-${stem}` : `nah-${process.pid}`;
+};
+
 /**
  * Run one agent turn on top of the session's current messages, then fold the
  * transcript back into state and persist the delta (Pi-style branch append).
@@ -212,6 +293,7 @@ export const runTurn = (
   state: SessionState,
   prompt: string,
   hooks: TurnHooks = {},
+  injection?: ResolvedInjection,
 ): {
   events: AsyncIterable<HarnessEvent>;
   done: Promise<HarnessRunResult>;
@@ -233,13 +315,10 @@ export const runTurn = (
   state.activeShellCommands = null;
   // Memory injection is decided here, not by the model: an identifier the user
   // named that is absent from the transcript earns its memory's full body, and
-  // everything else appears as a one-line index entry.
-  const forcedMemory = detectMemoryTriggers(state.cognitiveMemory, prompt, state.messages);
-  const injection = state.cognitiveMemory
-    ? state.cognitiveMemory.planInjection({ userMessage: prompt, forceFull: forcedMemory })
-    : { text: "", entries: [], totalTokens: 0, truncated: false };
-  const injectionText = injection.text;
-  state.memoryInjectionLog?.record(injection);
+  // everything else appears as a one-line index entry. Awaited by the caller and
+  // handed in, because the hosted backend has to ask a server before the
+  // request can be composed — see `resolveInjection`.
+  const injectionText = injection?.text ?? "";
 
   const { system, prompt: requestPrompt } = composeTurnRequest(state, prompt, injectionText);
 
@@ -274,6 +353,8 @@ export const runTurn = (
     // and it is the default because a turn that stops mid-task for money the user
     // never agreed to spend is worse than one that runs long.
     maxSpendUsd: resolveTurnSpendUsd(state.turnSpendLimitUsd),
+    // Unbounded unless the user asked for a ceiling. See `turnStepLimit`.
+    ...(state.turnStepLimit === null ? {} : { maxSteps: state.turnStepLimit }),
     // The model's window. Exceeding it is fixable — compaction shrinks the
     // request — so this triggers compaction, and only stops a run when even a
     // compacted request cannot fit.
@@ -363,6 +444,7 @@ export const runTurn = (
       void state.cognitiveMemory.postTurnAsync({
         userMessage: prompt,
         assistantResponse: assistantText,
+        sessionId: sessionIdFor(state),
       }).catch(() => undefined);
     }
     return result;

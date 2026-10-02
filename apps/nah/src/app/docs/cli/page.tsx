@@ -34,6 +34,7 @@ const replSample = [
   "/help                 Show commands",
   "/model <spec>         Switch model",
   "/memory               Show memory tiers and what was injected",
+  "/cogmem               Connect the hosted memory service, or go back to local",
   "/permissions [mode]   Set ask, yolo, or readonly",
   "/stats                Show session token usage",
   "/compact              Compact the transcript using truncation",

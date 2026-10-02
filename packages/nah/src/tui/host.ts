@@ -23,8 +23,9 @@ import { getModelOptions } from "../model-catalog.js";
 import { pickModel } from "../model-picker.js";
 import { resolveModel } from "../model.js";
 import { saveLastModel } from "../model-preferences.js";
-import { runTurn, type SessionState } from "../session.js";
+import { runTurn, resolveInjection, type SessionState } from "../session.js";
 import { applyUsageEvent, handleSlashCommand, setActiveModel, setupProvider } from "../repl.js";
+import { handleCogmemCommand } from "../cogmem-command.js";
 import { defaultSessionFile, withFileInclusions } from "../context.js";
 import { c } from "../render.js";
 import { exclusiveCommands, renderCommandHelp, SLASH_COMMANDS } from "../commands.js";
@@ -285,10 +286,14 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
   const startTurn = (input: string) => {
     const files = input.match(/@([^\s]+)/g)?.map((s) => s.slice(1)) ?? [];
     const bare = input.replace(/@[^\s]+/g, "").trim();
-    void withFileInclusions(state.cwd, files, bare).then((prompt) => {
+    void withFileInclusions(state.cwd, files, bare).then(async (prompt) => {
       run.abort = new AbortController();
       output.addLine(`${c.magenta("❯")} ${c.bold(prompt)}`, "user");
-      const turn = runTurn(state, prompt, { signal: run.abort.signal });
+      // Awaited here rather than inside `runTurn`, which is synchronous: the
+      // hosted backend has to answer before the request exists. The pause is
+      // invisible because the status line is already showing the turn starting.
+      const injection = await resolveInjection(state, prompt);
+      const turn = runTurn(state, prompt, { signal: run.abort.signal }, injection);
       run.turn = { steer: (text) => turn.steer(text) };
       refreshPrompt();
 
@@ -360,6 +365,24 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
       await exclusive(async () => {
         await setupProvider(state, arg, { write: (chunk: string) => sink.write(chunk) } as never);
       });
+      return;
+    }
+
+    if (name === "cogmem") {
+      // Its own terminal, because setup asks questions and the key prompt takes
+      // over the screen the same way the provider one does.
+      output.addLine(c.dim("  Cognitive Memory…"));
+      screen.requestRender(true);
+      await exclusive(async () => {
+        await handleCogmemCommand(
+          { state, out: { write: (chunk: string) => sink.write(chunk) } as never },
+          arg,
+        );
+      });
+      // The backend may have changed under the turn loop, and `/memory` is the
+      // only place that shows which one is live, so leave the reader something
+      // to check.
+      output.addLine(c.dim("  Run /cogmem to see the connection, /memory to see what was injected."));
     }
   };
 
@@ -526,6 +549,10 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
     await new Promise<void>((resolve) => {
       finished = resolve;
       screen.start();
+      // Said once, here, rather than left for `/memory` to reveal: a fallback to
+      // local memory looks exactly like working memory until a fact someone
+      // taught yesterday fails to arrive.
+      if (state.memoryNote) output.addLine(c.dim(`  memory: ${state.memoryNote}`));
       refreshPrompt();
       screen.requestRender(true);
     });

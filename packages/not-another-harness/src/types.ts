@@ -59,7 +59,24 @@ export type HarnessRequestBreakdown = {
 /** Why an agent run ended. */
 export type HarnessStopReason =
   | "completed" /** Model replied with no tool calls. */
+  /**
+   * An explicit step ceiling was reached.
+   *
+   * Only reachable when the caller passes `maxSteps`; there is no default. This
+   * used to be the default reason a run ended, on a cap of 32 that no evidence
+   * chose, and it cut working runs — a 27-call git merge stopped at the ceiling
+   * having done none of its verification.
+   */
   | "max-steps"
+  /**
+   * Nothing has changed for long enough that the run is treated as stuck.
+   *
+   * The guard that replaced the default step cap, and the same signal Claude Code
+   * uses for its goal loop: "no tool use for several turns in a row". It measures
+   * progress rather than length, so it fires on a loop and stays quiet on a long
+   * task — which is the distinction a step counter cannot make.
+   */
+  | "no-progress"
   /** A spend ceiling was hit: the dollar rail, or the deprecated token rail. */
   | "max-tokens"
   /**
@@ -95,7 +112,12 @@ export type HarnessSteerDelivery = "steer" | "follow-up";
 
 /** Streaming events emitted while the agent loop runs. */
 export type HarnessEvent =
-  | { type: "run-start"; stepBudget: number; tokenBudget: number }
+  /**
+   * `stepBudget` is `null` when the run is unbounded, which is the default.
+   * `Infinity` is not JSON, and a display rendering "∞" where there is no limit
+   * invites the reader to go looking for the knob that produced it.
+   */
+  | { type: "run-start"; stepBudget: number | null; tokenBudget: number }
   | { type: "step-start"; step: number }
   | { type: "text-delta"; step: number; text: string }
   | { type: "tool-call"; step: number; toolCallId: string; toolName: string; input: unknown }

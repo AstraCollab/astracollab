@@ -36,8 +36,9 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   {
     name: "budget",
     description: "Show spend, or cap a turn (e.g. /budget 8, /budget off)",
-    argumentHint: "[usd|auto]",
+    argumentHint: "[usd|off]",
   },
+  { name: "steps", description: "Cap a turn's steps (e.g. /steps 100, /steps off)", argumentHint: "[n|off]" },
   { name: "task", description: "Show the saved plan and progress", argless: true },
   { name: "task clear", description: "Clear the active plan", argless: true },
   { name: "diff", description: "Show current workspace changes", argless: true },
@@ -48,7 +49,13 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   { name: "session", description: "List/new/off sessions for this directory", argumentHint: "list|new|off" },
   { name: "compact", description: "Force transcript compaction (truncate mode)", argless: true },
   { name: "memory", description: "Show Cognitive Memory state (L0-L3 cache, tensions, guardrails)", argless: true },
-  { name: "tensions", description: "Show active knowledge tensions", argumentHint: "[resolve <id>]" },
+  {
+    name: "cogmem",
+    description: "Use the hosted Cognitive Memory service instead of the local store",
+    argumentHint: "[status|setup|key|on|off|local|import|forget]",
+    exclusive: true,
+  },
+  { name: "tensions", description: "Show unresolved contradictions", argumentHint: "[resolve <id>]" },
   { name: "quit", description: "Exit and show how to resume", argless: true },
 ] as const;
 

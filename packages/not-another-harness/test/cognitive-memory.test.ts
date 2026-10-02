@@ -17,7 +17,7 @@ describe("CognitiveMemory", () => {
 
     const mem = new CognitiveMemory();
     const contextWithCaution = mem.getPromptContext("Actually, we moved to DynamoDB");
-    expect(contextWithCaution).toContain("Premise Correction Notice");
+    expect(contextWithCaution).toContain("Correction Detected In This Message");
   });
 
   it("pins active tensions in L0 and renders them into context", () => {
@@ -34,7 +34,7 @@ describe("CognitiveMemory", () => {
 
     const ctx = mem.getPromptContext();
     expect(ctx).toContain("CRITICAL");
-    expect(ctx).toContain("Active Knowledge Tensions");
+    expect(ctx).toContain("Unresolved Contradictions");
     expect(ctx).toContain("Are we testing against SQLite or Postgres?");
   });
 
@@ -60,7 +60,7 @@ describe("CognitiveMemory", () => {
     expect(ctx).not.toContain("CRITICAL");
   });
 
-  it("tracks proprioceptive domain reliability and surfaces guardrails for weak domains", () => {
+  it("tracks per-domain reliability and surfaces warnings for weak domains", () => {
     const mem = new CognitiveMemory({
       initialSelfModel: {
         activeDomains: ["auth"],
@@ -76,7 +76,7 @@ describe("CognitiveMemory", () => {
     });
 
     const ctx = mem.getPromptContext();
-    expect(ctx).toContain("Proprioceptive Guardrails");
+    expect(ctx).toContain("Weak Domains — Under 75% Reliability");
     expect(ctx).toContain("50%");
     expect(ctx).toContain("Token refresh timing race condition");
   });

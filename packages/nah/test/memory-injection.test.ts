@@ -3,6 +3,7 @@ import type { ModelMessage } from "ai";
 
 import { CognitiveMemory, extractIdentifiers } from "@astracollab/not-another-harness";
 import { detectMemoryTriggers, MemoryInjectionLog } from "../src/memory-injection.js";
+import { localMemory } from "../src/memory-backend.js";
 
 let seq = 0;
 const mem = (content: string, domains: string[] = [], gist?: string) => ({
@@ -85,35 +86,46 @@ describe("index/body split", () => {
 });
 
 describe("deterministic triggers", () => {
-  it("forces a body when the user names an identifier absent from the transcript", () => {
+  it("forces a body when the user names an identifier absent from the transcript", async () => {
     const m = seeded();
-    const forced = detectMemoryTriggers(m, "what about ZQ7X4M2K?", transcript("unrelated"));
+    const forced = await detectMemoryTriggers(m, "what about ZQ7X4M2K?", transcript("unrelated"));
     expect(forced).toContain("m1");
   });
 
-  it("does not spend tokens on something already in the transcript", () => {
+  it("does not spend tokens on something already in the transcript", async () => {
     const m = seeded();
     // The identifier is already visible, so the model does not need it re-sent.
-    const forced = detectMemoryTriggers(m, "and ZQ7X4M2K?", transcript("we set ZQ7X4M2K earlier"));
+    const forced = await detectMemoryTriggers(m, "and ZQ7X4M2K?", transcript("we set ZQ7X4M2K earlier"));
     expect(forced).toEqual([]);
   });
 
-  it("returns nothing without memory or without identifiers", () => {
-    expect(detectMemoryTriggers(undefined, "ZQ7X4M2K", [])).toEqual([]);
-    expect(detectMemoryTriggers(seeded(), "add some docs", [])).toEqual([]);
+  it("returns nothing without memory or without identifiers", async () => {
+    expect(await detectMemoryTriggers(undefined, "ZQ7X4M2K", [])).toEqual([]);
+    expect(await detectMemoryTriggers(seeded(), "add some docs", [])).toEqual([]);
   });
 
-  it("matches on a path identifier, not just codes", () => {
+  it("matches on a path identifier, not just codes", async () => {
     seq = 0;
     const m = new CognitiveMemory();
     m.addMemory(mem("Deploy with ops/deploy.sh, which runs the release."), "L1");
-    expect(detectMemoryTriggers(m, "run ops/deploy.sh now", [])).toEqual(["m1"]);
+    expect(await detectMemoryTriggers(m, "run ops/deploy.sh now", [])).toEqual(["m1"]);
   });
 
-  it("does not force a memory that merely shares an unrelated word", () => {
+  it("does not force a memory that merely shares an unrelated word", async () => {
     const m = seeded();
     // "naming" appears in the memory's tags but not in an unrelated question.
-    expect(detectMemoryTriggers(m, "what is the weather today", [])).toEqual([]);
+    expect(await detectMemoryTriggers(m, "what is the weather today", [])).toEqual([]);
+  });
+
+  it("works against a backend that answers over the network", async () => {
+    // The same call against a hosted-shaped backend: the trigger logic is
+    // backend-agnostic, and this is the case that would break first if it were
+    // not — `search` is the one memory call that is async on both backends.
+    const remote = localMemory({
+      memory: seeded(),
+      location: "https://cogmem.example",
+    });
+    expect(await detectMemoryTriggers(remote, "what about ZQ7X4M2K?", transcript("unrelated"))).toEqual(["m1"]);
   });
 });
 

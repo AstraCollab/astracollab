@@ -11,8 +11,9 @@
 import { createNodeEnvironment } from "@astracollab/not-another-harness/node";
 import { createCodingTools } from "@astracollab/not-another-harness";
 import { resolveModel } from "./src/model.js";
-import { runTurn, type SessionState } from "./src/session.js";
+import { resolveInjection, runTurn, type SessionState } from "./src/session.js";
 import { createTurnExtractor, prepareMemory, memoryFileFor, setMemoryPersistedHook } from "./src/memory.js";
+import { localMemory } from "./src/memory-backend.js";
 import { createRecallTool } from "./src/memory-tool.js";
 import { MemoryInjectionLog } from "./src/memory-injection.js";
 
@@ -93,12 +94,18 @@ const state = {
   lastOutputTokens: 0,
   turns: 0,
   permissions: "yolo",
-  cognitiveMemory: prepared.memory,
+  cognitiveMemory: localMemory({ memory: prepared.memory, location: prepared.path }),
   memoryInjectionLog: new MemoryInjectionLog(),
 } as unknown as SessionState;
 
 const ask = async (prompt: string, label: string) => {
-  const turn = runTurn(state, prompt);
+  // The injection is resolved here rather than inside `runTurn`, which is
+  // synchronous. This eval is deliberately the local backend only: it waits on
+  // the persistence hook to know a turn's background work finished, and a hosted
+  // turn has no such hook. The hosted adapter is covered by the unit tests, which
+  // stub the transport.
+  const injection = await resolveInjection(state, prompt);
+  const turn = runTurn(state, prompt, {}, injection);
   const consumer = (async () => {
     for await (const _ of turn.events) {
       /* drain */

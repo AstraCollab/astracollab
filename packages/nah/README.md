@@ -131,7 +131,8 @@ are both a TTY. Pipes, CI, and dumb terminals keep the line-oriented renderer, a
 | `/task` | Show the saved task plan and checks |
 | `/compact` | Compact the current transcript |
 | `/memory` | Inspect Cognitive Memory state (L0-L3 cache, pre-staged items, self-model) |
-| `/tensions` | View active knowledge tensions (contradictions); `/tensions resolve <id>` marks resolved |
+| `/cogmem` | Connect the hosted Cognitive Memory service, or switch back to the local store |
+| `/tensions` | View unresolved contradictions; `/tensions resolve <id>` marks resolved |
 | `/clear` | Clear the active transcript |
 | `/help`, `/quit` | Show commands or exit |
 
@@ -168,20 +169,70 @@ survive into later sessions.
   model that runs the turn, plus deterministic pattern matching so a plainly
   stated fact is captured even if the model refuses or hedges.
 - Memories live in a SQLite database at `~/.nah/memory/<cwd-hash>.sqlite` and reload on the next run. A memory file from an earlier version is imported once and kept alongside as `.json.imported`. No native dependency: it uses `node:sqlite`, which Node has shipped since 22.5.
-- Each turn gets a one-line **index** of remembered items. A full body is only
-  spent when a deterministic trigger earns it: you name an identifier (URL, path,
-  code, camelCase token) that is not in the visible transcript and a memory
-  matches it. This is the index/body split Claude Code and Letta use, so recall
-  stays cheap and the prompt is not stuffed with distractors.
+- Each turn gets a one-line **index** of the hot cache. A full body is only
+  spent when a deterministic trigger earns it: you name an identifier (URL,
+  hostname, path, `SCREAMING_SNAKE`, camelCase token) that is not in the visible
+  transcript and a memory matches it. This is the index/body split Claude Code
+  and Letta use, so recall stays cheap and the prompt is not stuffed with
+  distractors. Only the hot cache is indexed; anything demoted or archived is
+  reachable through `recall` and never appears on its own.
 - The agent also has a `recall` tool to search memory on demand when the index
   is not enough. Ranking is deterministic and in-process, so recall does not
   depend on which model you use.
 - `/memory` shows what was injected on each turn, why, and at what token cost.
-- Nothing is learned from a turn where you asked a question, and paraphrases of a
-  known fact are discarded rather than duplicated.
+- Nothing is learned from a turn where you asked a question. A restatement of
+  something already held is folded into it rather than duplicated, with one
+  deliberate exception: if merging would drop part of what you said, both
+  statements are kept.
 
-`NAH_MEMORY_NOPERSIST=1` disables persistence; `NAH_MEMORY_DEBUG=1` traces
-extraction and promotion per turn.
+`--no-session` keeps the run in memory only, `NAH_MEMORY_NOPERSIST=1` disables
+the memory store on its own, and `NAH_MEMORY_DEBUG=1` traces extraction,
+promotion and persistence per turn.
+
+### Hosted memory, with `/cogmem`
+
+Memory runs in-process by default, against a SQLite file in your home directory.
+`/cogmem setup` points it at the hosted
+[Cognitive Memory](https://cogmem.astracollab.app) service instead, which is the
+same cognitive layer behind an API — same four tiers, same index/body split, same
+deterministic recall — so what the model sees does not change. Only where the
+memories are stored does.
+
+```sh
+nah
+> /cogmem setup      # service URL, then where the key comes from
+> /cogmem            # which backend is live, and whether it is reachable
+> /cogmem local      # back to the local store, with everything still there
+```
+
+| Subcommand | What it does |
+| --- | --- |
+| `/cogmem` | Show the backend in use, the key source, tier counts, and any failure |
+| `/cogmem setup` | Choose the service URL and a key, verify both, then switch |
+| `/cogmem key` | Replace the stored key without redoing the whole setup |
+| `/cogmem on` / `/cogmem off` | Enable or disable hosted memory, keeping the connection |
+| `/cogmem local` | Switch back to the local store |
+| `/cogmem import` | Copy the local store's memories into the service, after confirming |
+| `/cogmem forget` | Remove the stored key |
+
+Three things worth knowing before you switch:
+
+- **The local store is never touched.** Switching back restores it intact, and
+  nothing is copied anywhere until you run `/cogmem import` and confirm it.
+- **The key can come from three places.** `COGNITIVE_MEMORY_KEY` in the
+  environment wins if it is set; otherwise the platform credential store is used,
+  the same place provider keys live. On macOS the key goes to the Keychain; on
+  Linux and Windows you paste it with input hidden and it is written to Secret
+  Service or DPAPI. `COGNITIVE_MEMORY_URL` overrides the service URL the same way.
+- **A service that is down does not break turns.** The prompt block is skipped
+  and the failure is reported in `/cogmem` and `/memory` rather than swallowed —
+  an agent that silently forgets everything is worse than one that says it could
+  not reach memory. The same applies at startup: hosted memory that has no
+  reachable key falls back to the local store and prints why.
+
+In hosted mode the service does the extraction, so the turns you have are sent to
+it to learn from. That is the trade for not running a model call per turn on your
+own provider.
 
 ### Identifying the app to OpenRouter
 

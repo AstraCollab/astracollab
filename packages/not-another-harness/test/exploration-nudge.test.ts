@@ -165,14 +165,21 @@ describe("the exploration nudge", () => {
 
   it("says it once, because a repeated nudge is nagging", async () => {
     const { seen } = await runAndCapture(
-      Array.from({ length: EXPLORING_STEPS - 1 }, () => () => grepStep("x")).concat([
-        () => grepStep("y"),
+      // Distinct patterns, because a fixture that greps the same term every step is
+      // the repeat detector's case, not this one's.
+      Array.from({ length: EXPLORING_STEPS - 1 }, (_, i) => () => grepStep(`pattern-${i}`)).concat([
+        () => grepStep("final"),
       ]),
     );
     expect(nudgesIn(seen)).toHaveLength(1);
   });
 
-  it("stays silent once the run has actually changed something", async () => {
+  it("counts from the last mutation, not from the start of the turn", async () => {
+    // The nudge used to key on the absolute step, so an edit on step 1 silenced it
+    // for the rest of the turn even if the run then read eight files without
+    // changing anything. It now measures consecutive non-mutating steps, which is
+    // the same signal the no-progress stop uses — so a run that edits and then
+    // goes quiet is still caught, and a run that keeps editing never is.
     const { seen } = await runAndCapture([
       () => editStep(),
       () => grepStep("a"),
@@ -184,7 +191,27 @@ describe("the exploration nudge", () => {
       () => grepStep("g"),
       () => doneStep(),
     ]);
-    // The whole point is the ratio, and one edit already broke it.
+    expect(nudgesIn(seen)).toHaveLength(1);
+  });
+
+  it("stays silent while the run keeps changing things", async () => {
+    // The other half of the same rule: interleaved work never accumulates the
+    // streak, so an editing run is never nagged no matter how long it is.
+    const { seen } = await runAndCapture([
+      () => editStep(),
+      () => grepStep("a"),
+      () => editStep(),
+      () => grepStep("b"),
+      () => editStep(),
+      () => grepStep("c"),
+      () => editStep(),
+      () => grepStep("d"),
+      () => editStep(),
+      () => grepStep("e"),
+      () => editStep(),
+      () => grepStep("f"),
+      () => doneStep(),
+    ]);
     expect(nudgesIn(seen)).toHaveLength(0);
   });
 
