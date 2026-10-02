@@ -331,7 +331,7 @@ describe("cognitive memory engine", () => {
         })
       })
     )
-    expect(report.text).toContain("Premise Correction Notice")
+    expect(report.text).toContain("Correction Detected In This Message")
   })
 })
 

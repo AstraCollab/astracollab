@@ -2,8 +2,9 @@
 
 A memory service for LLM agents. It keeps the durable facts an agent is told —
 build ids, hosts, conventions, constraints — and hands back the relevant ones each
-turn. An index by default, full bodies only where something earned them, and no
-model in the retrieval path.
+turn. A contradiction between two of those facts is stored as its own record and
+pinned into every prompt until it is answered, an index line by default, full
+bodies only where something earned them, and no model in the retrieval path.
 
 - **Web:** [apps/cognitive-memory](apps/cognitive-memory) — the service, its API, and the dashboard
 - **SDK:** [packages/cognitive-memory](packages/cognitive-memory) — `@astracollab/cogmem`
@@ -24,11 +25,26 @@ This service is built around those three gaps: tiered storage so per-turn cost i
 a decision, contradictions as first-class rows, and every injection recorded with
 the rule that produced it.
 
+### Prompt block section headings
+
+The block prepended to your system prompt uses these headings, in this order:
+
+| Heading | When it appears |
+| --- | --- |
+| `⚠️ Correction Detected In This Message` | The incoming message pattern-matches an explicit correction ("actually, we switched", "stop using that") |
+| `Weak Domains — Under 75% Reliability` | A recorded domain has reliability below 0.75 |
+| `Memory index — established earlier in this project` | One gist line per held memory, up to the index budget |
+| `Unresolved Contradictions` | A stored claim pair that cannot both be true, with the question to ask |
+
+These strings are part of the wire format, so they are asserted in tests. Rename
+them and the SDK, the CLI, and any stored block log that greps for them need the
+same change in the same commit.
+
 ## The four tiers
 
 | Tier | Name | Holds | Cost per turn |
 | --- | --- | --- | --- |
-| L0 | Pinned | Tensions, self-model guardrails, correction notices | Full body, always |
+| L0 | Pinned | Unresolved contradictions, weak-domain warnings, correction notices | Full body, always |
 | L1 | Hot cache | Newly learned and pre-staged facts | Index line, body on trigger |
 | L2 | Warm store | Candidates scored against each turn | Nothing until promoted |
 | L3 | Cold archive | Everything else, still recallable | Nothing until recalled |

@@ -13,8 +13,8 @@ export function SiteFooter() {
             <span className="text-[13px] font-medium">Cognitive Memory</span>
           </Link>
           <p className="text-xs leading-5 text-zinc-600">
-            Deterministic four-tier memory for agents, served as a credentialed
-            storage layer you can read end to end.
+            A four-tier memory service for agents. Every line injected into a
+            prompt carries its reason and its token cost.
           </p>
         </div>
 
@@ -41,7 +41,8 @@ export function SiteFooter() {
       </div>
       <div className="mx-auto w-full max-w-5xl px-6 pb-10">
         <p className="text-[11px] text-zinc-700">
-          Deterministic recall, tiered storage, and Effect on the server.
+          Self-hosted. Deterministic recall. You can read every byte your agent
+          has been told.
         </p>
       </div>
     </footer>

@@ -7,7 +7,7 @@ import { SiteHeader } from "@/components/site-header"
 export const metadata: Metadata = {
   title: "Documentation",
   description:
-    "How Cognitive Memory works: the four tiers, what gets learned, how restatements are reconciled, and why every injection is labelled."
+    "How Cognitive Memory works: the four tiers, what gets learned, how restatements are reconciled, how contradictions are held open, and why every injection is labelled."
 }
 
 /**
@@ -27,9 +27,10 @@ const SECTIONS = [
   { id: "reconciliation", label: "Reconciliation" },
   { id: "injection", label: "Injection" },
   { id: "recall", label: "Recall" },
-  { id: "tensions", label: "Tensions" },
+  { id: "tensions", label: "Contradictions" },
   { id: "self-model", label: "Self-model" },
   { id: "api", label: "API" },
+  { id: "sdk", label: "SDK" },
   { id: "dashboard", label: "Dashboard" },
   { id: "auth", label: "Credentials" }
 ] as const
@@ -61,11 +62,12 @@ export default function DocsPage() {
             </p>
             <h1 className="text-3xl font-medium tracking-tight">Cognitive Memory</h1>
             <p className="max-w-2xl text-sm leading-6 text-zinc-400">
-              A memory service for agents. It stores durable facts, decides what
-              to put in front of a model each turn, and tells you why. The
-              retrieval path is deterministic by design, and the reasoning behind
-              every threshold below is written down because the numbers are only
-              defensible with it.
+              A memory service for agents. It stores durable facts, holds open the
+              ones that contradict each other, decides what to put in front of a
+              model each turn, and tells you why. The retrieval path is
+              deterministic by design, and the reasoning behind every threshold
+              below is written down because the numbers are only defensible with
+              it.
             </p>
             <div className="flex flex-wrap gap-3 pt-2">
               <Link
@@ -102,7 +104,7 @@ export default function DocsPage() {
               wrote the call. As the store grows, so does the prompt, and the
               material included falls into two groups: things that were relevant,
               and things that merely looked like they might be. The second group
-              is what context rot actually measures.
+              is what Chroma&rsquo;s 2025 context-rot report measures.
             </p>
             <p>It cannot say why something matched.</p>
             <p>
@@ -113,9 +115,9 @@ export default function DocsPage() {
             <p>
               This service is built around those three gaps. It stores tiers, so
               cost per turn is a decision rather than an accident. It stores
-              tensions as first-class rows. And every injection is recorded with
-              the rule that produced it, so the dashboard can show the exact block
-              a model is about to receive.
+              contradictions as first-class rows. And every injection is recorded
+              with the rule that produced it, so the dashboard can show the exact
+              block a model is about to receive.
             </p>
           </Doc>
 
@@ -211,10 +213,10 @@ export default function DocsPage() {
             <p>
               A synchronous fast gate runs first on the raw message and catches
               explicit corrections — “actually, we switched to Postgres”, “stop
-              using that”, “that’s wrong”. When it fires, a premise-correction
-              notice goes into the block, because a user visibly changing their
-              mind is the single most reliable signal that the agent’s assumption
-              is stale.
+              using that”, “that’s wrong”. When it fires, a
+              &ldquo;Correction Detected In This Message&rdquo; section goes into
+              the block, because a user visibly changing their mind is the single
+              most reliable signal that the agent’s assumption is stale.
             </p>
           </Doc>
 
@@ -247,17 +249,17 @@ export default function DocsPage() {
             </Callout>
           </Doc>
 
-          <Doc id="tensions" title="Knowledge tensions">
+          <Doc id="tensions" title="Contradictions">
             <p>
-              A tension is two claims that cannot both be true, stored as a pair
-              with an actionable question. It is pinned into every context build
-              until resolved, and it is the one thing that is always injected in
-              full regardless of budget.
+              A contradiction is two claims that cannot both be true, stored as a
+              pair with an actionable question. It is pinned into every context
+              build until resolved, and it is the one thing that is always
+              injected in full regardless of budget — because the whole point is
+              that the agent sees both sides rather than picking one.
             </p>
             <pre className="overflow-x-auto rounded-xl border border-white/[0.08] bg-black/40 px-4 py-4 font-mono text-[11px] leading-5 text-zinc-400">
-              {`### Active Knowledge Tensions (Contradictions)
-- [CRITICAL] “We deploy on Fridays” conflicts with “We never deploy on Fridays”.
-  Ask: Which is it?`}
+              {`### Unresolved Contradictions
+- [CRITICAL] “We deploy on Fridays” conflicts with “We never deploy on Fridays”. Ask: Which is it?`}
             </pre>
             <p>
               Resolving one keeps the resolution, including the reusable pattern
@@ -269,24 +271,24 @@ export default function DocsPage() {
           <Doc id="self-model" title="The self-model">
             <p>
               Reliability per domain, tracked as a moving average over outcomes
-              you record. Any active domain below 75% is rendered into every
-              prompt as a guardrail listing its known failure patterns and what
-              has worked.
+              you record. Any active domain below 75% is written into every prompt
+              under a &ldquo;Weak Domains&rdquo; heading, listing its known failure
+              patterns and what has worked.
             </p>
             <p>
               One detail worth stating plainly, because the obvious formula gets
               it wrong: the average carries a prior of two samples. Dividing by
               the sample count makes the first outcome fully replace the starting
               estimate, so a single failed task takes a domain from 0.8 to 0 — and
-              the domain then trips the guardrail threshold forever. With the
-              prior, one failure is a strong signal and ten are conclusive, which
-              is what a reliability number should mean.
+              the domain then trips the 75% threshold forever. With the prior, one
+              failure is a strong signal and ten are conclusive, which is what a
+              reliability number should mean.
             </p>
             <p>
               Nothing here is inferred. Without outcomes recorded through{" "}
               <code>POST /v1/self-model/outcome</code>, the model stays at its
-              priors and no guardrail ever fires, which is the most common reason a
-              self-model looks like it is not working.
+              priors and no weak-domain warning ever fires, which is the most
+              common reason this looks like it is not working.
             </p>
           </Doc>
 
@@ -298,6 +300,124 @@ export default function DocsPage() {
               <code>requiredScope</code> on a 403, <code>issues</code> on a 400. A
               caller can therefore tell a wrong key from a wrong scope, and a
               malformed body from an outage, without parsing prose.
+            </p>
+          </Doc>
+
+          <Doc id="sdk" title="SDK">
+            <p>
+              One official package,{" "}
+              <code>@astracollab/cogmem</code>, on npm. It is ~3kB gzipped, ESM-first,
+              and its only hard dependency is <code>ofetch</code>.{" "}
+              <code>ai</code> and <code>zod</code> are optional peers, needed solely
+              for the model-backed arbiter on the{" "}
+              <code>@astracollab/cogmem/arbiter</code> entry point.
+            </p>
+            <pre className="overflow-x-auto rounded-xl border border-white/[0.08] bg-black/40 px-4 py-3 font-mono text-[11px] leading-5 text-zinc-400">
+              pnpm add @astracollab/cogmem
+            </pre>
+            <p>
+              It contains two things, deliberately. The <b>client</b> talks to this
+              service over HTTP. The <b>deterministic layer</b> — tiering, ranking,
+              reconciliation, the fast gate — runs in-process with no database, no
+              network, and no model in the retrieval path. Shipping both means a
+              consumer can start against the service and later run the same logic
+              locally without the behaviour changing underneath them, and the
+              shared primitives are the reason the two cannot drift.
+            </p>
+            <p>
+              Imports are arranged for tree-shaking: <code>createClient</code> alone
+              does not pull the in-process engine in.
+            </p>
+
+            <p className="pt-2 text-zinc-300">The turn helper</p>
+            <p>
+              <code>runTurn</code> is the recommended entry point, because the
+              order is the part that is easy to get wrong: build context keyed on
+              the message being answered, run the model, learn from the finished
+              exchange, then record how the domain went.
+            </p>
+            <pre className="overflow-x-auto rounded-xl border border-white/[0.08] bg-black/40 px-4 py-4 font-mono text-[11px] leading-5 text-zinc-400">
+              {`import { createClient, runTurn } from "@astracollab/cogmem"
+
+const memory = createClient({
+  apiKey: process.env.COGNITIVE_MEMORY_KEY!,
+  baseUrl: "http://localhost:3000",
+})
+
+const { context, learning, learningSkipped } = await runTurn(
+  memory,
+  { userMessage, run: (block) => callYourModel(block, userMessage) },
+  { domain: "database", sessionId }
+)`}
+            </pre>
+            <p>
+              The last two steps never fail the turn. A memory outage cannot take
+              down a model call that already succeeded, so the helper catches and
+              reports instead of rethrowing — and <code>learningSkipped</code> is
+              returned rather than left null, because a silent skip looks
+              identical to a working one until the thing you taught it never comes
+              back. <code>domain</code> is the input that makes the self-model mean
+              anything; without it the scores stay at their priors.
+            </p>
+
+            <p className="pt-2 text-zinc-300">Resources</p>
+            <p>
+              Method names map one-to-one onto endpoints, so the client is never a
+              second, divergent copy of the service. Resources are{" "}
+              <code>readonly</code>, which stops a caller reassigning one half of
+              the client and wondering why the other half stopped seeing the
+              change.
+            </p>
+            <SdkTable />
+            <p>
+              Two construction styles ship on purpose —{" "}
+              <code>new Cogmem(…)</code> and <code>createClient(…)</code> — because
+              there is no reason to make anyone rename, and the factory is the one
+              that is easy to mock in a test.
+            </p>
+
+            <p className="pt-2 text-zinc-300">Config and errors</p>
+            <p>
+              <code>apiKey</code> is the only required field. <code>baseUrl</code>{" "}
+              defaults to the current origin in a browser and localhost otherwise;
+              <code> timeout</code>, <code>retry</code>, <code>headers</code> and{" "}
+              <code>debug</code> are optional. Debug logging is on by default,
+              which is a deliberate choice for anyone who has been burned by a
+              wrong base URL — which is everyone, exactly once.
+            </p>
+            <p>
+              Every non-2xx response throws <code>CognitiveMemoryError</code>{" "}
+              carrying the tag, the message, and <code>requiredScope</code> or{" "}
+              <code>issues</code> where they apply. A wrong key and a wrong scope
+              are therefore distinguishable in a catch block, without matching on
+              message text.
+            </p>
+
+            <p className="pt-2 text-zinc-300">Other languages</p>
+            <p>
+              There is no Python, Go, or Rust client, and that is a deliberate
+              position rather than a gap in the roadmap: the API is a dozen JSON
+              endpoints over bearer auth, so a generated client in each language
+              would be a second surface to keep in step with the service for no
+              gain. The integration is two calls, and any HTTP client does it.
+            </p>
+            <pre className="overflow-x-auto rounded-xl border border-white/[0.08] bg-black/40 px-4 py-4 font-mono text-[11px] leading-5 text-zinc-400">
+              {`# what the agent should know before it answers
+curl -X POST localhost:3000/api/v1/context \\
+  -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
+  -H "content-type: application/json" \\
+  -d '{"userMessage":"deploy ZQ7X4M2K to staging"}'
+
+# what it should remember from the finished turn
+curl -X POST localhost:3000/api/v1/turns \\
+  -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
+  -H "content-type: application/json" \\
+  -d '{"userMessage":"...","assistantResponse":"..."}'`}
+            </pre>
+            <p>
+              <code>POST /v1/context</code> returns the block to prepend plus the
+              entries that produced it; <code>POST /v1/turns</code> returns what was
+              stored, merged and rejected. Wire only these two and memory works.
             </p>
           </Doc>
 
@@ -394,7 +514,7 @@ function Callout({ children }: { children: React.ReactNode }) {
 
 function TiersTable() {
   const rows = [
-    ["L0", "Pinned", "Tensions, self-model guardrails, correction notices", "Full body, always"],
+    ["L0", "Pinned", "Unresolved contradictions, weak domains, correction notices", "Full body, always"],
     ["L1", "Hot cache", "Newly learned and pre-staged facts", "Index line, body on trigger"],
     ["L2", "Warm store", "Candidates scored against each turn", "Nothing until promoted"],
     ["L3", "Cold archive", "Everything else, still recallable", "Nothing until recalled"]
@@ -458,6 +578,45 @@ function Rules() {
         <div key={rule} className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-4 py-3">
           <p className="text-xs font-medium text-zinc-200">{rule}</p>
           <p className="mt-1 text-xs leading-5 text-zinc-500">{detail}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function SdkTable() {
+  const rows = [
+    ["memory.context.build()", "POST /v1/context", "The prompt block, its entries, total tokens, truncation."],
+    ["memory.recall.search()", "POST /v1/recall", "Ranked results. empty: true when nothing matched."],
+    ["memory.turns.learn()", "POST /v1/turns", "Learn a completed turn."],
+    ["memory.memories.list()", "GET /v1/memories", "What is held, with tier counts."],
+    ["memory.memories.get(id)", "GET /v1/memories/:id", "One memory in full."],
+    ["memory.memories.create()", "POST /v1/memories", "Store facts outright. Restatements fold in."],
+    ["memory.memories.promote()", "PATCH /v1/memories/:id", "Move between tiers."],
+    ["memory.memories.remove()", "DELETE /v1/memories/:id", "Forget one memory."],
+    ["memory.tensions.list()", "GET /v1/tensions", "Contradictions, filterable by status."],
+    ["memory.tensions.create()", "POST /v1/tensions", "Record a contradiction."],
+    ["memory.tensions.resolve()", "POST /v1/tensions/:id", "Resolve one, keeping the pattern."],
+    ["memory.selfModel.get()", "GET /v1/self-model", "Reliability per domain."],
+    ["memory.selfModel.record()", "POST /v1/self-model/outcome", "Record how a domain went."],
+    ["memory.stats.get()", "GET /v1/stats", "Counts, weak domains, open contradictions."],
+    ["memory.health()", "GET /api/v1/health", "Liveness, limits, extractor mode. No key spent."]
+  ] as const
+  return (
+    <div className="overflow-hidden rounded-xl border border-white/[0.08]">
+      <div className="grid grid-cols-[1fr_150px] gap-3 border-b border-white/[0.07] bg-white/[0.03] px-4 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-600 sm:grid-cols-[1fr_170px_1.4fr]">
+        <span>Method</span>
+        <span>Endpoint</span>
+        <span className="hidden sm:block">Does</span>
+      </div>
+      {rows.map(([method, endpoint, does]) => (
+        <div
+          key={method}
+          className="grid grid-cols-[1fr_150px] gap-3 border-b border-white/[0.05] px-4 py-2.5 last:border-0 sm:grid-cols-[1fr_170px_1.4fr]"
+        >
+          <code className="font-mono text-[11px] text-zinc-300">{method}</code>
+          <code className="font-mono text-[10px] text-violet-200/80">{endpoint}</code>
+          <span className="col-span-2 text-xs leading-5 text-zinc-500 sm:col-span-1">{does}</span>
         </div>
       ))}
     </div>

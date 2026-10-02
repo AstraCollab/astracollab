@@ -580,11 +580,11 @@ const planContext: MemoryEngineService["planContext"] = (input) =>
       if (input.userMessage) {
         const gate = runFastGate(input.userMessage)
         if (gate.action === "inject_caution" && gate.cautionNote) {
-          sections.push(`### ⚠️ Premise Correction Notice\n${gate.cautionNote}`)
+          sections.push(`### ⚠️ Correction Detected In This Message\n${gate.cautionNote}`)
         }
       }
 
-      // 2. Proprioceptive guardrails: domains this agent keeps getting wrong.
+      // 2. Weak-domain warnings: domains this agent keeps getting wrong.
       const selfModel = yield* store.getSelfModel(input.organizationId)
       const weak = selfModel.activeDomains
         .map((domain) => ({ domain, capability: selfModel.domains[domain] }))
@@ -610,7 +610,7 @@ const planContext: MemoryEngineService["planContext"] = (input) =>
           )
           lines.push(`- ${domain} (${Math.round(cap.reliabilityScore * 100)}% reliable): ${pitfalls || "be careful"}`)
         }
-        sections.push(`### Proprioceptive Guardrails (High Attention Required)\n${lines.join("\n")}`)
+        sections.push(`### Weak Domains — Under 75% Reliability\n${lines.join("\n")}`)
       }
 
       // 3. The index: one line per memory, bodies withheld unless a trigger earned them.
@@ -637,7 +637,7 @@ const planContext: MemoryEngineService["planContext"] = (input) =>
         )
       }
 
-      // 4. Active tensions earn full bodies: they are prompts to clarify, not trivia.
+      // 4. Unresolved contradictions earn full bodies: they are prompts to clarify, not trivia.
       const tensions = yield* store.listTensions(input.organizationId, "active")
       if (tensions.length > 0) {
         const lines = tensions.map((tension) => {
@@ -654,7 +654,7 @@ const planContext: MemoryEngineService["planContext"] = (input) =>
           )
           return `- [${tension.impact.toUpperCase()}] "${tension.claimA.statement}" conflicts with "${tension.claimB.statement}". Ask: ${tension.actionableQuestion}`
         })
-        sections.push(`### Active Knowledge Tensions (Contradictions)\n${lines.join("\n")}`)
+        sections.push(`### Unresolved Contradictions\n${lines.join("\n")}`)
       }
 
       return new MemoryInjectionReport({

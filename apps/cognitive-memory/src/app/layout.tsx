@@ -8,15 +8,15 @@ const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"]
 
 export const metadata: Metadata = {
   title: {
-    default: "Cognitive Memory — memory for LLM agents",
+    default: "Cognitive Memory — every memory line has a reason and a price",
     template: "%s · Cognitive Memory"
   },
   description:
-    "Your agent forgets everything between sessions. Cognitive Memory keeps the durable facts it is told and hands back the relevant ones each turn — indexed by default, full bodies only where something earned them.",
+    "A four-tier memory service for agents. Every line injected into a prompt carries the rule that selected it and its token cost, so the per-turn budget is a decision rather than an accident.",
   openGraph: {
     title: "Cognitive Memory",
     description:
-      "Deterministic four-tier memory for agents, served as a credentialed storage layer you can read end to end.",
+      "A four-tier memory service for agents: contradictions kept as first-class records, per-domain reliability, and a bounded, auditable prompt block.",
     type: "website"
   }
 }

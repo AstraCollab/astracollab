@@ -11,13 +11,22 @@ import { SiteHeader } from "@/components/site-header"
  * claim on it is either a measured number from `scripts/measure.ts` or a
  * behaviour the test suite pins down. The deep reference lives at /docs; a
  * landing page that tries to be the manual is a manual nobody reads.
+ *
+ * The page leads on cost and attribution rather than on forgetfulness.
+ * Forgetting is the whole category's opening line and it is true of everything
+ * here; what a similarity search cannot offer is a per-turn price and a reason
+ * attached to every line, and that is the part worth the first screen.
+ *
+ * The hero shows the `/v1/context` receipt rather than the rendered prompt. The
+ * prompt is a consequence; the receipt is the evidence, and it is the part a
+ * reader cannot get from a competitor's docs.
  */
 
 const TIERS = [
   {
     tier: "L0",
     name: "Pinned",
-    holds: "Unresolved contradictions, the self-model, and any correction notice for the message being answered.",
+    holds: "Unresolved contradictions, per-domain reliability, and any correction caught in the message being answered.",
     cost: "Full body, every turn",
     when: "When the agent must not guess, or must be careful in a domain it has been failing in."
   },
@@ -52,32 +61,90 @@ const REASONS = [
   ["", "Nothing.", "Above the index budget. The report says so rather than quietly dropping the tail."]
 ] as const
 
+const RECEIPT = [
+  {
+    id: "mem_7f2a",
+    tier: "L1",
+    reason: "index",
+    gist: "staging build ID is ZQ7X4M2K",
+    why: "One line. Nothing in the message asked for it.",
+    tokens: 11
+  },
+  {
+    id: "mem_1c84",
+    tier: "L1",
+    reason: "index",
+    gist: "files are named in kebab-case",
+    why: "One line. Held since the last session.",
+    tokens: 9
+  },
+  {
+    id: "mem_9b03",
+    tier: "L3",
+    reason: "trigger",
+    gist: "internal staging host is internal-hbr-2291.example",
+    why: "Full body. The message named a host not in the transcript.",
+    tokens: 41
+  },
+  {
+    id: "ten_44e1",
+    tier: "L0",
+    reason: "tension",
+    gist: "“We deploy on Fridays” vs “We never deploy on Fridays”",
+    why: "Full body. Two stored claims cannot both be true.",
+    tokens: 38
+  }
+] as const
+
+const SDK_CLIENTS = [
+  {
+    name: "Official — TypeScript",
+    body: "One dependency, typed end to end, Node 22+. Resources mirror the endpoints one-to-one, so memory.context.build() is POST /v1/context and nothing else.",
+    note: "runTurn, recallOrExplain and seedMemories wrap the workflows that are easy to get subtly wrong."
+  },
+  {
+    name: "Official — in-process engine",
+    body: "The same package also exports the deterministic layer on its own: tiering, ranking, reconciliation, the fast gate. No database, no network, no model in the retrieval path.",
+    note: "Importing createClient alone does not pull the engine in, so tree-shaking keeps the client small."
+  },
+  {
+    name: "Any other language",
+    body: "Every endpoint is JSON over HTTP with a bearer key. Python, Go, Rust or anything else is a request library and the two calls below — no generated client, no version lock-in.",
+    note: "Errors carry a tag, a message, and requiredScope or issues where they apply, so a caller can branch without parsing prose."
+  },
+  {
+    name: "Agent harnesses",
+    body: "not-another-harness wires memory in as a dependency and exposes it in-process. If your harness is not that package, the two-call integration is the whole contract.",
+    note: "Deliberately not a plugin API: an unofficial memory layer cannot be held to a per-turn cost, which is the point of the receipts."
+  }
+] as const
+
 const CAPABILITIES = [
   {
-    title: "It keeps contradictions",
-    body: "Two statements that cannot both be true are stored as a pair, pinned into every prompt with the question to ask, until somebody resolves them. This is the difference between an agent that asks and one that silently picks a side.",
-    aside: "A store of facts cannot do this. A fact store has nowhere to put 'these disagree'."
+    title: "Every line has a reason attached",
+    body: "A gist line for everything held, a full body only for an identifier you named, a contradiction, or a domain the agent has been unreliable in. The rule that selected each line is stored with it, so a bad prompt is a thing you can read rather than a thing you can only feel.",
+    aside: "There is no published benchmark for pre-inject versus on-demand retrieval, so the honest way to tune the tradeoff is to watch it happen."
   },
   {
-    title: "It knows what it is bad at",
-    body: "Record how each domain went and the service tracks reliability as a moving average. Below 75%, that domain is rendered into every prompt as a guardrail, so a weak area gets explicit attention instead of a confident guess.",
-    aside: "Nothing here is inferred. Without outcomes recorded, the self-model stays at its priors and no guardrail ever fires."
+    title: "The window stays yours",
+    body: "A similarity search returns k results, and k is whatever the caller passed. Here the per-turn budget is a setting, and a full body is spent only where something concrete earned it — so what your agent reads does not grow with everything you have ever told it.",
+    aside: "When the ceiling bites, the report says truncated: true. It does not quietly drop the tail and let you assume the rest was irrelevant."
   },
   {
-    title: "It refuses to invent",
-    body: "Instructions about how to behave in one conversation are not durable project facts, and are rejected with a reason. A recall that matches nothing returns an empty result, so the agent is told to admit ignorance instead of filling the gap.",
-    aside: "The rejection is returned, not swallowed. A client that sent ten statements and got three back is told which seven did not land."
+    title: "A disagreement is a record, not a coin toss",
+    body: "Two claims that cannot both be true are stored as a pair, with the question that would settle it, and pinned into every prompt until somebody answers. Nothing is silently reconciled away, and no model is asked to adjudicate.",
+    aside: "A list of strings has nowhere to put “these disagree”. It stores both, or it quietly drops one — and the agent cannot tell you which happened."
   },
   {
-    title: "It shows its working",
-    body: "Every injection is recorded with the reason it was included and what it cost. The dashboard previews the exact block your agent is about to receive, for any message you type.",
-    aside: "There is no published benchmark for pre-inject versus on-demand retrieval, so the only honest way to tune the tradeoff is to watch it."
+    title: "Nothing lands without a reason",
+    body: "A rejection comes back with the reason it was rejected, so a client that sent ten statements and got three back is told which seven did not land. Corrections in the incoming message are caught synchronously and a recall that matches nothing returns empty rather than a plausible guess.",
+    aside: "Deterministic extraction runs first, so a plainly-stated fact is learned even with no model configured at all."
   }
 ] as const
 
 const NUMBERS = [
   ["5.0 ms", "recall p50", "Deterministic ranked lookup over 200 stored memories. No model in the path, so it does not move when a provider does."],
-  ["2.9 ms", "context build p50", "The whole prompt block — index, triggers, tensions, guardrails — assembled before the model is called."],
+  ["2.9 ms", "context build p50", "The whole prompt block — index lines, triggered bodies, contradictions and weak domains — assembled before the model is called."],
   ["77%", "fewer tokens", "Indexing 200 memories costs 1.3k tokens. Injecting all 200 bodies costs 3.6k. Bodies are spent only where something earned them."],
   ["0", "models required", "Deterministic extraction runs first. A deployment with no model key still learns plainly-stated facts."]
 ] as const
@@ -85,20 +152,28 @@ const NUMBERS = [
 const USE_CASES = [
   ["Coding agents", "Hold the build id, the deploy command, the naming convention, the thing that broke last month. Get them back in the one line that matters."],
   ["Support agents", "Remember what this customer was told, what was actually true, and which of the two is now contradicted."],
-  ["Research assistants", "Keep a running set of findings and the open questions, with contradictions surfaced rather than averaged away."],
-  ["Internal assistants", "Company facts with a source, an owner, and a date — and a self-model of which topics the assistant is weak on."],
+  ["Research assistants", "Keep a running set of findings and the open questions, with disagreements surfaced rather than averaged away."],
+  ["Internal assistants", "Company facts with a source, an owner, and a date — and a running record of which topics the assistant is weak on."],
   ["Long-running work", "A service the agent can call for the hundredth session. Memory survives deploys, restarts, and model swaps."],
   ["Multi-tenant products", "Memory as a credentialed storage layer: your own database, your own keys, revocable per integration."]
 ] as const
 
 const FAQ = [
   {
+    q: "How do I know what memory is costing me?",
+    a: "Every context build returns the entries that produced it, each with the rule that selected it — index, trigger, tension, guardrail — and its token cost, plus the total and whether the budget truncated. Analytics splits the spend by that same reason, which is the difference between “memory is expensive” and a number you can act on: a build spending its whole budget on index lines and no bodies is a store with nothing worth promoting, not a budget that needs raising."
+  },
+  {
     q: "Is this a vector database with extra steps?",
-    a: "No, and the difference is load-bearing. Ranking here is deterministic token overlap with identifier matching, so recall behaves identically on every run and on every model. A semantic index earns its keep on fuzzy paraphrase over very large corpora; for the register an agent actually stores — URLs, build ids, ports, conventions — exact tokens are both faster and more precise, and you can explain why a memory matched."
+    a: "No, and the difference is load-bearing. Ranking here is deterministic token overlap with identifier matching, so recall behaves identically on every run and on every model, and you can name the terms that matched. A semantic index earns its keep on fuzzy paraphrase over very large corpora; for the register an agent actually stores — URLs, build ids, ports, conventions — exact tokens are both faster and more precise."
   },
   {
     q: "Do I need a model configured?",
     a: "No. Deterministic pattern extraction runs first, so a plainly-stated fact is captured even with no provider configured at all — health reports `extractor: rules-only` so you know which mode you are in. Add a key and turns are also summarised and contradictions are detected, with a typed output contract validated by the effect/ai layer rather than by parsing prose."
+  },
+  {
+    q: "What happens when two stored facts contradict each other?",
+    a: "They are kept. A contradiction is stored as a pair of claims plus the question that would settle it, and it is pinned into every context build until it is resolved — so the agent sees both sides and the question rather than whichever one happened to be stored first. Resolving one keeps the resolution and the pattern it revealed, because deleting it just means rediscovering the same contradiction next month."
   },
   {
     q: "What happens when the agent is wrong?",
@@ -136,47 +211,77 @@ export default function Home() {
           />
           <div className="relative mx-auto w-full max-w-5xl px-6 pb-20 pt-20 sm:pt-28">
             <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-violet-300/70">
-              Memory and continual learning for agents
+              A budget and a paper trail
             </p>
             <h1 className="mt-5 max-w-3xl text-4xl font-medium leading-[1.1] tracking-tight text-balance sm:text-5xl">
-              Your agent forgets everything between sessions.
-              <span className="text-zinc-500"> This is the layer that stops it.</span>
+              Every line comes with a reason and a price.
+              <span className="text-zinc-500"> Nothing enters the prompt unattributed.</span>
             </h1>
             <p className="mt-6 max-w-2xl text-base leading-7 text-zinc-400">
-              Cognitive Memory keeps the durable facts an agent is told — build ids,
-              hosts, conventions, constraints — and hands back the relevant ones
-              each turn. An index by default. Full bodies only where something
-              earned them. No model in the retrieval path, so recall quality does
-              not change when your provider does.
+              You cannot budget what has no price. Cognitive Memory files what an
+              agent is told into four tiers &mdash; a gist line by default, a full
+              body only where something concrete earned it &mdash; and returns the
+              reason and the token cost of every line it injects.
             </p>
 
             <div className="mt-9 flex flex-wrap items-center gap-3">
-              <PrimaryLink href="/dashboard">Get an API key</PrimaryLink>
-              <SecondaryLink href="/docs">Read how it works</SecondaryLink>
+              <PrimaryLink href="/dashboard">Mint an API key</PrimaryLink>
+              <SecondaryLink href="/docs">Read the reference</SecondaryLink>
             </div>
             <p className="mt-4 text-xs text-zinc-600">
-              Self-hosted SQLite · REST API · TypeScript SDK · any model, any harness
+              Self-hosted SQLite · REST API · TypeScript SDK · learns with no model
+              key set
             </p>
 
             <div className="mt-14 overflow-hidden rounded-xl border border-white/[0.08] bg-black/40">
-              <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-2">
+              <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-2">
                 <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">
-                  what the agent actually receives
+                  one turn, itemised
+                </span>
+                <span className="font-mono text-[10px] text-zinc-700">
+                  POST /v1/context
                 </span>
               </div>
-              <pre className="overflow-x-auto px-4 py-4 font-mono text-[11px] leading-5 text-zinc-400">
-                {`## Memory
 
-### Memory index — established earlier in this project
-One line per remembered item. Ask for the full item when a line is not enough.
-- staging build ID is ZQ7X4M2K (deployment)
-- file naming: kebab-case (naming)
-- internal staging host is internal-hbr-2291.example (infra)
+              <div className="divide-y divide-white/[0.04]">
+                {RECEIPT.map((line) => (
+                  <div key={line.id} className="grid grid-cols-[auto_1fr_auto] items-center gap-3 px-4 py-2.5">
+                    <span className="w-[62px] font-mono text-[10px] uppercase tracking-wide text-zinc-700">
+                      {line.tier}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate text-[13px] leading-5 text-zinc-300">
+                        {line.gist}
+                      </p>
+                      <p className="mt-0.5 text-[11px] leading-4 text-zinc-600">
+                        {line.why}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded border border-white/[0.08] px-1.5 py-0.5 font-mono text-[10px] text-violet-200/80">
+                        {line.reason}
+                      </span>
+                      <span className="w-12 text-right font-mono text-[11px] text-zinc-500">
+                        {line.tokens}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
 
-### Active Knowledge Tensions (Contradictions)
-- [CRITICAL] “We deploy on Fridays” conflicts with “We never deploy on Fridays”.
-  Ask: Which is it?`}
-              </pre>
+              <div className="border-t border-white/[0.06] px-4 py-3">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-[11px] text-zinc-500">
+                    99 of a 2,000 token ceiling
+                  </span>
+                  <span className="font-mono text-[10px] text-zinc-700">
+                    truncated: false
+                  </span>
+                </div>
+                <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/[0.06]">
+                  <div className="h-full w-[5%] rounded-full bg-violet-400/70" />
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -191,7 +296,7 @@ One line per remembered item. Ask for the full item when a line is not enough.
             <Step n="01" title="Capture" body="Deterministic patterns first: URLs, assignments, stated requirements. No model, no refusal, no silent loss." />
             <Step n="02" title="Reconcile" body="Restatements are folded into what is held. A merge that would drop a qualifier is refused and both are kept." />
             <Step n="03" title="File" body="Into one of four tiers. New facts land hot so the next prompt already knows them." />
-            <Step n="04" title="Plan" body="Build the block: a gist line for everything, a full body only for triggers, tensions and guardrails." />
+            <Step n="04" title="Plan" body="Build the block: a gist line for everything, a full body only for triggers, contradictions and weak domains." />
             <Step n="05" title="Inject" body="Into the system prompt, inside a token budget that reports when it truncated." />
           </ol>
         </Section>
@@ -199,8 +304,8 @@ One line per remembered item. Ask for the full item when a line is not enough.
         {/* What it is */}
         <Section
           eyebrow="What this is"
-          title="Cognitive memory, not a notes table"
-          lede="A store of facts is easy to build and quietly useless on its own. What an agent actually needs is somewhere to put the things a flat list of strings cannot represent."
+          title="A memory store that tells you what it cost"
+          lede="Keeping facts is the easy half. The part that decides whether an agent is usable in production is everything around them: what a stored fact costs per turn, which line earned its place, what was refused, and why a recall came back empty."
         >
           <div className="grid gap-3 sm:grid-cols-2">
             {CAPABILITIES.map((capability) => (
@@ -249,7 +354,7 @@ One line per remembered item. Ask for the full item when a line is not enough.
         <Section
           eyebrow="Why an index"
           title="Injecting everything is how memory becomes a liability"
-          lede="Research on context rot finds accuracy degrading with input length, and the damage comes from topically-related distractors rather than from structure. A small, high-signal index with on-demand bodies keeps recall cheap without filling the window with material that is usually irrelevant."
+          lede="Chroma's 2025 context-rot report measures accuracy falling as input length grows, with the damage coming from topically-related distractors rather than from structure. A short, high-signal index with on-demand bodies keeps recall cheap without spending the window on material that is usually irrelevant."
         >
           <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
             <div className="overflow-hidden rounded-xl border border-white/[0.08]">
@@ -306,8 +411,8 @@ One line per remembered item. Ask for the full item when a line is not enough.
         {/* Use cases */}
         <Section
           eyebrow="Use cases"
-          title="Built for agents that have to be trusted twice"
-          lede="The same failure everywhere: an agent that was right yesterday is confidently wrong today, and nobody can tell which. Memory is what turns a session into a relationship with the work."
+          title="For agents that have to be right twice"
+          lede="The same failure everywhere: an agent that was right last month is confidently wrong today, and nothing in the transcript shows which. A bounded prompt and a recorded reason for every line are what turn one session into continuity."
         >
           <div className="grid gap-px overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.06] sm:grid-cols-2 lg:grid-cols-3">
             {USE_CASES.map(([title, body]) => (
@@ -319,15 +424,37 @@ One line per remembered item. Ask for the full item when a line is not enough.
           </div>
         </Section>
 
-        {/* Quickstart */}
+        {/* SDK */}
         <Section
-          eyebrow="Quickstart"
-          title="One call before the model, one after"
-          lede="The whole integration is two endpoints. If you wire only these two, memory works: the block goes in before the model runs, and the finished exchange comes back to be learned from."
+          eyebrow="SDK"
+          title="One typed client, and plain HTTP for everything else"
+          lede="There is one official SDK, and it is the only one that needs installing. Every endpoint is plain JSON over HTTP, so the other way in is curl — which is why the integration below is two calls in any language, not a port waiting to happen."
         >
+          <div className="overflow-hidden rounded-xl border border-white/[0.08]">
+            <div className="flex items-center justify-between gap-4 border-b border-white/[0.07] bg-white/[0.03] px-4 py-2.5">
+              <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">
+                @astracollab/cogmem
+              </span>
+              <code className="font-mono text-[11px] text-zinc-400">
+                pnpm add @astracollab/cogmem
+              </code>
+            </div>
+            <div className="grid gap-px bg-white/[0.06] sm:grid-cols-2">
+              {SDK_CLIENTS.map((client) => (
+                <div key={client.name} className="bg-[#08080b] p-5">
+                  <h3 className="text-[13px] font-medium text-zinc-100">{client.name}</h3>
+                  <p className="mt-2 text-xs leading-5 text-zinc-500">{client.body}</p>
+                  {client.note ? (
+                    <p className="mt-3 text-[11px] leading-5 text-zinc-700">{client.note}</p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="grid gap-3 lg:grid-cols-2">
             <Code
-              title="TypeScript"
+              title="TypeScript — the whole turn"
               body={`import { createClient, runTurn } from "@astracollab/cogmem"
 
 const memory = createClient({
@@ -335,18 +462,22 @@ const memory = createClient({
   baseUrl: "http://localhost:3000",
 })
 
-// once per turn, and the loop is correct by construction
+// context before the model, learning after it
 const { context, learning } = await runTurn(
   memory,
   {
     userMessage,
-    run: (ctx) => callYourModel(ctx, userMessage),
+    run: (block) => callYourModel(block, userMessage),
   },
   { domain: "database" }
-)`}
+)
+
+context.totalTokens   // what this turn cost
+context.entries       // every line, with its reason
+learning?.counts      // stored, merged, rejected, tensions`}
             />
             <Code
-              title="Any HTTP client"
+              title="Any language — two HTTP calls"
               body={`# what the agent should know before it answers
 curl -X POST localhost:3000/api/v1/context \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
@@ -362,8 +493,9 @@ curl -X POST localhost:3000/api/v1/turns \\
           </div>
           <p className="text-sm text-zinc-500">
             The SDK is ~3kB gzipped, ESM-first, and depends on one small fetch
-            wrapper.{" "}
-            <Link href="/docs" className="text-violet-200 hover:text-violet-100">
+            wrapper. It also ships the deterministic engine, so the same ranking
+            and tiering can run in-process with no service at all.{" "}
+            <Link href="/docs#sdk" className="text-violet-200 hover:text-violet-100">
               Full reference →
             </Link>
           </p>
@@ -373,7 +505,7 @@ curl -X POST localhost:3000/api/v1/turns \\
         <Section
           eyebrow="Questions"
           title="The ones worth answering honestly"
-          lede="Including the two that decide whether this is the right tool for you: it is not a vector database, and it does not need a model."
+          lede="Including the three that decide whether this is the right tool for you: what it costs, whether it needs a model, and why it is not a vector database."
         >
           <div className="divide-y divide-white/[0.06] overflow-hidden rounded-xl border border-white/[0.08]">
             {FAQ.map((item) => (
@@ -394,7 +526,7 @@ curl -X POST localhost:3000/api/v1/turns \\
         <section className="border-t border-white/[0.06]">
           <div className="mx-auto w-full max-w-5xl px-6 py-20 text-center">
             <h2 className="text-2xl font-medium tracking-tight text-balance">
-              Give your agent something it can still remember on Friday.
+              Give every token your agent spends a receipt.
             </h2>
             <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-zinc-500">
               Create an account, make an organisation, and mint a key. The secret
