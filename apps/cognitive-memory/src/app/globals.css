@@ -41,3 +41,52 @@ pre,
   border: 1px solid rgba(167, 139, 250, 0.25);
   user-select: all;
 }
+
+/*
+ * Syntax palette.
+ *
+ * Every colour is a tint of the violet accent or a step of the same neutral, so
+ * a highlighted block still belongs to the page. Saturation is deliberately low:
+ * a documentation page is mostly prose, and a block of fully saturated syntax
+ * colours reads as an advertisement for the highlighter rather than as code.
+ *
+ * The one place a second hue appears is strings, because a literal is the thing
+ * you are most often looking for in a snippet and violet-on-violet is invisible.
+ */
+.tok-com {
+  color: #55555f;
+  font-style: italic;
+}
+.tok-kw {
+  color: #b39cf5;
+}
+.tok-str {
+  color: #8fbfa8;
+}
+.tok-num {
+  color: #c9a86a;
+}
+.tok-bool {
+  color: #c9a86a;
+}
+.tok-fn {
+  color: #d8d5e8;
+}
+.tok-prop {
+  color: #cfc9ee;
+}
+.tok-var {
+  color: #a3a1b8;
+}
+.tok-key {
+  color: #a99bef;
+}
+.tok-cmd {
+  color: #b39cf5;
+}
+.tok-flag {
+  color: #8b89a3;
+}
+.tok-punc {
+  color: #6f6d80;
+}

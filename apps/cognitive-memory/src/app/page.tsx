@@ -495,7 +495,7 @@ curl -X POST localhost:3000/api/v1/turns \\
             The SDK is ~3kB gzipped, ESM-first, and depends on one small fetch
             wrapper. It also ships the deterministic engine, so the same ranking
             and tiering can run in-process with no service at all.{" "}
-            <Link href="/docs#sdk" className="text-violet-200 hover:text-violet-100">
+            <Link href="/docs/sdk" className="text-violet-200 hover:text-violet-100">
               Full reference →
             </Link>
           </p>

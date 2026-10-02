@@ -1,16 +1,23 @@
 import Link from "next/link"
 
+import { DocsSearch } from "./docs/search"
+
 /**
  * The header.
  *
  * Sticky, because the documentation link matters more than usual: a visitor
  * deciding whether to trust a memory service wants the reference open in the
  * other tab, and a nav that scrolls away punishes that.
+ *
+ * `width` is a parameter because the documentation frame is three columns wide
+ * and the marketing pages are one. Sharing the component keeps a single nav to
+ * maintain; passing the container keeps the logo aligned with the content
+ * instead of hanging in a narrower column of its own.
  */
-export function SiteHeader() {
+export function SiteHeader({ width = "max-w-5xl" }: { width?: string }) {
   return (
     <header className="sticky top-0 z-20 border-b border-white/[0.06] bg-[#08080b]/85 backdrop-blur">
-      <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-3.5">
+      <div className={`mx-auto flex w-full ${width} items-center justify-between px-6 py-3.5`}>
         <Link href="/" className="flex items-center gap-2.5">
           <Mark />
           <span className="text-[13px] font-medium tracking-tight">Cognitive Memory</span>
@@ -28,12 +35,15 @@ export function SiteHeader() {
           </Link>
         </nav>
 
-        <Link
-          href="/dashboard"
-          className="rounded-lg border border-white/12 px-3 py-1.5 text-[12px] text-zinc-200 transition hover:border-violet-400/40 hover:bg-violet-500/10"
-        >
-          Get a key
-        </Link>
+        <div className="flex items-center gap-2">
+          <DocsSearch />
+          <Link
+            href="/dashboard"
+            className="rounded-lg border border-white/12 px-3 py-1.5 text-[12px] text-zinc-200 transition hover:border-violet-400/40 hover:bg-violet-500/10"
+          >
+            Get a key
+          </Link>
+        </div>
       </div>
     </header>
   )

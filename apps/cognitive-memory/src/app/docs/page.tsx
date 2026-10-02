@@ -1,408 +1,179 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 
-import { SiteFooter } from "@/components/site-footer"
-import { SiteHeader } from "@/components/site-header"
+import { CodeBlock } from "@/components/docs/code-block"
+import { DocPage } from "@/components/docs/page"
+import {
+  Callout,
+  DocTable,
+  PageCards,
+  type DocSectionSpec
+} from "@/components/docs/primitives"
+import { findDocPage } from "@/lib/docs"
 
 export const metadata: Metadata = {
-  title: "Documentation",
+  title: "Overview",
   description:
-    "How Cognitive Memory works: the four tiers, what gets learned, how restatements are reconciled, how contradictions are held open, and why every injection is labelled."
+    "A memory service for agents: durable facts stored in four tiers, contradictions held open, a bounded prompt block, and a recorded reason for every line injected."
 }
 
 /**
- * The reference.
+ * The index.
  *
- * The landing page argues that this is worth having; this page is what you read
- * once you have decided, and it is written to be read rather than skimmed. Every
- * rule here corresponds to something enforced in code and pinned by a test,
- * because a document that describes intended behaviour rather than actual
+ * The landing page argues that this is worth having. This page is what you read
+ * once you have decided, so it opens with the shape of the thing and a way in,
+ * and every rule it states corresponds to something enforced in code and pinned
+ * by a test — a document that describes intended behaviour rather than actual
  * behaviour is worse than none.
  */
 
-const SECTIONS = [
-  { id: "model", label: "The model" },
-  { id: "tiers", label: "Tiers" },
-  { id: "capture", label: "What gets learned" },
-  { id: "reconciliation", label: "Reconciliation" },
-  { id: "injection", label: "Injection" },
-  { id: "recall", label: "Recall" },
-  { id: "tensions", label: "Contradictions" },
-  { id: "self-model", label: "Self-model" },
-  { id: "api", label: "API" },
-  { id: "sdk", label: "SDK" },
-  { id: "dashboard", label: "Dashboard" },
-  { id: "auth", label: "Credentials" }
-] as const
+/**
+ * Resolved through the map rather than by index, so a page that moves between
+ * groups does not quietly stop appearing on the index.
+ */
+const concept = (slug: string) => findDocPage(`/docs/${slug}`)!
 
-export default function DocsPage() {
-  return (
-    <div className="flex min-h-full flex-col">
-      <SiteHeader />
-
-      <div className="mx-auto flex w-full max-w-5xl flex-1 gap-10 px-6 py-12">
-        <aside className="hidden w-44 shrink-0 lg:block">
-          <nav className="sticky top-20 space-y-2 text-[13px]">
-            {SECTIONS.map((section) => (
-              <a
-                key={section.id}
-                href={`#${section.id}`}
-                className="block text-zinc-500 transition hover:text-zinc-200"
-              >
-                {section.label}
-              </a>
-            ))}
-          </nav>
-        </aside>
-
-        <main className="min-w-0 flex-1 space-y-16 pb-24">
-          <header className="space-y-4">
-            <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-violet-300/60">
-              Documentation
-            </p>
-            <h1 className="text-3xl font-medium tracking-tight">Cognitive Memory</h1>
-            <p className="max-w-2xl text-sm leading-6 text-zinc-400">
-              A memory service for agents. It stores durable facts, holds open the
-              ones that contradict each other, decides what to put in front of a
-              model each turn, and tells you why. The retrieval path is
-              deterministic by design, and the reasoning behind every threshold
-              below is written down because the numbers are only defensible with
-              it.
-            </p>
-            <div className="flex flex-wrap gap-3 pt-2">
-              <Link
-                href="/dashboard"
-                className="rounded-lg bg-violet-500 px-3.5 py-2 text-[13px] font-medium text-white transition hover:bg-violet-400"
-              >
-                Get an API key
-              </Link>
-              <Link
-                href="/#tiers"
-                className="rounded-lg border border-white/12 px-3.5 py-2 text-[13px] text-zinc-300 transition hover:border-white/25"
-              >
-                Back to the overview
-              </Link>
-            </div>
-          </header>
-
-          <Doc id="model" title="The model">
-            <p>
-              Most “memory” for agents is a list of strings and a similarity
-              search. That is enough to make a demo feel like recall, and it fails
-              in three specific ways that show up in production.
-            </p>
-            <p>It cannot hold a contradiction.</p>
-            <p>
-              Two stored claims that cannot both be true are, in a flat list,
-              indistinguishable from two unrelated facts. There is nowhere to put
-              “these disagree” — so one of them quietly wins, and the agent
-              proceeds on a premise the user has already contradicted.
-            </p>
-            <p>It has no notion of cost.</p>
-            <p>
-              A similarity search returns k results, and k is chosen by whoever
-              wrote the call. As the store grows, so does the prompt, and the
-              material included falls into two groups: things that were relevant,
-              and things that merely looked like they might be. The second group
-              is what Chroma&rsquo;s 2025 context-rot report measures.
-            </p>
-            <p>It cannot say why something matched.</p>
-            <p>
-              A cosine score is not an explanation. When a user asks why their
-              agent believes something, the honest answer is a floating point
-              number, which is not an answer.
-            </p>
-            <p>
-              This service is built around those three gaps. It stores tiers, so
-              cost per turn is a decision rather than an accident. It stores
-              contradictions as first-class rows. And every injection is recorded
-              with the rule that produced it, so the dashboard can show the exact
-              block a model is about to receive.
-            </p>
-          </Doc>
-
-          <Doc id="tiers" title="Four tiers">
-            <p>
-              A tier is a cost decision. L0 and L1 are written into the prompt
-              every turn; L2 and L3 cost nothing until something promotes or
-              recalls them.
-            </p>
-            <TiersTable />
-            <p>
-              New statements land in <b>L1</b> immediately. Waiting for a
-              promotion pass added a turn of latency, which meant a fact you
-              taught on one turn was still missing from the very next prompt — the
-              most visible possible way for memory to look broken.
-            </p>
-            <p>
-              L1 is capped by the token budget. When the cap bites, the report
-              says <code>truncated: true</code> rather than dropping the tail in
-              silence, and the least recently accessed entries are the ones that
-              lose their place.
-            </p>
-          </Doc>
-
-          <Doc id="capture" title="What gets learned">
-            <p>
-              Learning runs deterministic patterns first, then optionally a model.
-              The order is the point: a model is a good judge and a poor witness,
-              because it can refuse, hedge, or return nothing, and a fact the user
-              plainly stated then never gets learned at all.
-            </p>
-            <Rules />
-            <p>
-              Three things are always refused. Instructions about how to behave in
-              <i> this</i> conversation — “do not verify this against the repo” —
-              are not project facts. A turn whose user message contains a question
-              is a lookup, not a lesson, so learning is skipped: extracting from
-              recall turns stored the assistant’s own answers back as memories,
-              which duplicated facts and evicted the real ones. And anything
-              interaction-scoped is returned as a rejection with a reason rather
-              than dropped.
-            </p>
-          </Doc>
-
-          <Doc id="reconciliation" title="Reconciliation">
-            <p>
-              Two statements can say the same thing. Storing both is how a memory
-              layer becomes unsearchable inside a week, so a candidate is compared
-              against what is already held and folded in — under one rule that
-              governs every merge:
-            </p>
-            <Callout>
-              A merge must keep every distinctive token of both sides. A
-              replacement missing one is refused, and both entries are kept.
-            </Callout>
-            <p>
-              Distinctive tokens are the ones that carry a fact’s identity —
-              identifiers, numbers, codes. Function words and generic nouns
-              (“file”, “name”, “project”) are excluded because they recur in every
-              restatement and hide real differences. The test is deliberately
-              biased towards reporting a loss: a false positive costs one
-              duplicate row, which is recoverable, while a false negative deletes
-              a fact permanently.
-            </p>
-            <p>
-              So “Always run migrations against staging” and “Always run
-              migrations against staging, never production” do not merge. The
-              second says strictly more, and dropping the qualifier is exactly the
-              failure this rule exists to prevent.
-            </p>
-            <p>
-              With a model configured, the ADD / MERGE / REPLACE / REJECT decision
-              is made once per turn for all candidates together, and any failure
-              falls back to keeping both.
-            </p>
-          </Doc>
-
-          <Doc id="injection" title="What goes into the prompt">
-            <p>
-              <code>POST /v1/context</code> returns the block to prepend to a
-              system prompt, plus the entries that produced it and what each cost.
-            </p>
-            <ReasonsTable />
-            <p>
-              The trigger is the interesting one, and it is deterministic. Pull
-              identifiers out of the message — URLs, dotted hosts, paths,
-              SCREAMING_SNAKE, camelCase, long kebab-case, hex-ish codes — and keep
-              only those absent from the visible transcript. If the caller named
-              something concrete the model cannot already see, and a memory
-              mentions it, that memory’s body is included. No model is asked
-              whether that matters.
-            </p>
-            <p>
-              A synchronous fast gate runs first on the raw message and catches
-              explicit corrections — “actually, we switched to Postgres”, “stop
-              using that”, “that’s wrong”. When it fires, a
-              &ldquo;Correction Detected In This Message&rdquo; section goes into
-              the block, because a user visibly changing their mind is the single
-              most reliable signal that the agent’s assumption is stale.
-            </p>
-          </Doc>
-
-          <Doc id="recall" title="Recall">
-            <p>
-              Ranking is token overlap, normalised by the smaller side, with
-              paraphrases of one fact collapsed to their best-scoring instance. No
-              model and no embedding service is involved.
-            </p>
-            <p>
-              That is a deliberate trade. A semantic index earns its keep on fuzzy
-              paraphrase over very large corpora. The register an agent actually
-              stores is URLs, build ids, ports, paths and conventions — where
-              exact tokens are both faster and more precise, and where an
-              embedding adds latency, cost, and a failure mode at the one moment
-              you cannot afford one: mid-conversation.
-            </p>
-            <p>
-              The practical consequence is that recall quality is a property of
-              the deployment rather than of the provider. A question that shares
-              no words with a memory will not match it, which is why the index is
-              pre-staged into every prompt as well: a memory you never had to ask
-              for is a memory that cannot be missed.
-            </p>
-            <Callout>
-              An empty result returns <code>empty: true</code>. The SDK turns that
-              into “if you were not told, say so rather than guessing”, because a
-              silent miss is how a language model invents a fact it was never
-              given.
-            </Callout>
-          </Doc>
-
-          <Doc id="tensions" title="Contradictions">
-            <p>
-              A contradiction is two claims that cannot both be true, stored as a
-              pair with an actionable question. It is pinned into every context
-              build until resolved, and it is the one thing that is always
-              injected in full regardless of budget — because the whole point is
-              that the agent sees both sides rather than picking one.
-            </p>
-            <pre className="overflow-x-auto rounded-xl border border-white/[0.08] bg-black/40 px-4 py-4 font-mono text-[11px] leading-5 text-zinc-400">
-              {`### Unresolved Contradictions
-- [CRITICAL] “We deploy on Fridays” conflicts with “We never deploy on Fridays”. Ask: Which is it?`}
-            </pre>
-            <p>
-              Resolving one keeps the resolution, including the reusable pattern
-              it revealed. Deleting it would mean rediscovering the same
-              contradiction next month.
-            </p>
-          </Doc>
-
-          <Doc id="self-model" title="The self-model">
-            <p>
-              Reliability per domain, tracked as a moving average over outcomes
-              you record. Any active domain below 75% is written into every prompt
-              under a &ldquo;Weak Domains&rdquo; heading, listing its known failure
-              patterns and what has worked.
-            </p>
-            <p>
-              One detail worth stating plainly, because the obvious formula gets
-              it wrong: the average carries a prior of two samples. Dividing by
-              the sample count makes the first outcome fully replace the starting
-              estimate, so a single failed task takes a domain from 0.8 to 0 — and
-              the domain then trips the 75% threshold forever. With the prior, one
-              failure is a strong signal and ten are conclusive, which is what a
-              reliability number should mean.
-            </p>
-            <p>
-              Nothing here is inferred. Without outcomes recorded through{" "}
-              <code>POST /v1/self-model/outcome</code>, the model stays at its
-              priors and no weak-domain warning ever fires, which is the most
-              common reason this looks like it is not working.
-            </p>
-          </Doc>
-
-          <Doc id="api" title="API">
-            <p>Every endpoint is JSON. Authenticate with <code>Authorization: Bearer &lt;key&gt;</code>.</p>
-            <ApiTable />
-            <p>
-              Errors carry a tag, a message, and whatever is actionable:{" "}
-              <code>requiredScope</code> on a 403, <code>issues</code> on a 400. A
-              caller can therefore tell a wrong key from a wrong scope, and a
-              malformed body from an outage, without parsing prose.
-            </p>
-          </Doc>
-
-          <Doc id="sdk" title="SDK">
-            <p>
-              One official package,{" "}
-              <code>@astracollab/cogmem</code>, on npm. It is ~3kB gzipped, ESM-first,
-              and its only hard dependency is <code>ofetch</code>.{" "}
-              <code>ai</code> and <code>zod</code> are optional peers, needed solely
-              for the model-backed arbiter on the{" "}
-              <code>@astracollab/cogmem/arbiter</code> entry point.
-            </p>
-            <pre className="overflow-x-auto rounded-xl border border-white/[0.08] bg-black/40 px-4 py-3 font-mono text-[11px] leading-5 text-zinc-400">
-              pnpm add @astracollab/cogmem
-            </pre>
-            <p>
-              It contains two things, deliberately. The <b>client</b> talks to this
-              service over HTTP. The <b>deterministic layer</b> — tiering, ranking,
-              reconciliation, the fast gate — runs in-process with no database, no
-              network, and no model in the retrieval path. Shipping both means a
-              consumer can start against the service and later run the same logic
-              locally without the behaviour changing underneath them, and the
-              shared primitives are the reason the two cannot drift.
-            </p>
-            <p>
-              Imports are arranged for tree-shaking: <code>createClient</code> alone
-              does not pull the in-process engine in.
-            </p>
-
-            <p className="pt-2 text-zinc-300">The turn helper</p>
-            <p>
-              <code>runTurn</code> is the recommended entry point, because the
-              order is the part that is easy to get wrong: build context keyed on
-              the message being answered, run the model, learn from the finished
-              exchange, then record how the domain went.
-            </p>
-            <pre className="overflow-x-auto rounded-xl border border-white/[0.08] bg-black/40 px-4 py-4 font-mono text-[11px] leading-5 text-zinc-400">
-              {`import { createClient, runTurn } from "@astracollab/cogmem"
-
-const memory = createClient({
-  apiKey: process.env.COGNITIVE_MEMORY_KEY!,
-  baseUrl: "http://localhost:3000",
-})
-
-const { context, learning, learningSkipped } = await runTurn(
-  memory,
-  { userMessage, run: (block) => callYourModel(block, userMessage) },
-  { domain: "database", sessionId }
-)`}
-            </pre>
-            <p>
-              The last two steps never fail the turn. A memory outage cannot take
-              down a model call that already succeeded, so the helper catches and
-              reports instead of rethrowing — and <code>learningSkipped</code> is
-              returned rather than left null, because a silent skip looks
-              identical to a working one until the thing you taught it never comes
-              back. <code>domain</code> is the input that makes the self-model mean
-              anything; without it the scores stay at their priors.
-            </p>
-
-            <p className="pt-2 text-zinc-300">Resources</p>
-            <p>
-              Method names map one-to-one onto endpoints, so the client is never a
-              second, divergent copy of the service. Resources are{" "}
-              <code>readonly</code>, which stops a caller reassigning one half of
-              the client and wondering why the other half stopped seeing the
-              change.
-            </p>
-            <SdkTable />
-            <p>
-              Two construction styles ship on purpose —{" "}
-              <code>new Cogmem(…)</code> and <code>createClient(…)</code> — because
-              there is no reason to make anyone rename, and the factory is the one
-              that is easy to mock in a test.
-            </p>
-
-            <p className="pt-2 text-zinc-300">Config and errors</p>
-            <p>
-              <code>apiKey</code> is the only required field. <code>baseUrl</code>{" "}
-              defaults to the current origin in a browser and localhost otherwise;
-              <code> timeout</code>, <code>retry</code>, <code>headers</code> and{" "}
-              <code>debug</code> are optional. Debug logging is on by default,
-              which is a deliberate choice for anyone who has been burned by a
-              wrong base URL — which is everyone, exactly once.
-            </p>
-            <p>
-              Every non-2xx response throws <code>CognitiveMemoryError</code>{" "}
-              carrying the tag, the message, and <code>requiredScope</code> or{" "}
-              <code>issues</code> where they apply. A wrong key and a wrong scope
-              are therefore distinguishable in a catch block, without matching on
-              message text.
-            </p>
-
-            <p className="pt-2 text-zinc-300">Other languages</p>
-            <p>
-              There is no Python, Go, or Rust client, and that is a deliberate
-              position rather than a gap in the roadmap: the API is a dozen JSON
-              endpoints over bearer auth, so a generated client in each language
-              would be a second surface to keep in step with the service for no
-              gain. The integration is two calls, and any HTTP client does it.
-            </p>
-            <pre className="overflow-x-auto rounded-xl border border-white/[0.08] bg-black/40 px-4 py-4 font-mono text-[11px] leading-5 text-zinc-400">
-              {`# what the agent should know before it answers
+const SECTIONS: readonly DocSectionSpec[] = [
+  {
+    id: "shape",
+    title: "The shape of it",
+    body: (
+      <>
+        <p>
+          Most &ldquo;memory&rdquo; for agents is a list of strings and a similarity
+          search. That is enough to make a demo feel like recall, and it fails in
+          three specific ways that show up in production.
+        </p>
+        <p>
+          <b>It cannot hold a contradiction.</b> Two stored claims that cannot both
+          be true are, in a flat list, indistinguishable from two unrelated facts.
+          There is nowhere to put &ldquo;these disagree&rdquo; — so one of them
+          quietly wins, and the agent proceeds on a premise the user has already
+          contradicted.
+        </p>
+        <p>
+          <b>It has no notion of cost.</b> A similarity search returns k results,
+          and k is chosen by whoever wrote the call. As the store grows, so does
+          the prompt, and the material included falls into two groups: things that
+          were relevant, and things that merely looked like they might be. The
+          second group is what Chroma&rsquo;s 2025 context-rot report measures.
+        </p>
+        <p>
+          <b>It cannot say why something matched.</b> A cosine score is not an
+          explanation. When a user asks why their agent believes something, the
+          honest answer is a floating point number, which is not an answer.
+        </p>
+        <p>
+          This service is built around those three gaps. It stores{" "}
+          <Link href="/docs/tiers">tiers</Link>, so cost per turn is a decision
+          rather than an accident. It stores contradictions as first-class rows.
+          And every injection is recorded with the rule that produced it, so the{" "}
+          <Link href="/dashboard/context">dashboard</Link> can show the exact block
+          a model is about to receive.
+        </p>
+        <p>
+          The <Link href="/docs/model">model page</Link> is the long version of this
+          argument.
+        </p>
+      </>
+    )
+  },
+  {
+    id: "turn",
+    title: "How a turn works",
+    body: (
+      <>
+        <p>
+          Five steps, in this order. The order is the design: capture runs
+          deterministically before anything optional, and the prompt is assembled
+          before the model is called rather than assembled from whatever the model
+          remembered to ask for.
+        </p>
+        <ol className="ml-5 list-decimal space-y-4">
+          <li>
+            <b className="text-zinc-200">Capture.</b> Deterministic patterns first:
+            URLs, assignments, stated requirements. No model, no refusal, no silent
+            loss. See <Link href="/docs/capture">what gets learned</Link>.
+          </li>
+          <li>
+            <b className="text-zinc-200">Reconcile.</b> Restatements are folded
+            into what is held — but only when the merge keeps every distinctive
+            token, or both entries are kept. See{" "}
+            <Link href="/docs/reconciliation">reconciliation</Link>.
+          </li>
+          <li>
+            <b className="text-zinc-200">File.</b> Into a tier. New facts land hot,
+            so the next prompt already has them. See{" "}
+            <Link href="/docs/tiers">the four tiers</Link>.
+          </li>
+          <li>
+            <b className="text-zinc-200">Plan.</b> A gist line for everything; a
+            full body only for identifiers the message named, unresolved
+            contradictions, and weak domains. See{" "}
+            <Link href="/docs/injection">what goes into the prompt</Link>.
+          </li>
+          <li>
+            <b className="text-zinc-200">Inject.</b> Inside a token budget that
+            reports when it truncated.
+          </li>
+        </ol>
+      </>
+    )
+  },
+  {
+    id: "measured",
+    title: "Measured",
+    body: (
+      <>
+        <p>
+          <code>pnpm --filter cognitive-memory measure</code>, on 200 stored
+          memories. The interesting figure is the last row: 77% fewer tokens than
+          injecting everything, with recall that does not depend on a model being
+          available.
+        </p>
+        <DocTable
+          columns={[{ label: "Measure", width: "14rem", mono: true }, { label: "p50" }]}
+          rows={[
+            ["Recall", "5.0 ms"],
+            ["Context build", "2.9 ms"],
+            ["Index + triggers", "1,320 tokens"],
+            ["Every body", "3,643 tokens"]
+          ]}
+        />
+        <Callout>
+          Every context build is also recorded — the block, the reason each line was
+          included, its token cost, and the identifiers the triggering message
+          named. That is what makes <Link href="/dashboard/analytics">analytics</Link>{" "}
+          an argument rather than a decoration: 118k tokens is a number with no
+          action attached, and &ldquo;104k of it was index lines and 2k was full
+          bodies&rdquo; says the store has nothing worth promoting, which has the
+          opposite fix from raising the ceiling.
+        </Callout>
+        <p>
+          The figures are reproduced in <Link href="/docs/self-hosting">self-hosting</Link>,
+          with the command that regenerates them.
+        </p>
+      </>
+    )
+  },
+  {
+    id: "next",
+    title: "Where to go next",
+    body: (
+      <>
+        <p>
+          If you want it working, <Link href="/docs/quickstart">the quickstart</Link>{" "}
+          is two calls and a key. If you are deciding whether to trust it, read{" "}
+          <Link href="/docs/injection">what goes into the prompt</Link> and{" "}
+          <Link href="/docs/recall">recall</Link> — those two pages are where the
+          design bets are, and both are the ones to check against the code.
+        </p>
+        <p>
+          The smallest useful integration is a context build before the model runs
+          and a turn recorded after it finishes. Nothing else is required, and
+          nothing else is what makes memory work:
+        </p>
+        <CodeBlock language="sh">{`# what the agent should know before it answers
 curl -X POST localhost:3000/api/v1/context \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
@@ -412,290 +183,42 @@ curl -X POST localhost:3000/api/v1/context \\
 curl -X POST localhost:3000/api/v1/turns \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
-  -d '{"userMessage":"...","assistantResponse":"..."}'`}
-            </pre>
-            <p>
-              <code>POST /v1/context</code> returns the block to prepend plus the
-              entries that produced it; <code>POST /v1/turns</code> returns what was
-              stored, merged and rejected. Wire only these two and memory works.
-            </p>
-          </Doc>
+  -d '{"userMessage":"...","assistantResponse":"..."}'`}</CodeBlock>
+      </>
+    )
+  }
+]
 
-          <Doc id="dashboard" title="Dashboard">
-            <p>
-              Ten pages, all authenticated by session cookie rather than by API key —
-              looking at your own memory should not cost you a credential, and
-              handing out keys to open a page would train exactly the habit this
-              service discourages. What each one answers:
-            </p>
-            <DashboardTable />
-            <p>
-              Two of them are worth calling out, because they are the ones that turn
-              a vague feeling into a specific fix.
-            </p>
-            <p>
-              <b>Analytics</b> splits the token spend by the rule that caused each
-              line: index, trigger, tension, guardrail. A build that spends its
-              whole budget on index lines and no bodies is not a memory that needs a
-              bigger budget, it is a store with nothing worth promoting, and the two
-              problems have opposite fixes.
-            </p>
-            <p>
-              <b>Activity</b> replays the block that was actually sent, not the one
-              the planner would produce today. Re-running the planner against current
-              memory answers &ldquo;what would the agent get now&rdquo;, which is a
-              much better-looking answer than the one that caused whatever you are
-              trying to understand. The triggering message is not stored with it —
-              that is the conversation, not the memory — but the identifiers inside
-              it are, because those are what explain why a full body was spent.
-            </p>
-            <p>
-              <b>Settings</b> holds per-organisation overrides of the token ceiling,
-              the index limit and the recall default, plus whether model extraction
-              runs at all and how long the logs are kept. Each override is nullable,
-              and null means &ldquo;inherit the deployment default&rdquo;: a setting
-              that silently reverts is worse than no setting at all, so the page shows
-              both numbers and clearing the override is one click rather than a guess
-              at what the deployment default was last week.
-            </p>
-          </Doc>
-
-          <Doc id="auth" title="Credentials">
-            <p>Two kinds of credential, deliberately separated.</p>
-            <p>
-              A <b>session</b> identifies a person. Better Auth owns users,
-              sessions and organisations; it is what the dashboard uses, and the
-              only thing that can create an organisation or mint a key.
-            </p>
-            <p>
-              An <b>API key</b> identifies an agent. Keys are opaque, scoped,
-              individually revocable, and stored as a sha256 hash — the secret is
-              shown exactly once. A key resolves to one organisation and a set of
-              scopes, and can only read and write that organisation’s memory.
-            </p>
-            <p>
-              The separation is the security model: a leaked agent key cannot mint
-              a new key, cannot change its own scopes, and cannot create an
-              organisation. Rotation happens from a signed-in session.
-            </p>
-            <p>
-              sha256 rather than a slow key derivation, on purpose. Password hashing
-              exists to make guessing a human password expensive; these secrets
-              carry 256 bits of entropy, so there is no search to slow down, and a
-              deliberately slow hash would add latency to every request to protect
-              against an attack that cannot happen. The public prefix means a
-              presented key is one indexed lookup and one constant-time comparison.
-            </p>
-          </Doc>
-        </main>
-      </div>
-
-      <SiteFooter />
-    </div>
-  )
-}
-
-function Doc({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
+export default function DocsOverviewPage() {
   return (
-    <section id={id} className="scroll-mt-24 space-y-4">
-      <h2 className="text-lg font-medium tracking-tight">{title}</h2>
-      <div className="max-w-2xl space-y-4 text-[13px] leading-6 text-zinc-400">{children}</div>
-    </section>
-  )
-}
-
-function Callout({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="rounded-lg border-l-2 border-violet-400/50 bg-violet-500/[0.05] px-4 py-3 text-zinc-300">
-      {children}
-    </p>
-  )
-}
-
-function TiersTable() {
-  const rows = [
-    ["L0", "Pinned", "Unresolved contradictions, weak domains, correction notices", "Full body, always"],
-    ["L1", "Hot cache", "Newly learned and pre-staged facts", "Index line, body on trigger"],
-    ["L2", "Warm store", "Candidates scored against each turn", "Nothing until promoted"],
-    ["L3", "Cold archive", "Everything else, still recallable", "Nothing until recalled"]
-  ] as const
-  return (
-    <div className="overflow-hidden rounded-xl border border-white/[0.08]">
-      <div className="grid grid-cols-[52px_100px_1fr_120px] gap-3 border-b border-white/[0.07] bg-white/[0.03] px-4 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-600">
-        <span>Tier</span>
-        <span>Name</span>
-        <span>Holds</span>
-        <span>Cost</span>
-      </div>
-      {rows.map(([tier, name, holds, cost]) => (
-        <div
-          key={tier}
-          className="grid grid-cols-[52px_100px_1fr_120px] gap-3 border-b border-white/[0.05] px-4 py-3 last:border-0"
-        >
-          <code className="font-mono text-[11px] text-violet-200">{tier}</code>
-          <span className="text-xs text-zinc-200">{name}</span>
-          <span className="text-xs text-zinc-500">{holds}</span>
-          <span className="text-xs text-zinc-600">{cost}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function ReasonsTable() {
-  const rows = [
-    ["index", "gist line", "The default. What nearly every memory costs."],
-    ["trigger", "full body", "A concrete identifier absent from the transcript matched this memory."],
-    ["tension", "full body", "An unresolved contradiction, with the question to ask."],
-    ["guardrail", "full body", "A domain this agent has been unreliable in."]
-  ] as const
-  return (
-    <div className="overflow-hidden rounded-xl border border-white/[0.08]">
-      {rows.map(([reason, included, why]) => (
-        <div
-          key={reason}
-          className="grid grid-cols-[92px_96px_1fr] gap-3 border-b border-white/[0.05] px-4 py-3 last:border-0"
-        >
-          <code className="font-mono text-[11px] text-violet-200">{reason}</code>
-          <span className="text-xs text-zinc-300">{included}</span>
-          <span className="text-xs text-zinc-500">{why}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function Rules() {
-  const rules = [
-    ["URLs", "Unambiguous. A host with a dot in it is captured whole, so a value like internal-hbr-2291.pineapple.example is never truncated at the first period."],
-    ["Stated requirements", "always / never / must / should / make sure to — kept in your own words, because paraphrasing once turned “Never force push” into “requires: force push”."],
-    ["Assignments", "“X is Y” where Y is identifier-shaped. Function words and filler are rejected, so “this is fine” never becomes a memory."],
-    ["Model extraction", "Optional, on top. Project facts, preferences and constraints the patterns cannot see — with the user's statement treated as the signal, not the assistant's confidence."]
-  ] as const
-  return (
-    <div className="space-y-2">
-      {rules.map(([rule, detail]) => (
-        <div key={rule} className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-4 py-3">
-          <p className="text-xs font-medium text-zinc-200">{rule}</p>
-          <p className="mt-1 text-xs leading-5 text-zinc-500">{detail}</p>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function SdkTable() {
-  const rows = [
-    ["memory.context.build()", "POST /v1/context", "The prompt block, its entries, total tokens, truncation."],
-    ["memory.recall.search()", "POST /v1/recall", "Ranked results. empty: true when nothing matched."],
-    ["memory.turns.learn()", "POST /v1/turns", "Learn a completed turn."],
-    ["memory.memories.list()", "GET /v1/memories", "What is held, with tier counts."],
-    ["memory.memories.get(id)", "GET /v1/memories/:id", "One memory in full."],
-    ["memory.memories.create()", "POST /v1/memories", "Store facts outright. Restatements fold in."],
-    ["memory.memories.promote()", "PATCH /v1/memories/:id", "Move between tiers."],
-    ["memory.memories.remove()", "DELETE /v1/memories/:id", "Forget one memory."],
-    ["memory.tensions.list()", "GET /v1/tensions", "Contradictions, filterable by status."],
-    ["memory.tensions.create()", "POST /v1/tensions", "Record a contradiction."],
-    ["memory.tensions.resolve()", "POST /v1/tensions/:id", "Resolve one, keeping the pattern."],
-    ["memory.selfModel.get()", "GET /v1/self-model", "Reliability per domain."],
-    ["memory.selfModel.record()", "POST /v1/self-model/outcome", "Record how a domain went."],
-    ["memory.stats.get()", "GET /v1/stats", "Counts, weak domains, open contradictions."],
-    ["memory.health()", "GET /api/v1/health", "Liveness, limits, extractor mode. No key spent."]
-  ] as const
-  return (
-    <div className="overflow-hidden rounded-xl border border-white/[0.08]">
-      <div className="grid grid-cols-[1fr_150px] gap-3 border-b border-white/[0.07] bg-white/[0.03] px-4 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-600 sm:grid-cols-[1fr_170px_1.4fr]">
-        <span>Method</span>
-        <span>Endpoint</span>
-        <span className="hidden sm:block">Does</span>
-      </div>
-      {rows.map(([method, endpoint, does]) => (
-        <div
-          key={method}
-          className="grid grid-cols-[1fr_150px] gap-3 border-b border-white/[0.05] px-4 py-2.5 last:border-0 sm:grid-cols-[1fr_170px_1.4fr]"
-        >
-          <code className="font-mono text-[11px] text-zinc-300">{method}</code>
-          <code className="font-mono text-[10px] text-violet-200/80">{endpoint}</code>
-          <span className="col-span-2 text-xs leading-5 text-zinc-500 sm:col-span-1">{does}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function DashboardTable() {
-  const rows = [
-    ["/dashboard", "Overview", "What needs a human: unresolved contradictions, weak domains, whether the budget is truncating."],
-    ["/dashboard/context", "Context", "The exact block your agent would be given for any message, with the reason and cost of every line."],
-    ["/dashboard/activity", "Activity", "Every context build, with the block that was sent and the reason each line was included."],
-    ["/dashboard/memory", "Library", "Search, filter, edit, retier and bulk-forget. Plus a recall inspector that names the terms that matched."],
-    ["/dashboard/tensions", "Tensions", "Contradictions by status, with resolve, reopen, and the reusable pattern a resolution revealed."],
-    ["/dashboard/self-model", "Self-model", "Reliability per domain with every sample behind the score, and a form to record an outcome."],
-    ["/dashboard/analytics", "Analytics", "Tokens per turn over time, the reason mix, per-endpoint and per-key spend, tier distribution."],
-    ["/dashboard/start", "Get started", "SDK and curl snippets, and a live tester that sends real requests with a key you paste."],
-    ["/dashboard/keys", "Keys", "Issue, scope, expire and revoke agent credentials."],
-    ["/dashboard/settings", "Settings", "Budgets, extraction, retention, the organisation, and a danger zone."]
-  ] as const
-  return (
-    <div className="overflow-hidden rounded-xl border border-white/[0.08]">
-      {rows.map(([href, name, does]) => (
-        <Link
-          key={href}
-          href={href}
-          className="grid grid-cols-[1fr_120px_2fr] items-baseline gap-3 border-b border-white/[0.05] px-4 py-3 transition last:border-0 hover:bg-white/[0.02]"
-        >
-          <code className="font-mono text-[11px] text-violet-200">{href}</code>
-          <span className="text-xs text-zinc-300">{name}</span>
-          <span className="text-xs leading-5 text-zinc-500">{does}</span>
-        </Link>
-      ))}
-    </div>
-  )
-}
-
-function ApiTable() {
-  const rows = [
-    ["POST", "/v1/context", "Build the prompt block. Returns text, entries with reasons, and the token cost.", "memories:read"],
-    ["POST", "/v1/recall", "Deterministic ranked lookup. Returns empty:true when nothing matched.", "memories:read"],
-    ["POST", "/v1/turns", "Learn from a completed turn.", "memories:write"],
-    ["POST", "/v1/memories", "Store facts outright. Restatements are folded in.", "memories:write"],
-    ["GET", "/v1/memories", "List what is held, with tier counts.", "memories:read"],
-    ["GET", "/v1/memories/:id", "One memory in full.", "memories:read"],
-    ["PATCH", "/v1/memories/:id", "Move between tiers.", "memories:write"],
-    ["DELETE", "/v1/memories/:id", "Forget one memory.", "memories:write"],
-    ["GET", "/v1/tensions", "Contradictions, filterable by status.", "memories:read"],
-    ["POST", "/v1/tensions", "Record a contradiction.", "memories:write"],
-    ["POST", "/v1/tensions/:id", "Resolve one, keeping the pattern.", "memories:write"],
-    ["GET", "/v1/self-model", "Reliability per domain.", "memories:read"],
-    ["POST", "/v1/self-model/outcome", "Record how a domain went.", "memories:write"],
-    ["GET", "/v1/stats", "Counts, weak domains, active tensions.", "stats:read"],
-    ["GET", "/api/v1/health", "Liveness, limits, extractor mode. No key required.", "—"],
-    ["GET", "/v1/keys", "List your keys by prefix.", "session"],
-    ["POST", "/v1/keys", "Mint a key. The secret is returned once.", "session"],
-    ["DELETE", "/v1/keys/:id", "Revoke a key.", "session"]
-  ] as const
-  return (
-    <div className="overflow-x-auto rounded-xl border border-white/[0.08]">
-      <table className="w-full text-left text-xs">
-        <thead className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">
-          <tr className="border-b border-white/[0.07]">
-            <th className="px-4 py-2 font-normal">Method</th>
-            <th className="px-4 py-2 font-normal">Path</th>
-            <th className="px-4 py-2 font-normal">Does</th>
-            <th className="px-4 py-2 font-normal">Needs</th>
-          </tr>
-        </thead>
-        <tbody className="text-zinc-500">
-          {rows.map(([method, path, does, needs]) => (
-            <tr key={`${method} ${path}`} className="border-b border-white/[0.05] last:border-0">
-              <td className="px-4 py-2.5 font-mono text-[10px] text-zinc-400">{method}</td>
-              <td className="px-4 py-2.5 font-mono text-[11px] text-violet-200">{path}</td>
-              <td className="px-4 py-2.5">{does}</td>
-              <td className="px-4 py-2.5 font-mono text-[10px] text-zinc-600">{needs}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DocPage
+      href="/docs"
+      title="Cognitive Memory"
+      description="A memory service for agents. It stores durable facts, holds open the ones that contradict each other, decides what to put in front of a model each turn, and tells you why. The retrieval path is deterministic by design, and the reasoning behind every threshold is written down because the numbers are only defensible with it."
+      actions={
+        <>
+          <Link
+            href="/docs/quickstart"
+            className="rounded-lg bg-violet-500 px-3.5 py-2 text-[13px] font-medium text-white transition hover:bg-violet-400"
+          >
+            Start with the quickstart
+          </Link>
+          <Link
+            href="/dashboard"
+            className="rounded-lg border border-white/12 px-3.5 py-2 text-[13px] text-zinc-300 transition hover:border-white/25"
+          >
+            Get an API key
+          </Link>
+          <Link
+            href="/#tiers"
+            className="rounded-lg border border-white/12 px-3.5 py-2 text-[13px] text-zinc-300 transition hover:border-white/25"
+          >
+            Back to the overview
+          </Link>
+        </>
+      }
+      lead={<PageCards label="Start here" pages={[concept("quickstart"), concept("integrating"), concept("injection"), concept("recall")]} />}
+      sections={SECTIONS}
+    />
   )
 }
