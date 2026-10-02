@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { PassThrough } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -476,6 +477,65 @@ describe("/cogmem import", () => {
     );
 
     expect(text()).toContain("nothing to import");
+  });
+});
+
+describe("asking a question from inside the TUI", () => {
+  /**
+   * The TUI hands an exclusive command a sink, not a stream.
+   *
+   * `handleSlashCommand`-style output in the TUI goes through a sink that appends
+   * to the transcript, and readline wires `output.on(...)` on whatever it is
+   * given. Passing that sink to `createInterface` threw
+   * `TypeError: output.on is not a function`, so every subcommand that asks
+   * something — `/cogmem setup`, `/cogmem key` — failed the moment it prompted.
+   * This drives the real readline path with the same object, so it cannot come
+   * back.
+   */
+  const sink = () => ({ write: () => true });
+
+  /**
+   * A stdin that claims to be a TTY, which is what the bug actually needs.
+   *
+   * readline only wires `output.on(...)` in terminal mode, so a plain
+   * PassThrough would sail past the defect that broke every real run.
+   */
+  const ttyishInput = () => {
+    const input = new PassThrough();
+    Object.defineProperty(input, "isTTY", { value: true });
+    return input;
+  };
+
+  it("prompts and continues when `out` is a sink rather than a stream", async () => {
+    const input = ttyishInput();
+    vi.mocked(credentials.getStoredSecret).mockResolvedValue("stored-key");
+    const state = fakeState(localMemory({ memory: {} as never, location: "/tmp/x.sqlite" }), cwd);
+
+    const answered = handleCogmemCommand(
+      { state, out: sink() as never, readlineInput: input as never, createHosted: () => fakeHosted() },
+      "setup",
+    );
+    // The URL, then Enter. Written after the handler starts so readline is
+    // listening, which is the ordering a person produces.
+    input.write("https://memory.example\n");
+    input.write("\n");
+    await answered;
+
+    expect(state.cognitiveMemory?.backend).toBe("hosted");
+  });
+
+  it("prompts the same way for /cogmem key", async () => {
+    const input = ttyishInput();
+    const state = fakeState(localMemory({ memory: {} as never, location: "/tmp/x.sqlite" }), cwd);
+
+    const answered = handleCogmemCommand(
+      { state, out: sink() as never, readlineInput: input as never, createHosted: () => fakeHosted() },
+      "key",
+    );
+    input.write("1\n");
+    await answered;
+
+    expect(credentials.storeSecretInteractively).toHaveBeenCalled();
   });
 });
 

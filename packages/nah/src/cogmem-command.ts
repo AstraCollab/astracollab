@@ -39,19 +39,39 @@ const IMPORT_BATCH = 50;
 
 export type CogmemDeps = {
   state: SessionState;
+  /**
+   * Where this command's own prose goes.
+   *
+   * In the TUI this is a sink that appends to the transcript rather than a real
+   * stream, so nothing below may hand it to readline. See `readlineOutput`.
+   */
   out: NodeJS.WriteStream;
   /** Overridable for tests, and for a caller that already has a terminal. */
   ask?: (question: string) => Promise<string>;
+  /** Overridable so a test can drive the prompt without a terminal. */
+  readlineInput?: NodeJS.ReadStream;
+  /** Defaults to `process.stdout`, which is the terminal the TUI just released. */
+  readlineOutput?: NodeJS.WriteStream;
   /** Overridable so a test never opens a socket. */
   createHosted?: (options: { apiKey: string; baseUrl: string }) => HostedMemory;
 };
 
 const askOn = async (deps: CogmemDeps, question: string): Promise<string> => {
   if (deps.ask) return deps.ask(question);
+  const input = deps.readlineInput ?? process.stdin;
   const prompt = readline.createInterface({
-    input: process.stdin,
-    output: deps.out,
-    terminal: Boolean(process.stdin.isTTY),
+    input,
+    /**
+     * `process.stdout`, never `deps.out`.
+     *
+     * In the TUI `deps.out` is a sink that appends to the transcript, and
+     * readline wires `output.on(...)` on it, so handing that over threw
+     * `TypeError: output.on is not a function` the moment anyone ran a subcommand
+     * that asks a question. The exclusive path has already released the terminal,
+     * so the real stdout is both correct and the only thing that can work.
+     */
+    output: deps.readlineOutput ?? process.stdout,
+    terminal: Boolean(input.isTTY),
   });
   try {
     return (await prompt.question(question)).trim();

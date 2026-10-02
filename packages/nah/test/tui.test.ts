@@ -5,6 +5,8 @@ import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { Terminal } from "@earendil-works/pi-tui";
 
 import { TurnOutput, stripMouseReportText } from "../src/tui/output.js";
+import { localMemory } from "../src/memory-backend.js";
+import { CognitiveMemory } from "@astracollab/not-another-harness";
 import type { SessionState } from "../src/session.js";
 import { finishReason, v4Usage } from "./helpers/ai.js";
 
@@ -423,6 +425,36 @@ describe("alternate-screen host layout", () => {
 
     terminal.onInput?.("\x03");
     await host;
+  });
+
+  it("runs /cogmem through the exclusive path without disturbing the screen", async () => {
+    const { startTuiHost } = await import("../src/tui/host.js");
+    const terminal = new FakeTerminal(60, 24);
+    const state = makeState(new MockLanguageModelV4({ doStream: async () => ({ stream: textStream("x") }) }));
+    state.cognitiveMemory = localMemory({
+      memory: new CognitiveMemory(),
+      location: "/tmp/project.sqlite",
+    });
+
+    const host = startTuiHost({ state, terminal });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // `/cogmem` is exclusive, so the TUI steps aside and hands the command a sink
+    // rather than the terminal. That hand-off is the thing worth pinning: it is
+    // where a prompt would break, and where a missing branch would send the
+    // command into the transcript as if the user had typed a message.
+    terminal.type("/cogmem");
+    terminal.enter();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const painted = strip(terminal.written);
+    expect(painted).toContain("Cognitive Memory");
+    expect(painted).toContain("/tmp/project.sqlite");
+    // The prompt is still usable afterwards, which is what "exclusive" has to mean.
+    terminal.type("still here");
+    expect(state.messages).toHaveLength(0);
+
+    host.then(() => undefined);
   });
 
   it("refuses an exclusive command while a turn is streaming", async () => {

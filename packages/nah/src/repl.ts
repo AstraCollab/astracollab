@@ -365,7 +365,14 @@ export const setupProvider = async (
 ): Promise<void> => {
   let providerName = requested.trim().toLowerCase();
   if (!providerName) {
-    const prompt = readline.createInterface({ input: process.stdin, output: out, terminal: Boolean(process.stdin.isTTY) });
+    // `process.stdout`, not `out`: the TUI calls this with a transcript sink,
+    // which is not a stream and makes readline throw on `output.on`. The
+    // exclusive path has released the terminal, so the prompt belongs on stdout.
+    const prompt = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      terminal: Boolean(process.stdin.isTTY),
+    });
     try {
       providerName = (await prompt.question("Provider (anthropic / openai / openrouter): ")).trim().toLowerCase();
     } finally {
