@@ -34,7 +34,26 @@ Give NAH a task when starting if you prefer:
 nah "Trace the login flow and summarize its failure cases"
 ```
 
-Interactive sessions start in `ask` mode: NAH asks before edit, write, or shell actions. Use `/permissions readonly` to block changes, or `/permissions yolo` to allow them without asking.
+Interactive sessions start in `ask` mode: NAH asks before edit, write, shell, or web-fetch actions. Use `/permissions readonly` to block changes, or `/permissions yolo` to allow them without asking.
+
+### Reading the web
+
+NAH can fetch a URL and hand the agent the page rather than the markup. `web_fetch` returns
+markdown by default, so a documentation page costs its prose and code instead of its `<nav>`,
+`<script>` and inline CSS — the same reason `read` beats `cat`. Use it for docs, an API
+reference, a release note, or an issue; it is what the agent reaches for instead of `curl`.
+
+It asks first in `ask` mode, because a fetched page is untrusted text that lands in the
+context. Answer `A` to allow that exact URL for the session, or `a` to allow any fetch.
+`readonly` still permits it — that mode promises nothing changes on disk, and reading a
+web page does not — so a review agent can check a claim against its documentation.
+
+Limits: 5MB download, 30s default timeout (120s maximum), and the converted page is capped.
+When a page is cut the notice tells the agent to ask for a more specific URL rather than
+fetch it again, because a web page cannot be paged the way a file can. Binary responses
+(an image, a PDF) are named rather than decoded — the tool returns text.
+
+There is no web *search*. If the agent does not have a URL, this tool cannot help it.
 
 ### Sessions
 
@@ -123,7 +142,7 @@ are both a TTY. Pipes, CI, and dumb terminals keep the line-oriented renderer, a
 | --- | --- |
 | `/model` | Search available models; `/model provider:model-id` switches directly |
 | `/provider` | Save or switch provider credentials |
-| `/permissions <mode>` | Choose `ask`, `yolo`, or `readonly` for file and shell changes |
+| `/permissions <mode>` | Choose `ask`, `yolo`, or `readonly` for edit, write, shell, and web-fetch actions |
 | `/diff` | Review current workspace changes |
 | `/undo` | Restore the last turn’s file changes |
 | `/session list` | List saved sessions for the current directory |
@@ -311,7 +330,7 @@ rest lives in [`nah-studio`](../nah-studio).
 | Route | Purpose |
 | --- | --- |
 | `POST /api/agents` | Register or heartbeat. One route for both, because a client cannot know whether the Studio it found is one it has already met |
-| `POST /api/traces` | Ingest `{ agent?, trace, spans }`. Idempotent per trace id, and it registers the agent if that was skipped |
+| `POST /api/traces` | Ingest `{ agent?, trace, spans, final? }`. Idempotent per trace id, and it registers the agent if that was skipped. `final: false` merges into a run in progress; anything else replaces the trace outright |
 | `GET /api/agents` | Every agent with its own totals, status and last-seen |
 | `POST /api/agents/launch`, `/api/agents/:id/stop`, `/api/agents/:id/logs` | Start an agent, stop one this Studio started, read its output |
 | `GET /api/stream` | Server-sent events: agent appeared, agent moved, trace landed, line printed |

@@ -5,13 +5,39 @@ import { c, toolLabel } from "./render.js";
 export type PermissionMode = "ask" | "yolo" | "readonly";
 
 /**
- * Approval policy for mutating tools (edit/write/bash):
- *  - readonly: always deny
+ * Approval policy for gated tools (edit/write/bash/web_fetch):
+ *  - readonly: always deny, except for the tools in {@link READONLY_ALLOWED}
  *  - yolo:     always allow
  *  - ask:      prompt in the terminal; "a" remembers per-tool for the session
  */
 /** Asks the user a question and resolves with the raw answer. */
 export type ApprovalPromptFn = (question: string) => Promise<string>;
+
+/**
+ * Gated tools that `readonly` still permits.
+ *
+ * `readonly` is a promise about the workspace: nothing on disk changes. Reaching
+ * the network is not a change to the workspace, so blocking it here would deny a
+ * read to buy no safety — and it would deny it to the agent that most needs it,
+ * because the Studio's dashboard agent runs `readonly` and the read-only
+ * review agent is exactly the one asked to check a claim against its docs.
+ *
+ * The tool stays gated either way, so `ask` mode still prompts for every fetch.
+ * What `readonly` gives up is the prompt, not the decision.
+ */
+const READONLY_ALLOWED = new Set(["web_fetch"]);
+
+/**
+ * Whether `readonly` permits this gated tool.
+ *
+ * Exported for the second place that answers the question, which is the Studio's
+ * read-only agent: it rebuilds the tool set with its own hard-deny approver, and
+ * without this it would ship a `web_fetch` that is present in the schema and
+ * refuses every call — which reads to the model as a broken tool rather than as a
+ * policy, and costs a step to rediscover on every turn.
+ */
+export const isReadonlyAllowed = (toolName: string): boolean =>
+	READONLY_ALLOWED.has(toolName);
 
 export type Approver = ((toolName: string, input: unknown) => Promise<boolean>) & {
   /**
@@ -43,6 +69,18 @@ export const createApprover = (
     }
     if (toolName === "bash" && typeof args.command === "string") {
       return `${toolName}:${args.command}`;
+    }
+    /**
+     * Per-URL rather than per-tool.
+     *
+     * `web_fetch` gets a fresh URL on essentially every call, so an approval
+     * scoped to one URL is the only scope that means anything for it — and it is
+     * the scope that keeps approving a single host from silently approving every
+     * host the model asks about next. This is the same split opencode draws when
+     * it offers `once` / `always` for a `webfetch` permission keyed on the URL.
+     */
+    if (toolName === "web_fetch" && typeof args.url === "string") {
+      return `${toolName}:${args.url}`;
     }
     return toolName;
   };
@@ -120,6 +158,7 @@ export const createApprover = (
   const approve = async (toolName: string, input: unknown): Promise<boolean> => {
     const mode = getMode();
     if (mode === "readonly") {
+      if (isReadonlyAllowed(toolName)) return true;
       out.write(c.dim(`  ✕ blocked (readonly mode): ${toolLabel(toolName, input)}\n`));
       return false;
     }

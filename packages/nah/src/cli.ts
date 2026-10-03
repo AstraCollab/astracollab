@@ -8,7 +8,7 @@ import {
 import { parsePermissionMode, type PermissionMode } from "./permissions.js";
 import { renderTurn, startRepl } from "./repl.js";
 import { makeState } from "./state.js";
-import { resolveInjection, runTurn, resumeSession } from "./session.js";
+import { flushStopNotice, resolveInjection, runTurn, resumeSession } from "./session.js";
 import { confirmOnStdout, currentNahBin, runStudioCommand } from "./studio-command.js";
 import { startTuiHost } from "./tui/host.js";
 import { ProcessTerminal } from "@earendil-works/pi-tui";
@@ -122,6 +122,7 @@ const main = async (): Promise<number> => {
         const turn = runTurn(state, prompt, {}, await resolveInjection(state, prompt));
         await renderTurn(turn.events);
         await turn.done;
+        flushStopNotice(state, (line) => process.stdout.write(`${line}\n`));
         process.stdout.write("\n");
       }
       if (tuiAvailable(args.noTui)) {
@@ -168,11 +169,17 @@ const main = async (): Promise<number> => {
       process.stdout.write("\n");
     }
     const result = await turn.done;
+    // stderr, because stdout is the event stream in --json and a line of prose
+    // there corrupts it for anything parsing the output.
+    flushStopNotice(state, (line) => process.stderr.write(`nah: ${line}\n`));
     // This process exits in a moment, and a request cancelled by the exit would
     // lose the only trace it will ever produce. An interactive session does not
     // need this — nothing is waiting on it to exit.
     await state.studio?.settled();
-    return result.reason === "error" ? 1 : 0;
+    // A run that stopped holding a call did not do the task, and a piped run has
+    // nobody to answer the hold, so exiting 0 is the quiet failure this exists
+    // to remove.
+    return result.reason === "error" || result.reason === "awaiting-approval" ? 1 : 0;
   } finally {
     await state.destroySandbox?.().catch(() => undefined);
   }

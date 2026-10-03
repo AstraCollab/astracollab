@@ -13,4 +13,5 @@ export {
   type StudioAgent,
   type StudioAgentOptions,
   type StudioAgentRun,
+  type StudioWorkflowRunner,
 } from "./studio-agent.js";

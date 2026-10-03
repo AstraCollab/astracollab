@@ -23,27 +23,28 @@
 
 /** Per-million-token prices for one model. All figures in USD. */
 export type ModelRates = {
-  /** Fresh (uncached) input. */
-  input: number;
-  /** Generated output. */
-  output: number;
-  /** Reading a cached prefix. Defaults to `input * 0.1`. */
-  cacheRead?: number;
-  /** Writing a cached prefix at a 5m TTL. Defaults to `input * 1.25`. */
-  cacheWrite?: number;
+	/** Fresh (uncached) input. */
+	input: number;
+	/** Generated output. */
+	output: number;
+	/** Reading a cached prefix. Defaults to `input * 0.1`. */
+	cacheRead?: number;
+	/** Writing a cached prefix at a 5m TTL. Defaults to `input * 1.25`. */
+	cacheWrite?: number;
 };
 
 /** The cache-aware usage breakdown a spend figure is derived from. */
 export type CacheAwareUsage = {
-  inputTokens: number;
-  outputTokens: number;
-  /** Tokens served from cache. Reported separately by Anthropic. */
-  cachedInputTokens?: number;
-  /** Tokens written into cache by this request. */
-  cacheCreationInputTokens?: number;
+	inputTokens: number;
+	outputTokens: number;
+	/** Tokens served from cache. Reported separately by Anthropic. */
+	cachedInputTokens?: number;
+	/** Tokens written into cache by this request. */
+	cacheCreationInputTokens?: number;
 };
 
-const perMillion = (tokens: number, rate: number): number => (tokens / 1_000_000) * rate;
+const perMillion = (tokens: number, rate: number): number =>
+	(tokens / 1_000_000) * rate;
 
 /**
  * Dollar cost of one request's usage.
@@ -53,27 +54,30 @@ const perMillion = (tokens: number, rate: number): number => (tokens / 1_000_000
  * fresh input token — the behaviour that made the token budget a step counter —
  * overstates a well-cached run by roughly 10x.
  */
-export const usageCostUsd = (usage: CacheAwareUsage, rates: ModelRates): number => {
-  const cacheRead = rates.cacheRead ?? rates.input * 0.1;
-  const cacheWrite = rates.cacheWrite ?? rates.input * 1.25;
-  return (
-    perMillion(usage.inputTokens, rates.input) +
-    perMillion(usage.cachedInputTokens ?? 0, cacheRead) +
-    perMillion(usage.cacheCreationInputTokens ?? 0, cacheWrite) +
-    perMillion(usage.outputTokens, rates.output)
-  );
+export const usageCostUsd = (
+	usage: CacheAwareUsage,
+	rates: ModelRates,
+): number => {
+	const cacheRead = rates.cacheRead ?? rates.input * 0.1;
+	const cacheWrite = rates.cacheWrite ?? rates.input * 1.25;
+	return (
+		perMillion(usage.inputTokens, rates.input) +
+		perMillion(usage.cachedInputTokens ?? 0, cacheRead) +
+		perMillion(usage.cacheCreationInputTokens ?? 0, cacheWrite) +
+		perMillion(usage.outputTokens, rates.output)
+	);
 };
 
 /** Running total of what a run has cost. */
 export const createSpendMeter = (rates: ModelRates) => {
-  let usd = 0;
-  return {
-    /** Record one request's usage and return the new running total. */
-    charge(usage: CacheAwareUsage): number {
-      usd += usageCostUsd(usage, rates);
-      return usd;
-    },
-    /** Total spent so far. */
-    total: (): number => usd,
-  };
+	let usd = 0;
+	return {
+		/** Record one request's usage and return the new running total. */
+		charge(usage: CacheAwareUsage): number {
+			usd += usageCostUsd(usage, rates);
+			return usd;
+		},
+		/** Total spent so far. */
+		total: (): number => usd,
+	};
 };

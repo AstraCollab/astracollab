@@ -1,71 +1,91 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { ModelMessage } from "ai";
 import { runAgent } from "../src/agent.js";
 import { createNodeEnvironment } from "../src/node.js";
 import { createCodingTools } from "../src/tools.js";
-import type { ModelMessage } from "ai";
 import type { HarnessEvent } from "../src/types.js";
 import { finishReason, v4Usage } from "./helpers/ai.js";
 
 const USAGE = v4Usage({ input: 100, output: 20 });
 
-const grepStep = (pattern: string): ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>> =>
-  simulateReadableStream<LanguageModelV4StreamPart>({
-    chunkDelayInMs: 0,
-    chunks: [
-      {
-        type: "tool-call",
-        toolCallId: `c-${pattern}`,
-        toolName: "grep",
-        input: JSON.stringify({ pattern }),
-      },
-      { type: "finish", finishReason: finishReason("tool-calls"), usage: USAGE },
-    ],
-  });
+const grepStep = (
+	pattern: string,
+): ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>> =>
+	simulateReadableStream<LanguageModelV4StreamPart>({
+		chunkDelayInMs: 0,
+		chunks: [
+			{
+				type: "tool-call",
+				toolCallId: `c-${pattern}`,
+				toolName: "grep",
+				input: JSON.stringify({ pattern }),
+			},
+			{
+				type: "finish",
+				finishReason: finishReason("tool-calls"),
+				usage: USAGE,
+			},
+		],
+	});
 
-const editStep = (): ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>> =>
-  simulateReadableStream<LanguageModelV4StreamPart>({
-    chunkDelayInMs: 0,
-    chunks: [
-      {
-        type: "tool-call",
-        toolCallId: "c-edit",
-        toolName: "edit",
-        input: JSON.stringify({ path: "a.ts", old_string: "a", new_string: "b" }),
-      },
-      { type: "finish", finishReason: finishReason("tool-calls"), usage: USAGE },
-    ],
-  });
+const editStep = (): ReturnType<
+	typeof simulateReadableStream<LanguageModelV4StreamPart>
+> =>
+	simulateReadableStream<LanguageModelV4StreamPart>({
+		chunkDelayInMs: 0,
+		chunks: [
+			{
+				type: "tool-call",
+				toolCallId: "c-edit",
+				toolName: "edit",
+				input: JSON.stringify({
+					path: "a.ts",
+					old_string: "a",
+					new_string: "b",
+				}),
+			},
+			{
+				type: "finish",
+				finishReason: finishReason("tool-calls"),
+				usage: USAGE,
+			},
+		],
+	});
 
-const doneStep = (): ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>> =>
-  simulateReadableStream<LanguageModelV4StreamPart>({
-    chunkDelayInMs: 0,
-    chunks: [
-      { type: "text-start", id: "t" },
-      { type: "text-delta", id: "t", delta: "done" },
-      { type: "text-end", id: "t" },
-      { type: "finish", finishReason: finishReason("stop"), usage: USAGE },
-    ],
-  });
+const doneStep = (): ReturnType<
+	typeof simulateReadableStream<LanguageModelV4StreamPart>
+> =>
+	simulateReadableStream<LanguageModelV4StreamPart>({
+		chunkDelayInMs: 0,
+		chunks: [
+			{ type: "text-start", id: "t" },
+			{ type: "text-delta", id: "t", delta: "done" },
+			{ type: "text-end", id: "t" },
+			{ type: "finish", finishReason: finishReason("stop"), usage: USAGE },
+		],
+	});
 
 const scriptedModel = (
-  streams: Array<() => ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>>>
+	streams: Array<
+		() => ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>>
+	>,
 ) => {
-  let call = 0;
-  return new MockLanguageModelV4({
-    doStream: async () => {
-      const make = streams[Math.min(call, streams.length - 1)];
-      call += 1;
-      if (!make) throw new Error("script empty");
-      return { stream: make() };
-    },
-  });
+	let call = 0;
+	return new MockLanguageModelV4({
+		doStream: async () => {
+			const make = streams[Math.min(call, streams.length - 1)];
+			call += 1;
+			if (!make) throw new Error("script empty");
+			return { stream: make() };
+		},
+	});
 };
 
 /**
@@ -76,18 +96,22 @@ const scriptedModel = (
  * occurrences would report the nudge once per remaining step.
  */
 const nudgesIn = (snapshots: ModelMessage[][]): string[] => [
-  ...new Set(
-    snapshots
-      .flat()
-      .filter((m) => m.role === "user" && /steps so far/.test(String(m.content)))
-      .map((m) => String(m.content)),
-  ),
+	...new Set(
+		snapshots
+			.flat()
+			.filter(
+				(m) => m.role === "user" && /steps so far/.test(String(m.content)),
+			)
+			.map((m) => String(m.content)),
+	),
 ];
 
-const collect = async (events: AsyncIterable<HarnessEvent>): Promise<HarnessEvent[]> => {
-  const out: HarnessEvent[] = [];
-  for await (const e of events) out.push(e);
-  return out;
+const collect = async (
+	events: AsyncIterable<HarnessEvent>,
+): Promise<HarnessEvent[]> => {
+	const out: HarnessEvent[] = [];
+	for await (const e of events) out.push(e);
+	return out;
 };
 
 /**
@@ -98,137 +122,143 @@ const collect = async (events: AsyncIterable<HarnessEvent>): Promise<HarnessEven
 const EXPLORING_STEPS = 9;
 
 describe("the exploration nudge", () => {
-  let dir: string;
+	let dir: string;
 
-  beforeEach(async () => {
-    dir = await mkdtemp(nodePath.join(tmpdir(), "nah-nudge-"));
-  });
+	beforeEach(async () => {
+		dir = await mkdtemp(nodePath.join(tmpdir(), "nah-nudge-"));
+	});
 
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
-  });
+	afterEach(async () => {
+		await rm(dir, { recursive: true, force: true });
+	});
 
-  const runAndCapture = async (
-  streams: Array<() => ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>>>
-) => {
-    const tools = createCodingTools(createNodeEnvironment(dir)) as Record<string, unknown>;
-    const seen: ModelMessage[][] = [];
-    const run = runAgent({
-      model: scriptedModel(streams),
-      system: "test",
-      prompt: "fix the blank lines",
-      tools,
-      maxSteps: EXPLORING_STEPS,
-      onStepFinish: (_step, messages) => {
-        seen.push(messages);
-      },
-    });
-    await collect(run.events);
-    const result = await run.result;
-    return { result, seen };
-  };
+	const runAndCapture = async (
+		streams: Array<
+			() => ReturnType<typeof simulateReadableStream<LanguageModelV4StreamPart>>
+		>,
+	) => {
+		const tools = createCodingTools(createNodeEnvironment(dir)) as Record<
+			string,
+			unknown
+		>;
+		const seen: ModelMessage[][] = [];
+		const run = runAgent({
+			model: scriptedModel(streams),
+			system: "test",
+			prompt: "fix the blank lines",
+			tools,
+			maxSteps: EXPLORING_STEPS,
+			onStepFinish: (_step, messages) => {
+				seen.push(messages);
+			},
+		});
+		await collect(run.events);
+		const result = await run.result;
+		return { result, seen };
+	};
 
-  it("tells a run that has changed nothing that it has changed nothing", async () => {
-    const { seen } = await runAndCapture([
-      () => grepStep("useState"),
-      () => grepStep("Dashboard"),
-      () => grepStep("blank"),
-      () => grepStep("template"),
-      () => grepStep("collapse"),
-      () => grepStep("whitespace"),
-      () => grepStep("reformat"),
-      () => grepStep("newline"),
-      () => doneStep(),
-    ]);
-    // Each snapshot is the whole transcript, so one nudge appears in every later
-    // snapshot. Count distinct nudges, not occurrences.
-    expect(nudgesIn(seen)).toHaveLength(1);
-  });
+	it("tells a run that has changed nothing that it has changed nothing", async () => {
+		const { seen } = await runAndCapture([
+			() => grepStep("useState"),
+			() => grepStep("Dashboard"),
+			() => grepStep("blank"),
+			() => grepStep("template"),
+			() => grepStep("collapse"),
+			() => grepStep("whitespace"),
+			() => grepStep("reformat"),
+			() => grepStep("newline"),
+			() => doneStep(),
+		]);
+		// Each snapshot is the whole transcript, so one nudge appears in every later
+		// snapshot. Count distinct nudges, not occurrences.
+		expect(nudgesIn(seen)).toHaveLength(1);
+	});
 
-  it("states the token cost, which is the part the model cannot see", async () => {
-    const { seen } = await runAndCapture([
-      () => grepStep("a"),
-      () => grepStep("b"),
-      () => grepStep("c"),
-      () => grepStep("d"),
-      () => grepStep("e"),
-      () => grepStep("f"),
-      () => grepStep("g"),
-      () => doneStep(),
-    ]);
-    const nudge = seen
-      .flat()
-      .find((m) => m.role === "user" && /steps so far/.test(String(m.content)));
-    expect(String(nudge?.content)).toMatch(/re-sent this whole transcript/);
-    expect(String(nudge?.content)).toMatch(/cheaper than another search/);
-  });
+	it("states the token cost, which is the part the model cannot see", async () => {
+		const { seen } = await runAndCapture([
+			() => grepStep("a"),
+			() => grepStep("b"),
+			() => grepStep("c"),
+			() => grepStep("d"),
+			() => grepStep("e"),
+			() => grepStep("f"),
+			() => grepStep("g"),
+			() => doneStep(),
+		]);
+		const nudge = seen
+			.flat()
+			.find((m) => m.role === "user" && /steps so far/.test(String(m.content)));
+		expect(String(nudge?.content)).toMatch(/re-sent this whole transcript/);
+		expect(String(nudge?.content)).toMatch(/cheaper than another search/);
+	});
 
-  it("says it once, because a repeated nudge is nagging", async () => {
-    const { seen } = await runAndCapture(
-      // Distinct patterns, because a fixture that greps the same term every step is
-      // the repeat detector's case, not this one's.
-      Array.from({ length: EXPLORING_STEPS - 1 }, (_, i) => () => grepStep(`pattern-${i}`)).concat([
-        () => grepStep("final"),
-      ]),
-    );
-    expect(nudgesIn(seen)).toHaveLength(1);
-  });
+	it("says it once, because a repeated nudge is nagging", async () => {
+		const { seen } = await runAndCapture(
+			// Distinct patterns, because a fixture that greps the same term every step is
+			// the repeat detector's case, not this one's.
+			Array.from(
+				{ length: EXPLORING_STEPS - 1 },
+				(_, i) => () => grepStep(`pattern-${i}`),
+			).concat([() => grepStep("final")]),
+		);
+		expect(nudgesIn(seen)).toHaveLength(1);
+	});
 
-  it("counts from the last mutation, not from the start of the turn", async () => {
-    // The nudge used to key on the absolute step, so an edit on step 1 silenced it
-    // for the rest of the turn even if the run then read eight files without
-    // changing anything. It now measures consecutive non-mutating steps, which is
-    // the same signal the no-progress stop uses — so a run that edits and then
-    // goes quiet is still caught, and a run that keeps editing never is.
-    const { seen } = await runAndCapture([
-      () => editStep(),
-      () => grepStep("a"),
-      () => grepStep("b"),
-      () => grepStep("c"),
-      () => grepStep("d"),
-      () => grepStep("e"),
-      () => grepStep("f"),
-      () => grepStep("g"),
-      () => doneStep(),
-    ]);
-    expect(nudgesIn(seen)).toHaveLength(1);
-  });
+	it("counts from the last mutation, not from the start of the turn", async () => {
+		// The nudge used to key on the absolute step, so an edit on step 1 silenced it
+		// for the rest of the turn even if the run then read eight files without
+		// changing anything. It now measures consecutive non-mutating steps, which is
+		// the same signal the no-progress stop uses — so a run that edits and then
+		// goes quiet is still caught, and a run that keeps editing never is.
+		const { seen } = await runAndCapture([
+			() => editStep(),
+			() => grepStep("a"),
+			() => grepStep("b"),
+			() => grepStep("c"),
+			() => grepStep("d"),
+			() => grepStep("e"),
+			() => grepStep("f"),
+			() => grepStep("g"),
+			() => doneStep(),
+		]);
+		expect(nudgesIn(seen)).toHaveLength(1);
+	});
 
-  it("stays silent while the run keeps changing things", async () => {
-    // The other half of the same rule: interleaved work never accumulates the
-    // streak, so an editing run is never nagged no matter how long it is.
-    const { seen } = await runAndCapture([
-      () => editStep(),
-      () => grepStep("a"),
-      () => editStep(),
-      () => grepStep("b"),
-      () => editStep(),
-      () => grepStep("c"),
-      () => editStep(),
-      () => grepStep("d"),
-      () => editStep(),
-      () => grepStep("e"),
-      () => editStep(),
-      () => grepStep("f"),
-      () => doneStep(),
-    ]);
-    expect(nudgesIn(seen)).toHaveLength(0);
-  });
+	it("stays silent while the run keeps changing things", async () => {
+		// The other half of the same rule: interleaved work never accumulates the
+		// streak, so an editing run is never nagged no matter how long it is.
+		const { seen } = await runAndCapture([
+			() => editStep(),
+			() => grepStep("a"),
+			() => editStep(),
+			() => grepStep("b"),
+			() => editStep(),
+			() => grepStep("c"),
+			() => editStep(),
+			() => grepStep("d"),
+			() => editStep(),
+			() => grepStep("e"),
+			() => editStep(),
+			() => grepStep("f"),
+			() => doneStep(),
+		]);
+		expect(nudgesIn(seen)).toHaveLength(0);
+	});
 
-  it("does not change the stop reason or the step count", async () => {
-    const { result, seen } = await runAndCapture([
-      () => grepStep("a"),
-      () => grepStep("b"),
-      () => grepStep("c"),
-      () => grepStep("d"),
-      () => grepStep("e"),
-      () => grepStep("f"),
-      () => grepStep("g"),
-      () => doneStep(),
-    ]);
-    expect(result.reason).toBe("completed");
-    expect(result.text).toBe("done");
-    // The nudge is a message in the transcript, not a behaviour change.
-    expect(seen.length).toBe(EXPLORING_STEPS - 1);
-  });
+	it("does not change the stop reason or the step count", async () => {
+		const { result, seen } = await runAndCapture([
+			() => grepStep("a"),
+			() => grepStep("b"),
+			() => grepStep("c"),
+			() => grepStep("d"),
+			() => grepStep("e"),
+			() => grepStep("f"),
+			() => grepStep("g"),
+			() => doneStep(),
+		]);
+		expect(result.reason).toBe("completed");
+		expect(result.text).toBe("done");
+		// The nudge is a message in the transcript, not a behaviour change.
+		expect(seen.length).toBe(EXPLORING_STEPS - 1);
+	});
 });

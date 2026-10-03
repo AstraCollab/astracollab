@@ -16,7 +16,7 @@ import { c, formatFileChange, formatWorkspaceDiff, renderWelcome, toolLabel, usa
 import { renderCommandHelp } from "./commands.js";
 import { listSessionIds, resolveSessionFile } from "./context.js";
 import { handleCogmemCommand } from "./cogmem-command.js";
-import { adoptUsage, resetUsage, resolveInjection, runTurn, type SessionState, type StepRecovery } from "./session.js";
+import { adoptUsage, flushStopNotice, resetUsage, resolveInjection, runTurn, type SessionState, type StepRecovery } from "./session.js";
 import { runStudioCommand, confirmOnStdout } from "./studio-command.js";
 import { attachStudio, detachStudio, setTelemetryState, telemetryState } from "./telemetry-export.js";
 import { formatTaskLedger } from "./task-ledger.js";
@@ -1391,6 +1391,10 @@ export const startRepl = async (state: SessionState): Promise<void> => {
                 protectTypedInput(rl),
               );
               await turn.done;
+              // A turn that stopped holding a call is not a finished turn. The
+              // REPL returns to its prompt here, so a silent stop would leave
+              // the transcript looking complete with the task half done.
+              flushStopNotice(state, (line) => out.write(c.yellow(line) + "\n"));
             } catch (e) {
               out.write(c.red(e instanceof Error ? e.message : String(e)) + "\n");
             } finally {

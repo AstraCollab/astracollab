@@ -53,21 +53,25 @@ export const MAX_CACHE_BREAKPOINTS = 4;
  * unknown providers get no caching rather than a broken request.
  */
 export const supportsCaching = (provider: string | undefined): boolean => {
-  if (!provider) return false;
-  const name = provider.toLowerCase();
-  if (ANTHROPIC_KEYS.has(name)) return true;
-  // OpenRouter fronts Anthropic models and accepts the same headers.
-  if (name === "openrouter") return true;
-  return false;
+	if (!provider) return false;
+	const name = provider.toLowerCase();
+	if (ANTHROPIC_KEYS.has(name)) return true;
+	// OpenRouter fronts Anthropic models and accepts the same headers.
+	if (name === "openrouter") return true;
+	return false;
 };
 
 /** Provider options for the request-level (system prompt) cache breakpoint. */
 export const cacheOptions = (
-  provider: string | undefined,
-  ttl: "5m" | "1h" = "5m",
+	provider: string | undefined,
+	ttl: "5m" | "1h" = "5m",
 ): SharedV2ProviderOptions | undefined => {
-  if (!supportsCaching(provider)) return undefined;
-  return { anthropic: { cacheControl: { type: "ephemeral", ttl } satisfies CacheControl } } as SharedV2ProviderOptions;
+	if (!supportsCaching(provider)) return undefined;
+	return {
+		anthropic: {
+			cacheControl: { type: "ephemeral", ttl } satisfies CacheControl,
+		},
+	} as SharedV2ProviderOptions;
 };
 
 /**
@@ -84,30 +88,31 @@ export const cacheOptions = (
  * 7 on every request. One marker on the last tool covers all of them.
  */
 export const withCachedToolSchemas = <T extends Record<string, unknown>>(
-  tools: T,
-  provider: string | undefined,
-  ttl: "5m" | "1h" = "5m",
+	tools: T,
+	provider: string | undefined,
+	ttl: "5m" | "1h" = "5m",
 ): T => {
-  if (!supportsCaching(provider)) return tools;
-  const names = Object.keys(tools);
-  if (names.length === 0) return tools;
-  const control: CacheControl = { type: "ephemeral", ttl };
-  const out: Record<string, unknown> = { ...tools };
-  const lastName = names[names.length - 1]!;
-  const last = tools[lastName];
-  if (typeof last !== "object" || last === null) return tools;
-  const existing = (last as { providerOptions?: Record<string, unknown> }).providerOptions;
-  out[lastName] = {
-    ...(last as object),
-    providerOptions: {
-      ...(existing ?? {}),
-      anthropic: {
-        ...((existing?.anthropic as Record<string, unknown> | undefined) ?? {}),
-        cacheControl: control,
-      },
-    },
-  };
-  return out as T;
+	if (!supportsCaching(provider)) return tools;
+	const names = Object.keys(tools);
+	if (names.length === 0) return tools;
+	const control: CacheControl = { type: "ephemeral", ttl };
+	const out: Record<string, unknown> = { ...tools };
+	const lastName = names[names.length - 1]!;
+	const last = tools[lastName];
+	if (typeof last !== "object" || last === null) return tools;
+	const existing = (last as { providerOptions?: Record<string, unknown> })
+		.providerOptions;
+	out[lastName] = {
+		...(last as object),
+		providerOptions: {
+			...(existing ?? {}),
+			anthropic: {
+				...((existing?.anthropic as Record<string, unknown> | undefined) ?? {}),
+				cacheControl: control,
+			},
+		},
+	};
+	return out as T;
 };
 
 /**
@@ -140,34 +145,39 @@ export const TAIL_CACHE_BREAKPOINTS = 2;
  * signatures bound to the prefix stay valid.
  */
 export const withCachedTail = (
-  messages: readonly ModelMessage[],
-  stableThrough: number,
-  provider: string | undefined,
-  ttl: "5m" | "1h" = "5m",
+	messages: readonly ModelMessage[],
+	stableThrough: number,
+	provider: string | undefined,
+	ttl: "5m" | "1h" = "5m",
 ): ModelMessage[] => {
-  if (!supportsCaching(provider)) return [...messages];
-  // Nothing new since the last request: the prefix is unchanged, so there is no
-  // new entry to write and nothing to gain from marking it again.
-  const index = Math.min(Math.max(0, Math.floor(stableThrough)), messages.length - 1);
-  if (index < 0) return [...messages];
-  const target = messages[index];
-  if (!target) return [...messages];
-  const control: CacheControl = { type: "ephemeral", ttl };
-  const existing = (target as { providerOptions?: Record<string, unknown> }).providerOptions;
-  return [
-    ...messages.slice(0, index),
-    {
-      ...target,
-      providerOptions: {
-        ...(existing ?? {}),
-        anthropic: {
-          ...((existing?.anthropic as Record<string, unknown> | undefined) ?? {}),
-          cacheControl: control,
-        },
-      },
-    } as ModelMessage,
-    ...messages.slice(index + 1),
-  ];
+	if (!supportsCaching(provider)) return [...messages];
+	// Nothing new since the last request: the prefix is unchanged, so there is no
+	// new entry to write and nothing to gain from marking it again.
+	const index = Math.min(
+		Math.max(0, Math.floor(stableThrough)),
+		messages.length - 1,
+	);
+	if (index < 0) return [...messages];
+	const target = messages[index];
+	if (!target) return [...messages];
+	const control: CacheControl = { type: "ephemeral", ttl };
+	const existing = (target as { providerOptions?: Record<string, unknown> })
+		.providerOptions;
+	return [
+		...messages.slice(0, index),
+		{
+			...target,
+			providerOptions: {
+				...(existing ?? {}),
+				anthropic: {
+					...((existing?.anthropic as Record<string, unknown> | undefined) ??
+						{}),
+					cacheControl: control,
+				},
+			},
+		} as ModelMessage,
+		...messages.slice(index + 1),
+	];
 };
 
 /**
@@ -208,9 +218,11 @@ export type CacheAccounting = "split" | "inclusive";
  *
  * @deprecated v7 normalises cache accounting; this is inert.
  */
-export const cacheAccountingFor = (provider: string | undefined): CacheAccounting => {
-  void provider;
-  return "inclusive";
+export const cacheAccountingFor = (
+	provider: string | undefined,
+): CacheAccounting => {
+	void provider;
+	return "inclusive";
 };
 
 /**
@@ -223,12 +235,12 @@ export const cacheAccountingFor = (provider: string | undefined): CacheAccountin
 export const DEFAULT_PINNED_TOOLS = ["read", "edit", "write"] as const;
 
 export type ContextEditingOptions = {
-  /** Input-token size that triggers clearing. */
-  triggerTokens?: number;
-  /** How many recent tool use/result pairs to keep intact. */
-  keepToolUses?: number;
-  /** Never clear these tools' results. */
-  excludeTools?: readonly string[];
+	/** Input-token size that triggers clearing. */
+	triggerTokens?: number;
+	/** How many recent tool use/result pairs to keep intact. */
+	keepToolUses?: number;
+	/** Never clear these tools' results. */
+	excludeTools?: readonly string[];
 };
 
 /**
@@ -247,27 +259,32 @@ export type ContextEditingOptions = {
  * enough to compact.
  */
 export const contextManagementOptions = (
-  provider: string | undefined,
-  options: ContextEditingOptions = {},
+	provider: string | undefined,
+	options: ContextEditingOptions = {},
 ): Record<string, Record<string, unknown>> | undefined => {
-  if (!supportsCaching(provider)) return undefined;
-  const excludeTools = options.excludeTools ?? DEFAULT_PINNED_TOOLS;
-  return {
-    anthropic: {
-      contextManagement: {
-        edits: [
-          {
-            type: "clear_tool_uses_20250919",
-            trigger: { type: "input_tokens", value: options.triggerTokens ?? 40_000 },
-            keep: { type: "tool_uses", value: options.keepToolUses ?? 6 },
-            // Results only; the tool_use inputs stay visible so the model still
-            // remembers what it asked for.
-            clearToolInputs: false,
-            ...(excludeTools.length > 0 ? { excludeTools: [...excludeTools] } : {}),
-          },
-        ],
-      },
-      anthropicBeta: ["context-management-2025-06-27"],
-    },
-  } as Record<string, Record<string, unknown>>;
+	if (!supportsCaching(provider)) return undefined;
+	const excludeTools = options.excludeTools ?? DEFAULT_PINNED_TOOLS;
+	return {
+		anthropic: {
+			contextManagement: {
+				edits: [
+					{
+						type: "clear_tool_uses_20250919",
+						trigger: {
+							type: "input_tokens",
+							value: options.triggerTokens ?? 40_000,
+						},
+						keep: { type: "tool_uses", value: options.keepToolUses ?? 6 },
+						// Results only; the tool_use inputs stay visible so the model still
+						// remembers what it asked for.
+						clearToolInputs: false,
+						...(excludeTools.length > 0
+							? { excludeTools: [...excludeTools] }
+							: {}),
+					},
+				],
+			},
+			anthropicBeta: ["context-management-2025-06-27"],
+		},
+	} as Record<string, Record<string, unknown>>;
 };

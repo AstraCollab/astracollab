@@ -85,7 +85,80 @@ export const setTelemetryState = async (state: TelemetryState): Promise<void> =>
   await updateConfig((current) => ({ ...current, telemetry: state }));
 };
 
+/**
+ * What is knowable about a trace before the run that fills it in has finished.
+ *
+ * A finished trace arrives whole, at the end. A trace that is still going has to
+ * be sent from what the caller already knows, and the parts it knows are the
+ * parts that never change: which run this is, what it was asked, which agent is
+ * answering. What is missing — how long it took, whether it worked, which span
+ * is the root — is exactly what the finished trace carries when it lands.
+ */
+export type TraceHint = {
+  id: string;
+  name: string;
+  startTime: number;
+  tags: string[];
+  metadata: Record<string, unknown>;
+};
+
+/**
+ * How often a running trace may be redrawn, in milliseconds.
+ *
+ * Long enough that a tool-heavy turn — which can close a span every few hundred
+ * milliseconds — does not become a request per span, and short enough that
+ * somebody watching a run does not see it sit still and conclude it is stuck.
+ */
+const PARTIAL_INTERVAL_MS = 500;
+
+/**
+ * A trace shape the Studio will accept from a run that has not finished.
+ *
+ * Deliberately not `Trace`: the fields that only exist at the end are empty
+ * rather than guessed, and the finished trace overwrites all of them a moment
+ * later. The server does not touch this row once it exists, so the only cost of
+ * a mistake here is a trace that was briefly missing its end time.
+ */
+type RunningTrace = Trace;
+
+type Running = {
+  trace: RunningTrace;
+  /** Spans produced since the last partial went out. */
+  unsent: Span[];
+  timer: ReturnType<typeof setTimeout> | null;
+  inFlight: boolean;
+  /** The open partial, so the final write can wait for it. */
+  inFlightJob: Promise<unknown> | null;
+  /** The run is over: stop starting partials, even if spans are still waiting. */
+  closing: boolean;
+  /** A partial was asked for while another was in flight. */
+  again: boolean;
+  /** How many partials have been sent, including the first one. */
+  sent: number;
+};
+
+/** Project a hint onto the trace shape the ingest endpoint reads. */
+const runningTrace = (hint: TraceHint): RunningTrace => ({
+  id: hint.id,
+  name: hint.name,
+  startTime: hint.startTime,
+  // All three are what the run will report for itself, the moment it ends.
+  endTime: null,
+  rootSpanId: "",
+  status: "unset",
+  tags: hint.tags,
+  metadata: hint.metadata,
+});
+
 export type StudioSink = {
+  /**
+   * Announce a run, so its spans can reach the Studio while it is still running.
+   *
+   * Optional, and the sink is correct without it: a trace nobody announced is
+   * buffered and sent whole at the end, exactly as before. This is how you opt in
+   * to a run showing up in the dashboard while it is still happening.
+   */
+  begin: (hint: TraceHint) => void;
   /** A `TelemetrySink`, so a run can be traced without knowing about HTTP. */
   emit: (span: Span) => void;
   /** Send the finished trace. Called when the run ends, however it ends. */
@@ -111,11 +184,13 @@ export type StudioSink = {
 };
 
 /**
- * A sink that POSTs finished traces to a Studio.
+ * A sink that POSTs traces to a Studio.
  *
- * Spans are buffered rather than sent: the Studio stores a trace as one unit,
- * because half a trace is not a thing anybody wants to read, and because a
- * dashboard drawing a waterfall needs the whole span tree anyway.
+ * A finished trace is sent as one unit, because the Studio stores a trace whole
+ * and a waterfall needs the entire span tree anyway. A trace that was announced
+ * with `begin` is also sent while it runs, so a dashboard can draw it growing —
+ * those partials are additive on the server, and the finished trace replaces
+ * them, so being wrong about a partial only ever costs a moment.
  */
 export const createStudioSink = (
   endpoint: StudioEndpoint,
@@ -124,6 +199,10 @@ export const createStudioSink = (
 ): StudioSink => {
   const fetchImpl = options.fetchImpl ?? fetch;
   const spansByTrace = new Map<string, Span[]>();
+  // Announced runs only. A trace the caller never announced has no name or tags
+  // to send, and inventing them would put a run in the dashboard under a name
+  // nobody chose — so it waits for its final send, as it always did.
+  const streaming = new Map<string, Running>();
   // Everything this sink owes somebody: recording a run, and the request that
   // carries it. One set, because from the outside it is one job.
   const work = new Set<Promise<unknown>>();
@@ -133,7 +212,7 @@ export const createStudioSink = (
     void job.catch(() => undefined).finally(() => work.delete(job));
   };
 
-  const post = async (trace: Trace, spans: Span[]): Promise<void> => {
+  const post = async (trace: Trace | RunningTrace, spans: Span[], final: boolean): Promise<void> => {
     try {
       const response = await fetchImpl(new URL("/api/traces", endpoint.url), {
         method: "POST",
@@ -143,7 +222,7 @@ export const createStudioSink = (
         },
         // The whole trace, minus the parts that make it large: a run's own
         // reasoning is what the model said, and the Studio has the root span.
-        body: JSON.stringify({ agent, trace, spans }),
+        body: JSON.stringify({ agent, trace, spans, final }),
         signal: AbortSignal.timeout(5_000),
       });
       if (!response.ok) {
@@ -164,22 +243,126 @@ export const createStudioSink = (
     }
   };
 
+  /**
+   * Send whatever a running trace has produced since it was last sent.
+   *
+   * Never awaited by `emit`, which is the whole point: a Studio that is slow
+   * must not be able to slow down the model call that produced the span. One
+   * request per trace at a time, and a request that lands while another is in
+   * flight schedules the next rather than joining it — otherwise a fast run
+   * would queue a request per span and finish its turn after its own dashboard.
+   */
+  const sendPartial = (traceId: string): void => {
+    const running = streaming.get(traceId);
+    if (!running) return;
+    if (running.timer !== null) {
+      clearTimeout(running.timer);
+      running.timer = null;
+    }
+    if (running.inFlight) {
+      // Whatever arrived while this one was in the air goes out the moment it
+      // lands, so a quiet moment cannot strand spans the final send has to
+      // carry anyway.
+      running.again = true;
+      return;
+    }
+    if (running.unsent.length === 0) return;
+
+    const spans = running.unsent;
+    running.unsent = [];
+    running.sent += 1;
+    running.inFlight = true;
+    const job = post(running.trace, spans, false)
+      .catch(() => undefined)
+      .then(() => {
+        running.inFlight = false;
+        running.inFlightJob = null;
+        // A run that is over does not get a trailing partial. The final write
+        // carries every span anyway, so sending one now would only be a request
+        // that arrives before the thing it is waiting for.
+        if (running.closing) return;
+        if (running.again || running.unsent.length > 0) {
+          running.again = false;
+          sendPartial(traceId);
+        }
+      });
+    running.inFlightJob = job;
+    track(job);
+  };
+
   return {
+    begin(hint: TraceHint): void {
+      // A second `begin` for a live trace would reset what it has already sent,
+      // so the first one wins: the caller that announced it is the one that knows.
+      if (streaming.has(hint.id)) return;
+      streaming.set(hint.id, {
+        trace: runningTrace(hint),
+        unsent: [],
+        timer: null,
+        inFlight: false,
+        inFlightJob: null,
+        closing: false,
+        again: false,
+        sent: 0,
+      });
+    },
     emit(span: Span): void {
       const existing = spansByTrace.get(span.traceId);
-      if (existing) {
-        existing.push(span);
+      if (existing) existing.push(span);
+      else spansByTrace.set(span.traceId, [span]);
+
+      const running = streaming.get(span.traceId);
+      // A trace nobody announced waits for its final send, as it always did.
+      if (!running) return;
+      running.unsent.push(span);
+
+      // The first span goes out at once: it is the one that makes the run
+      // *appear*, and holding it back for the coalescing window would mean a
+      // dashboard that stayed blank for exactly as long as it took to notice.
+      if (running.sent === 0) {
+        sendPartial(span.traceId);
         return;
       }
-      spansByTrace.set(span.traceId, [span]);
+      // After that, coalesce. A run emits a span per model call and per tool,
+      // which is several a second — each one is a tenth of a span, and the
+      // Studio would be redrawing the same trace for all of them.
+      if (running.timer === null) {
+        const timer = setTimeout(() => sendPartial(span.traceId), PARTIAL_INTERVAL_MS);
+        // Nothing here should be what keeps a one-shot `nah -p` alive.
+        timer.unref?.();
+        running.timer = timer;
+      }
     },
-    // One request per trace, immediately. The spans were already batched in memory
-    // while they accumulated, so a delay here would only risk the post outliving
-    // the process that made it.
     async flush(trace: Trace): Promise<void> {
+      // The finished trace replaces everything the partials said, so it carries
+      // every span — including the ones already sent.
+      const running = streaming.get(trace.id);
+      if (running) {
+        if (running.timer !== null) {
+          clearTimeout(running.timer);
+          running.timer = null;
+        }
+        // Let the open partial land before the final goes out.
+        //
+        // A late partial is harmless to the row — the store ignores a second
+        // insert and re-upserts spans the final already holds — but harmless is
+        // not the same as orderly, and it depends on two things staying true:
+        // that the final always carries every span a partial did, and that the
+        // store never overwrites a trace row with an in-progress one. Waiting
+        // costs one round trip on the exit path, and buys the simpler invariant
+        // that the last write for a trace id is the one saying the run is over —
+        // which is what lets anything downstream treat a missing final as
+        // "this run never reported an ending" rather than a race.
+        running.closing = true;
+        // Bounded by the same 5s request timeout as every other post, so a
+        // Studio that accepts the connection and never answers costs a bounded
+        // wait, not a hung exit.
+        if (running.inFlightJob) await running.inFlightJob;
+      }
+      streaming.delete(trace.id);
       const spans = spansByTrace.get(trace.id) ?? [];
       spansByTrace.delete(trace.id);
-      await post(trace, spans);
+      await post(trace, spans, true);
     },
     track,
     async settled(): Promise<void> {
@@ -274,6 +457,10 @@ export const teeEvents = <T>(source: AsyncIterable<T>): { a: AsyncIterable<T>; b
  *
  * The same events the transcript renders are the ones recorded, so tracing cannot
  * change what the agent does, and the two can never disagree about what happened.
+ *
+ * The run is announced before its first span, so a turn that is still going shows
+ * up as a turn that is still going. None of that reporting is awaited by the turn
+ * — the spans are handed over and the sink sends them when it can.
  */
 export const traceTurn = (
   telemetry: StudioTelemetry,
@@ -281,12 +468,33 @@ export const traceTurn = (
   context: { prompt: string; model?: string },
 ): AsyncIterable<HarnessEvent> => {
   const branches = teeEvents(events);
+
+  // The id is chosen here rather than left to the harness, because the sink
+  // needs it before the run starts: a trace announced while it is still going
+  // has to land under the same id it finishes under, or the dashboard shows the
+  // run twice — once as a run in progress, once as the run that replaced it.
+  const traceId = randomUUID().replace(/-/g, "");
+  const tags = ["studio"];
+  const metadata = { "nah.agent.id": telemetry.agent.id, "nah.agent.name": telemetry.agent.name };
+
+  // Announced before the first span, so the dashboard can show the run existing
+  // before it has done anything. Says what the turn *is*; the harness below
+  // decides how it goes, and its answer is what finally lands.
+  telemetry.sink.begin({
+    id: traceId,
+    name: context.prompt.slice(0, 60),
+    startTime: Date.now(),
+    tags,
+    metadata,
+  });
+
   const traced = traceRun(
     {
       sink: telemetry.sink,
       serviceName: "nah",
-      tags: ["studio"],
-      metadata: { "nah.agent.id": telemetry.agent.id, "nah.agent.name": telemetry.agent.name },
+      traceId,
+      tags,
+      metadata,
     },
     branches.a,
     {

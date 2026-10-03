@@ -37,6 +37,78 @@ const baseState = (over: Partial<SessionState> = {}): SessionState =>
 const withDelegation = (extra: Record<string, unknown> = {}) =>
   baseState({ tools: { delegate_task: {}, ...extra } as unknown as SessionState["tools"] });
 
+describe("the read-only path is the one the model reaches for first", () => {
+  it("names the explore tool before the editing ones", () => {
+    // The gap this closes: the only delegate we had always spun a git worktree
+    // and always implied editing. So "find where X does Y" — the step before any
+    // code is written, and the most common one — had no cheap route, and a
+    // worktree plus a diff for a question is overhead with nothing to show for
+    // it. Claude Code's most-used subagent is exactly this shape for that reason.
+    const { system } = composeTurnRequest(
+      withDelegation({ delegate_tasks: {}, delegate_explore: {} }),
+      "find where the auth check happens",
+      "",
+    );
+    const explore = system.indexOf("delegate_explore");
+    const single = system.indexOf("delegate_task ");
+    const batch = system.indexOf("delegate_tasks are for children that actually change files");
+    expect(explore).toBeGreaterThan(-1);
+    expect(explore).toBeLessThan(single);
+    expect(explore).toBeLessThan(batch);
+  });
+
+  it("tells the model explore cannot edit, and that it may verify by running", () => {
+    const { system } = composeTurnRequest(
+      withDelegation({ delegate_explore: {} }),
+      "why is this slow",
+      "",
+    );
+    // The restriction that survived measurement is the one on the editors. The
+    // shell came back because a child that could not run anything cheerfully
+    // reported a plausible cause it had never checked — and the parent then ran
+    // the same commands itself to check, which is the context the delegation was
+    // supposed to save.
+    expect(system).toContain("no edit or write tool");
+    expect(system).toContain("check its own answer");
+    expect(system).toContain("depth quick");
+  });
+
+  it("points at the batch explore call when it is available", () => {
+    // The gap this closes: delegate_explore's own description told the model it
+    // could hand over several questions at once while offering no way to do it,
+    // so a fan-out meant N sequential calls each waiting on the last.
+    const { system } = composeTurnRequest(
+      withDelegation({ delegate_explores: {} }),
+      "trace where auth, billing, and sessions each check in",
+      "",
+    );
+    expect(system).toContain("delegate_explores");
+    expect(system).toContain("do not depend on each other");
+  });
+
+  it("labels an explore call as read-only in the transcript", () => {
+    // "delegate in isolated worktree" on a tool that has no worktree is the kind
+    // of detail that sends the next reader looking for a diff that does not exist.
+    expect(toolLabel("delegate_explore", { title: "trace the loader" })).toBe(
+      "explore read-only: trace the loader",
+    );
+  });
+
+  it("marks which children in a batch explore were the cheap ones", () => {
+    // The depth is the only thing that distinguishes a fan-out that was chosen
+    // from one that was accidental, so the transcript has to carry it — otherwise
+    // the cost of a call is only visible in the transcript after it is spent.
+    expect(
+      toolLabel("delegate_explores", {
+        questions: [
+          { title: "find the loader", depth: "quick" },
+          { title: "trace every caller", depth: "thorough" },
+        ],
+      }),
+    ).toBe("explore 2 questions: find the loader (quick), trace every caller");
+  });
+});
+
 describe("the plan-to-sub-agents path is the one the model is told about", () => {
   it("points at the batch call, not just the single one", () => {
     // The gap this closes: a plan is several independent pieces, and delegating

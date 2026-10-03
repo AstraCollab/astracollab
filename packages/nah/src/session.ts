@@ -60,6 +60,17 @@ export type SessionState = {
   store: JsonlSessionStore | null;
   model: ResolvedModel | null;
   providerStatus: string | null;
+  /**
+   * Set by `runTurn` when a turn ended for a reason the UI must show instead of
+   * treating as a completion, and null otherwise. Rendered and cleared by
+   * `flushStopNotice`.
+   *
+   * Required and null when unset, like every other piece of turn state here.
+   * Optional in this file means a feature that is not installed — a
+   * `setApprovalPrompt` a host never installs, a `store` there is no session —
+   * and this one is always present. It is only ever empty.
+   */
+  stopNotice: string | null;
   /** Cumulative usage across turns (for /stats). */
   totalUsage: { inputTokens: number; outputTokens: number; totalTokens: number };
   /** Latest provider-reported input size, used as a current context estimate. */
@@ -111,6 +122,16 @@ export type SessionState = {
    * it in raw mode, and the unanswered prompt hangs the whole run.
    */
   setApprovalPrompt?: (prompt: ApprovalPrompt | null) => void;
+  /**
+   * Installs a handler for delegated children's progress, and clears it with
+   * `null`. A host UI that renders it calls this; one that does not leaves the
+   * children silent, which is the bug this exists to close — the parent showed
+   * a single pending `delegate_task` and nothing else until the finished diff
+   * came back, so a fan-out that took minutes read as a hang.
+   */
+  setChildEventHandler?: (handler: import("./delegation.js").ChildEventHandler | null) => void;
+  /** Read by the orchestrator on every child event, so a late handler still sees them. */
+  childEventHandler?: import("./delegation.js").ChildEventHandler;
   /** Rolling record of what memory injected into each turn's prompt. */
   memoryInjectionLog?: import("./memory-injection.js").MemoryInjectionLog;
   /**
@@ -229,7 +250,7 @@ export const composeTurnRequest = (
       ? `Workflows: Some sequences are written down and run the same way every time. Before assembling a multi-step sequence out of tool calls, check list_workflows — if a workflow covers the request, run it by name with run_workflow rather than improvising the same steps. A workflow already delegates its own sub-agents where the work needs judgement, so do not re-delegate the parts it covers. When the user describes a sequence they want repeated from now on, say that /workflow new <description> is how they get one, and offer to build it.`
       : "",
     state.tools.delegate_task
-      ? `Delegation: When you have a plan whose parts are independent of each other, spin up sub-agents for them instead of doing the work one piece at a time. Pass the whole plan to delegate_tasks and it runs the subtasks concurrently, each in its own isolated worktree; use delegate_task for a single independent subtask. Delegate only work that starts from committed HEAD and does not depend on your uncommitted changes or on another subtask's result. Children share no history with you, so each task must restate its own context and acceptance criteria. Every child's diff comes back for you to review and integrate deliberately; nothing is merged automatically. If the parts of a plan depend on each other, do the dependent one yourself rather than delegating it.\n\n${orchestratorPrompt({ concurrency: 3, isolation: "temporary Git worktree" })}`
+      ? `Delegation: There are four ways to hand work to a child, and the cheapest one is the one to reach for first.\n\ndelegate_explore is a child that cannot edit: it has no edit or write tool, so it has no way to change a file on purpose. It does have a shell, and it should use one — a child that can run the test, the script, or the git command can check its own answer instead of reporting a plausible guess, and its commands go through the same approval prompt as yours. Its searching never enters your context, so it is far cheaper than running the same reads yourself, and it is the right tool for anything that is finding something out rather than changing something: where a behaviour lives, how a call path flows, whether a pattern is used elsewhere, what a module exposes. Use it before you start editing anything. Set depth quick when one search would answer it and thorough when you want the answer verified.\n\ndelegate_explores is that same child asked several independent questions at once. Reach for it the moment a question splits into parts that do not depend on each other — three call paths traced together is one call rather than three you wait for in turn.\n\ndelegate_task and delegate_tasks are for children that actually change files, each in its own isolated worktree. When you have a plan whose parts are independent of each other, spin up sub-agents for them instead of doing the work one piece at a time: pass the whole plan to delegate_tasks and they run concurrently; use delegate_task for a single independent subtask.\n\nA child starts from a snapshot of your current working state, including uncommitted and untracked files, so it can build on work you have already done — and it cannot see anything you change after it starts, so do not delegate work that depends on a later edit or on another child's result. Children share no history with you, so each task must restate its own context and acceptance criteria. Every child's diff comes back for you to review and integrate deliberately; nothing is merged automatically. If the parts of a plan depend on each other, do the dependent one yourself rather than delegating it.\n\n${orchestratorPrompt({ concurrency: 3, isolation: "temporary Git worktree" })}`
       : "",
   ]
     .filter(Boolean)
@@ -461,6 +482,10 @@ export const runTurn = (
       state.activeShellCommands = null;
       state.undoHistory.push({ steps: stepRecoveries, changes: fileChanges, messages: previousMessages, ledgerBefore });
     }
+    // A held tool call ends the run; it is not a finish. Recorded here, where
+    // the result is first in hand, because `done` resolves to the result and
+    // every host currently ignores that value.
+    state.stopNotice = describeStop(result);
     state.messages = [...result.messages];
     foldTurnIntoState(state, result);
     if (state.store) {
@@ -607,6 +632,40 @@ export const saveUsage = async (state: SessionState): Promise<void> => {
     // Stats are cosmetic next to the transcript, which is already saved. A
     // failure here must not fail the turn.
   }
+};
+
+/**
+ * The line a UI must show for a stop that is not a finish, or null for a
+ * normal one.
+ *
+ * A held call ends the run by necessity: the SDK emits no tool result for a
+ * blocked call, so the next request would carry a tool call with nothing
+ * matching it. Nothing in nah answers the hold, and rendering that as an
+ * ordinary completion is the one failure the screen cannot explain — the task
+ * looks finished and is not. Named rather than thrown, because the SDK
+ * documents awaiting-approval as a normal stop a caller may answer or decline,
+ * and an error would misreport it.
+ */
+export const describeStop = (result: HarnessRunResult): string | null => {
+  if (result.reason !== "awaiting-approval") return null;
+  const held = [...new Set((result.pendingApprovals ?? []).map((p) => p.toolName))];
+  const list = held.length > 0 ? held.join(", ") : "a tool call";
+  return `Stopped — awaiting approval for ${list}. nah does not implement that gate, so the run cannot continue.`;
+};
+
+/**
+ * Renders a pending stop notice through `write` and clears it.
+ *
+ * One owner for the clear, because the notice has to be shown exactly once per
+ * stop and the hosts do not otherwise know the value matters: the TUI renders a
+ * transcript, the print mode streams it, the REPL echoes it, and each awaits
+ * `done` for the result alone. A run that stopped short is a different thing
+ * from a run that finished, and no one of them had a reason to say so.
+ */
+export const flushStopNotice = (state: SessionState, write: (line: string) => void): void => {
+  if (!state.stopNotice) return;
+  write(state.stopNotice);
+  state.stopNotice = null;
 };
 
 const foldTurnIntoState = (state: SessionState, result: HarnessRunResult): void => {

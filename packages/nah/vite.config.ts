@@ -19,6 +19,9 @@ export default defineConfig({
         // The read-only agent the Studio runs, so a dashboard debugs the same
         // agent rather than a second assembly of the same prompt and tools.
         agent: resolve(__dirname, "src/agent.ts"),
+        // The workspace's workflows, for the same reason: one loader, so the
+        // Studio cannot end up listing a different set than the terminal runs.
+        workflows: resolve(__dirname, "src/workflow-api.ts"),
       },
       formats: ["es"],
     },

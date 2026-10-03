@@ -30,6 +30,19 @@ describe("tool labels", () => {
     expect(toolLabel("read", { path: "a.ts", offset: 10 })).toBe("read a.ts:10");
     expect(toolLabel("bash", { command: "pnpm test" })).toBe("$ pnpm test");
   });
+
+  it("names a fetch by host and path, without spending width on the scheme", () => {
+    // The label is clipped to 50 characters by the approval prompt and the
+    // readonly notice, so the scheme is width taken from the part that identifies
+    // the fetch.
+    expect(toolLabel("web_fetch", { url: "https://example.com/docs" })).toBe(
+      "web fetch example.com/docs",
+    );
+    expect(toolLabel("web_fetch", { url: "http://example.com/" })).toBe("web fetch example.com/");
+    // Never a raw tool name, and never an empty row.
+    expect(toolLabel("web_fetch", {})).toBe("web fetch");
+    expect(toolLabel("web_fetch", { url: "https://example.com/" })).not.toContain("_");
+  });
 });
 
 describe("tool result summarising", () => {
@@ -54,6 +67,16 @@ describe("tool result summarising", () => {
   it("stays quiet for successful reads and searches", () => {
     expect(summarizeToolResult("read", { path: "a.ts" }, "1|line one", false).show).toBe(false);
     expect(summarizeToolResult("grep", { pattern: "x" }, "3 matches", false).show).toBe(false);
+    // A fetch's body opens with the page's own <h1>, which says nothing the
+    // `web fetch <url>` label did not already say.
+    expect(summarizeToolResult("web_fetch", { url: "https://x.dev" }, "# Release notes", false).show).toBe(
+      false,
+    );
+    // A failed fetch is the opposite case: the status line is the whole answer.
+    expect(
+      summarizeToolResult("web_fetch", { url: "https://x.dev" }, "HTTP 404 Not Found for https://x.dev", true)
+        .text,
+    ).toContain("HTTP 404");
   });
 
   it("always surfaces errors, whatever the tool", () => {

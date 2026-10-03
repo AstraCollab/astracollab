@@ -7,7 +7,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { Terminal } from "@earendil-works/pi-tui";
 
-import { createApprover } from "../src/permissions.js";
+import { createApprover, isReadonlyAllowed } from "../src/permissions.js";
 import { TurnOutput } from "../src/tui/output.js";
 import type { SessionState } from "../src/session.js";
 import { finishReason, v4Usage } from "./helpers/ai.js";
@@ -123,6 +123,68 @@ describe("approval prompt", () => {
     const yolo = createApprover(() => "yolo");
     yolo.setPrompt(async () => "n");
     expect(await yolo("bash", { command: "echo hi" })).toBe(true);
+  });
+});
+
+describe("web_fetch approval", () => {
+  it("is gated in ask mode, because a fetched page is untrusted input", async () => {
+    const ask = createApprover(() => "ask");
+    const asked: string[] = [];
+    ask.setPrompt(async (question) => {
+      asked.push(question);
+      return "y";
+    });
+    expect(await ask("web_fetch", { url: "https://example.com/docs" })).toBe(true);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain("example.com/docs");
+  });
+
+  it("'A' trusts one URL and not the next, which is the scope that means anything", async () => {
+    const ask = createApprover(() => "ask");
+    let prompted = 0;
+    let reply = "A";
+    ask.setPrompt(async () => {
+      prompted += 1;
+      return reply;
+    });
+
+    expect(await ask("web_fetch", { url: "https://example.com/a" })).toBe(true);
+    expect(prompted).toBe(1);
+    // Same host, different page: still asks. Approving a fetch must not turn
+    // into approving whatever the model asks for next.
+    reply = "n";
+    expect(await ask("web_fetch", { url: "https://example.com/b" })).toBe(false);
+    expect(prompted).toBe(2);
+    // The URL that was approved stays approved.
+    reply = "n";
+    expect(await ask("web_fetch", { url: "https://example.com/a" })).toBe(true);
+    expect(prompted).toBe(2);
+  });
+
+  it("'a' trusts every fetch for the session", async () => {
+    const ask = createApprover(() => "ask");
+    let prompted = 0;
+    ask.setPrompt(async () => {
+      prompted += 1;
+      return "a";
+    });
+    expect(await ask("web_fetch", { url: "https://a.example" })).toBe(true);
+    expect(await ask("web_fetch", { url: "https://b.example" })).toBe(true);
+    expect(prompted).toBe(1);
+  });
+
+  it("is allowed in readonly mode, which promises nothing changes on disk", async () => {
+    const readonly = createApprover(() => "readonly");
+    let prompted = false;
+    readonly.setPrompt(async () => {
+      prompted = true;
+      return "n";
+    });
+    expect(await readonly("web_fetch", { url: "https://example.com" })).toBe(true);
+    expect(prompted).toBe(false);
+    // The workspace half of the promise still holds.
+    expect(await readonly("write", { path: "a.ts", content: "x" })).toBe(false);
+    expect(isReadonlyAllowed("write")).toBe(false);
   });
 });
 

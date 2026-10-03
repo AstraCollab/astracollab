@@ -121,6 +121,7 @@ export const makeState = async (opts: {
     store,
     model,
     providerStatus: null,
+    stopNotice: null,
     totalUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     contextUsedTokens: 0,
     contextUsageEstimated: false,
@@ -163,6 +164,9 @@ export const makeState = async (opts: {
           return state.model.model;
         },
         approve,
+        // Read per event rather than captured, so a host that installs its
+        // handler after the session was built still receives child progress.
+        onChildEvent: (event) => state.childEventHandler?.(event),
         onChildUsage: (usage) => {
           state.totalUsage.inputTokens += usage.inputTokens;
           state.totalUsage.outputTokens += usage.outputTokens;

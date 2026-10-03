@@ -6,17 +6,17 @@
  * descriptions carry their own usage rules.
  */
 export const buildSystemPrompt = (opts: {
-  /** Extra constraints appended to the core (per-org/per-task). */
-  append?: string;
-  /** Discovered context files, e.g. AGENTS.md contents (labelled by path). */
-  contextFiles?: Array<{ path: string; content: string }>;
-  /** On-demand skill summaries (name + one-line description only). */
-  skills?: Array<{ name: string; description: string }>;
-  /** Working directory label shown to the model. Default "/". */
-  cwdLabel?: string;
+	/** Extra constraints appended to the core (per-org/per-task). */
+	append?: string;
+	/** Discovered context files, e.g. AGENTS.md contents (labelled by path). */
+	contextFiles?: Array<{ path: string; content: string }>;
+	/** On-demand skill summaries (name + one-line description only). */
+	skills?: Array<{ name: string; description: string }>;
+	/** Working directory label shown to the model. Default "/". */
+	cwdLabel?: string;
 }): string => {
-  const cwd = opts.cwdLabel ?? "the workspace root";
-  const core = `You are a coding agent working in ${cwd}. Make the change, verify it, and stop.
+	const cwd = opts.cwdLabel ?? "the workspace root";
+	const core = `You are a coding agent working in ${cwd}. Make the change, verify it, and stop.
 
 Tools:
 - **glob** — find files by pattern (\`**/page.tsx\`); reach for this before guessing paths
@@ -27,6 +27,7 @@ Tools:
 - **edit** — exact-string replacement for targeted changes to existing files
 - **write** — full-file writes for new files or complete rewrites
 - **bash** — builds, tests, git, installs (not for listing or search)
+- **web_fetch** — read a URL (docs, an API reference, a release note, an issue); returns markdown, so a page costs the prose rather than the markup
 
 Never reach for bash to look at code. Each of these is a bash command pretending to be a tool, and each costs a step plus a model round trip to decode shell output back into structure:
 - \`ls\`, \`find\`, \`tree\` → **list**
@@ -34,6 +35,7 @@ Never reach for bash to look at code. Each of these is a bash command pretending
 - \`wc -l\`, \`cat\` a source file → **outline**, then **read**
 - \`sed -n '200,300p'\`, \`head\`/\`tail\` of a file → **read** with offset/limit
 - \`git diff\` → read the file, or run the check that matters
+- \`curl\`, \`wget\` → **web_fetch**, which converts HTML to markdown first
 
 How to work:
 - Search once, then read. Overlapping greps (<button, then inline-flex, then btn-) return nearly the same files and cost a step each. If a grep gave you the file, read that file. When greps are returning the same set of files, that is a signal the question is not narrowing — decide which single file holds the answer and read it.
@@ -55,26 +57,31 @@ How to work:
 - Be concise. Name the paths you changed.
 - When done, reply with a short plain-text summary and no more tool calls.`;
 
+	const contextBlock =
+		opts.contextFiles && opts.contextFiles.length > 0
+			? [
+					"## Project context",
+					...opts.contextFiles.flatMap((f) => [
+						`Contents of ${f.path}:`,
+						"```",
+						f.content.trim(),
+						"```",
+						"",
+					]),
+				]
+			: [];
 
-  const contextBlock =
-    opts.contextFiles && opts.contextFiles.length > 0
-      ? [
-          "## Project context",
-          ...opts.contextFiles.flatMap((f) => [`Contents of ${f.path}:`, "```", f.content.trim(), "```", ""]),
-        ]
-      : [];
+	const skillsBlock =
+		opts.skills && opts.skills.length > 0
+			? [
+					"## Available skills (ask for one by name before using it)",
+					...opts.skills.map((s) => `- **${s.name}** — ${s.description}`),
+					"",
+				]
+			: [];
 
-  const skillsBlock =
-    opts.skills && opts.skills.length > 0
-      ? [
-          "## Available skills (ask for one by name before using it)",
-          ...opts.skills.map((s) => `- **${s.name}** — ${s.description}`),
-          "",
-        ]
-      : [];
-
-  return [core, "", ...contextBlock, ...skillsBlock, opts.append?.trim() ?? ""]
-    .filter((l, i, arr) => !(l === "" && arr[i - 1] === ""))
-    .join("\n")
-    .trim();
+	return [core, "", ...contextBlock, ...skillsBlock, opts.append?.trim() ?? ""]
+		.filter((l, i, arr) => !(l === "" && arr[i - 1] === ""))
+		.join("\n")
+		.trim();
 };

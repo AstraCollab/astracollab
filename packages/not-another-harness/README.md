@@ -55,12 +55,14 @@ const result = await run.result;
 console.error(`\n${result.reason}; ${result.usage.totalTokens} tokens`);
 ```
 
-`askUserToApprove` is supplied by your application. The built-in `edit`, `write`, and `bash` tools call it before performing a mutation. If you omit `approveToolCall`, those tools are allowed; connect the callback to your app’s approval policy when running against untrusted tasks.
+`askUserToApprove` is supplied by your application. The built-in `edit`, `write`, `bash`, and `web_fetch` tools call it before they run. If you omit `approveToolCall`, those tools are allowed; connect the callback to your app’s approval policy when running against untrusted tasks.
+
+`web_fetch` is in that list for a different reason than the other three. They change something, so the question is "may I change this". It changes nothing, and asks anyway, because the question it raises is another one: a fetched page is untrusted text that lands in the context, and a URL assembled out of something just read out of the repository is a way to send that repository to somebody. Key your approval on the URL and "allow this exact call" becomes a scope that means something on a tool called with a new URL each time.
 
 ## What the runtime provides
 
 - `runAgent` performs one model round trip per step and emits typed run, step, text, tool-call, tool-result, compaction, finish, and error events.
-- `createCodingTools` provides capped `read`, `list`, `grep`, `glob`, `edit`, `write`, and optional `bash` tools. Existing files are read before `edit` or `write` by default.
+- `createCodingTools` provides capped `read`, `list`, `grep`, `glob`, `edit`, `write`, `web_fetch`, and optional `bash` tools. Existing files are read before `edit` or `write` by default.
 - `buildSystemPrompt` creates a concise coding-agent prompt and can include project context files and extra constraints.
 - `compactMessages` and the run options support model-based summarization, lossy truncation, or disabled compaction.
 - `createJsonlSessionStore` persists messages and branches as JSONL. The CLI uses this store for resumable sessions.
@@ -94,6 +96,30 @@ glob { pattern: "*.ts", path: "src", includeHidden: true }
 ```
 
 `grep` accepts a glob in `path` as well (`grep { pattern: "DocsShell", path: "apps/nah/**/*.tsx" }`), which is usually the fastest way to find the code that references something. Both tools skip `node_modules`, `.git`, and build output; pass `includeHidden` to opt back into dotfiles.
+
+## Fetching a URL
+
+`web_fetch` retrieves a URL and converts it before returning: HTML becomes markdown by default, or plain text, or the raw markup.
+
+```
+web_fetch { url: "https://example.com/docs/install" }
+web_fetch { url: "https://example.com/changelog", format: "text" }
+web_fetch { url: "https://api.example.com/v1/items", timeoutSeconds: 60 }
+```
+
+The conversion is the reason it exists rather than `curl` in `bash`. A documentation page is mostly `<nav>`, `<script>`, and inline CSS, and a shell fetch spends a step and a round trip to decode that into structure. The `Accept` header is negotiated per format too, so a host that serves markdown directly is never round-tripped through HTML at all.
+
+Three bounds, all deliberate: a 5MB download ceiling counted *while streaming* (a chunked response sends no `content-length`, so a header check alone is advisory rather than real), a 30s default timeout rising to 120s, and a cap on the converted page. The cap notice tells the agent to ask for a more specific URL and **not** to fetch again — a web page cannot be paged the way a file can, and a notice that suggests a retry sends the agent round the same loop paying twice, which is the regression `bash` already had here.
+
+A repeat of the same URL and format is served from memory rather than requested again, with a note saying so: step-scoped de-duplication only collapses identical calls in the *same* step, so the repeat that costs money is the same page fetched four steps later, on a transcript that re-sends itself from there on. Keyed by format as well as URL, because `format: "text"` over an already-fetched page is a different question.
+
+`withWebFetch: false` removes the tool. Pass `fetchImpl` to route or audit egress. Binary responses are named rather than decoded, since the tool returns text and base64 of a PDF costs a step to diagnose. There is no web *search* — a model without a URL cannot use this.
+
+Borrowed from opencode's `webfetch`: the per-format `Accept`, and a browser `User-Agent` with an honest retry. Docs hosts sit behind bot protection that challenges anything without one, and the retry matters more than it looks — the first request claims to be a browser while presenting a Node TLS fingerprint, which is the mismatch the challenge detects, so a 403 carrying `cf-mitigated: challenge` is answered by asking again as `nah`.
+
+### Dependencies
+
+`turndown` is a `dependencies` entry but stays **external** to the bundle, which is unusual for a non-peer dependency and deliberate. It pulls `@mixmark-io/domino`, a full DOM implementation, and inlining it took `dist/index.js` from 276KB to 789KB — charged to every consumer who bundles this package, for one optional tool. Node resolves it at runtime instead, and a bundling consumer can dedupe it against their own copy. `htmlparser2` is the opposite case and is inlined: it is ESM-only, so the CommonJS build could not `require()` it, and it brings no DOM of its own.
 
 ## Prompt caching
 
@@ -265,6 +291,245 @@ rather than re-reading messages.
 Returning nothing leaves the step alone. **Throwing ends the run**, deliberately: a
 hook that fails while deciding whether to require a tool would otherwise be
 indistinguishable from one that decided not to.
+
+## Ending a run early: `shouldStop`
+
+`maxSteps` and `maxSpendUsd` bound a run generically. Neither can see what a
+*particular* agent does when it is lost — verifying git over and over after it has
+already edited, calling tools that do not exist, restating "I'm done". That
+knowledge belongs to the caller, and without a hook the only way to express it is
+to reimplement the loop.
+
+```ts
+runAgent({
+  ...,
+  shouldStop: ({ messages, steps }) => {
+    const verdict = evaluateAntiLoop(messages);
+    if (verdict.stopped) log.warn(`anti-loop: ${verdict.reason}`);
+    return verdict.stopped;
+  },
+});
+```
+
+The context is the same shape `prepareStep` receives — one vocabulary for "change
+this step" and "end this run". Callbacks are copies, so a rule cannot rewrite the
+run, and a rule that throws ends it as an error rather than quietly not firing.
+
+It reports its own reason: `stopped-by-caller`, because `max-steps` and
+`no-progress` each mean something specific and neither is true when a domain rule
+fires. Checked at the step boundary, *before* the loop decides the model has
+finished — a rule about an agent going in circles has to be able to see a step the
+model finished on, and placed after that check it would only ever see steps that
+made tool calls, which is where such a rule has nothing to say. Never fires on the
+first step, where there is no history to inspect.
+
+`@astracollab/agents` ships `createAntiLoopStop`, which is five such rules for a
+coding agent, wired to this.
+
+## Tool execution
+
+A tool's `execute` runs, its result reaches the transcript, and both are visible on
+the event stream. `test/tool-execution.test.ts` asserts all three against the mock
+provider, so this is covered by the suite rather than by production observation.
+
+The shape that makes it work, and the one worth writing down because it looks like a
+type error rather than a runtime one: a tool call's `input` is a **string** in a
+*stream* part and an **object** in a *prompt* part. A stream fixture built from the
+prompt shape compiles only through a cast, and at runtime the SDK calls `.trim()` on
+it:
+
+```
+TypeError: toolCall.input.trim is not a function
+```
+
+A provider streams a tool call's arguments as JSON text, which is why the SDK calls
+`.trim()`. `test/helpers/ai.ts` builds the real sequence — `tool-input-start`,
+`tool-input-delta`, `tool-input-end`, then `tool-call` — so a fixture cannot get it
+wrong silently.
+
+**A tool that throws is reported, not swallowed.** The SDK puts the failure on a
+`tool-error` part rather than on the result, and the loop maps it to a `tool-result`
+event with `isError: true` and the same message the model reads:
+
+```ts
+{ type: "tool-result", step: 1, toolCallId: "t1", toolName: "grep",
+  output: "Error: ENOENT: no such file", isError: true }
+```
+
+Every `tool-call` therefore pairs with exactly one `tool-result`, matched by
+`toolCallId`, and `traceRun` marks the tool span `status: "error"`. It is
+deliberately *not* mapped onto the `error` event: the SDK hands the failure to the
+model as error-text and lets it recover, and a harness that threw would turn one bad
+`grep` into a dead run.
+
+## Per-step tool context: `toolsContext`
+
+```ts
+runAgent({
+  ...,
+  tools: { read, write },
+  // Keyed by tool name. One slice per tool.
+  toolsContext: { read: { actor }, write: { actor } },
+});
+```
+
+Tools are built **once**, so a value that changes per step cannot be captured in a
+closure: a step counter, a deadline, the text of the step so far. This is the
+option for those, and a tool reads it from its execution options:
+
+```ts
+tool({
+  execute: async (input, { context }) => { /* context is this tool's slice */ },
+});
+```
+
+**The map is keyed by tool name**, which is the SDK's contract rather than a
+convenience: `executeToolCall` reads `toolsContext[toolName]` for the call it is
+about to run and nothing else. One shared object (`{ actor }` rather than
+`{ read: { actor } }`) is not rejected and not warned about — it reads as the context
+of a tool named `actor`, so every real tool receives `undefined`. That mistake is
+invisible from the outside, which is why the unkeyed shape is pinned in
+`test/tool-context.test.ts`.
+
+A tool that declares a `contextSchema` has its slice validated on every call; tools
+that declare nothing get the value as-is. The harness rebuilds its tool set three
+times (dedupe, read coverage, cache markers) and every wrapper spreads the original,
+so the slice survives.
+
+`prepareStep` overrides it **for that step only** — like every other override here,
+it does not carry forward, so a counter has to be recomputed from `stepNumber` each
+step rather than read off the previous override. A step that overrides nothing falls
+back to the run's value.
+
+**For a value fixed for the turn, use a closure.** It is simpler, it cannot be
+read by a turn belonging to a different user, and it needs none of this. Reach for
+`toolsContext` only for what a closure genuinely cannot hold.
+
+## Asking before a tool runs: `toolApproval`
+
+```ts
+runAgent({
+  ...,
+  tools: { deleteFile, readFile },
+  toolApproval: { deleteFile: "user-approval" },
+});
+```
+
+A destructive tool should not run because a model asked it to. `toolApproval` is the
+SDK's own gate, passed through: name a tool `"user-approval"` to hold it for a person,
+or give it a function that decides from the call.
+
+```ts
+toolApproval: {
+  deleteFile: (input) =>
+    input.path.startsWith("tmp/") ? "approved" : "user-approval",
+},
+```
+
+Anything **not named runs unattended**, which is why this defaults to nothing: a
+harness cannot know which of its tools are destructive, and a gate that quietly
+approved everything would be worse than no gate because it would look deliberate.
+
+### The run stops; it does not wait
+
+A held call **ends the run**, with `reason: "awaiting-approval"` and the calls listed
+on `result.pendingApprovals`. This is not a policy choice. The SDK emits no tool
+result for a blocked call, so the next request would carry a `tool-call` with no
+matching result and be rejected outright with `MissingToolResultsError`. Suspension is
+the only valid move.
+
+It is also a distinct reason rather than a reuse of `max-steps`, because the two need
+opposite handling: the run is paused, not finished, and a caller that reported a
+normal approval prompt to the user as a failure would be wrong about the most
+expected event in the system.
+
+No wrap-up step is spent either. Every other hard stop winds down with one final
+request; this one must not, because the transcript ends in an unanswered call and that
+request would fail rather than tidy up.
+
+### Answering it
+
+Approval is a **round-trip through the transcript**, not an in-flight callback. The
+answer is a message part matched by `approvalId`, so the run is resumed by handing the
+transcript back with the decision in it:
+
+```ts
+const first = await runAgent({ ..., toolApproval }).result;
+
+if (first.reason === "awaiting-approval") {
+  await save(first.messages);
+  // …the user clicks approve or deny, which may be minutes and a restart later…
+  const decisions = Object.fromEntries(
+    first.pendingApprovals.map((p) => [p.approvalId, { approved: userSaidYes(p) }]),
+  );
+  const resumed = runAgent({
+    ...,
+    toolApproval,                                  // still gated
+    messages: appendApprovalResponses(first.messages, decisions),
+    prompt: "",                                    // the transcript already has the task
+  });
+}
+```
+
+Three details that are not guessable, each of which fails silently:
+
+- **The answer must be in the last message.** The SDK reads approval responses from
+  `messages.at(-1)` and only if it is a `tool` message. So a resumed run passes
+  `prompt: ""` — the harness detects a transcript that ends in a decision and does not
+  append the prompt, which would push the answer out of that position. Append it
+  anyway and the approved tool never runs, and the run reports success having done
+  nothing, because a model asked to continue will happily produce text.
+- **The gate can stay configured.** A call that already has a decision in the
+  transcript is executed directly, not asked about twice. The `prompt: ""` in the
+  snippet is not a way to switch the gate off.
+- **Use `appendApprovalResponses`** rather than assembling the part by hand. It matches
+  against the requests actually open in the transcript and ignores decisions for calls
+  that are already answered, so a resumed run cannot re-ask a question the user has
+  already answered, or flip one the SDK has already acted on.
+
+### Events
+
+| Event | Means |
+|---|---|
+| `tool-approval-request` | A tool is waiting. `isAutomatic: false` means a person must answer; `true` means the gate decided by itself and nothing is waiting. |
+| `tool-approval-response` | A decision reached the SDK — `approved` true or false. |
+| `tool-result` with `isError: true` | A denied call. Emitted so every `tool-call` still pairs with exactly one result; without it a refusal is the one call in the run with no outcome at all. |
+
+`traceRun` closes a held call's span with `nah.tool.awaiting_approval` and leaves its
+status unset, so a trace distinguishes *waiting on a person* from *crashed* and from
+*still running*.
+
+## Warm sessions: `createSessionManager`
+
+The runtime half of what Mastra's `Harness` gave `@astracollab/client`: a keyed
+registry that keeps a session's expensive resources alive across turns, hands the
+same one back, and eventually reclaims it.
+
+```ts
+const sessions = createSessionManager({
+  create: (key) => buildSession(key),   // a run handle, a resolved model, a sandbox
+  idleTtlMs: 5 * 60_000,
+  maxSessions: 100,
+});
+
+await sessions.ensure(chatId);   // same resource back, every time
+```
+
+Generic over the resource on purpose: the same manager keeps a `HarnessRun` warm,
+or a resolved model plus sandbox, or whatever a caller pays to build once per
+conversation. It stores **no conversation state** — a caller passes `messages` per
+turn from its own store, so this cannot become a second source of truth for a
+transcript.
+
+Two failures it exists to prevent, both expensive: building twice means two
+sandboxes and two Postgres pools, and building fresh every time means the warm
+reuse never existed. Concurrent cold callers therefore share one construction,
+and `ensure()` returns the same object by identity.
+
+Idle sessions are reclaimed on a background timer, `unref`ed so a manager cannot
+keep a process alive. The interval defaults to a quarter of `idleTtlMs` capped at
+30s, so the TTL you set is the number that actually holds. `stopSweeping()` turns
+it off; `sweepIntervalMs: 0` opts out.
 
 ## Persisting a run: `sessionUpdate`
 

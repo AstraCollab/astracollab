@@ -11,47 +11,143 @@ export type ResolvedModel = {
   setStatusHandler: (handler?: (status: string | null) => void) => void;
 };
 
-const providerFetch = (provider: string) => {
+/**
+ * Statuses worth repeating.
+ *
+ * Every one of these is a response the model never got to answer on, so a
+ * repeat is a fresh request rather than a duplicate of work already billed —
+ * the body has not been read at this point in the loop. 401/403/404/422 are
+ * deliberately absent: they are the caller's problem, and repeating them only
+ * spends the backoff before failing the same way.
+ */
+const RETRYABLE_STATUS = new Set([408, 429, 502, 503, 504]);
+
+/** One call plus two repeats. */
+const MAX_ATTEMPTS = 3;
+const BASE_BACKOFF_MS = 500;
+const MAX_BACKOFF_MS = 8_000;
+
+/**
+ * A server may ask for a longer wait than the backoff curve would pick — most
+ * often a 429 carrying `Retry-After`. Honour it, but bounded: an unbounded
+ * honour would let one response park the run for as long as it liked.
+ */
+const MAX_RETRY_AFTER_MS = 30_000;
+
+/**
+ * Exported for tests: the retry policy is the part of this module with real
+ * branching, and reaching it through a live provider would mean asserting on
+ * network timing.
+ */
+export const providerFetch = (provider: string) => {
   let onStatus: ((status: string | null) => void) | undefined;
-  let failures = 0;
   let statusVersion = 0;
+  /**
+   * `retry-after` in either of its two forms: delta-seconds, or an HTTP date.
+   */
+  const retryAfterMs = (response: Response): number | undefined => {
+    const header = response.headers.get("retry-after");
+    if (header == null) return undefined;
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1_000, MAX_RETRY_AFTER_MS);
+    const at = Date.parse(header);
+    if (Number.isNaN(at)) return undefined;
+    return Math.min(Math.max(at - Date.now(), 0), MAX_RETRY_AFTER_MS);
+  };
+  /**
+   * A backoff that ends early when the run is aborted, so a cancel during the
+   * wait does not have to sit out the remaining sleep.
+   */
+  const sleep = (ms: number, signal: AbortSignal | undefined): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        reject(signal?.reason ?? new Error("aborted"));
+      };
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener("abort", onAbort, { once: true });
+    });
+
   const fetchWithStatus: typeof fetch = async (input, init) => {
-    const attempt = failures + 1;
+    /**
+     * One version for the whole call including its repeats, so the "connected"
+     * clear timer belongs to this logical request and a newer request that
+     * started meanwhile is not silenced by it.
+     */
     const version = ++statusVersion;
-    onStatus?.(attempt > 1 ? `${provider} retry ${attempt}…` : `connecting to ${provider}…`);
-    const startedAt = Date.now();
-    const slowTimer = setTimeout(() => {
-      if (version === statusVersion) onStatus?.(`${provider} network slow · waiting for response`);
-    }, 4_000);
-    try {
-      const response = await fetch(input, init);
+    const signal = init?.signal ?? undefined;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      onStatus?.(
+        attempt > 1 ? `${provider} retry ${attempt}/${MAX_ATTEMPTS}…` : `connecting to ${provider}…`,
+      );
+      const startedAt = Date.now();
+      const slowTimer = setTimeout(() => {
+        if (version === statusVersion) onStatus?.(`${provider} network slow · waiting for response`);
+      }, 4_000);
+
+      let response: Response;
+      try {
+        response = await fetch(input, init);
+      } catch (error) {
+        clearTimeout(slowTimer);
+        /**
+         * A cancelled run is a decision, not a fault — repeating it would
+         * resurrect a request the caller already gave up on.
+         */
+        if (signal?.aborted) {
+          onStatus?.(null);
+          throw error;
+        }
+        if (attempt === MAX_ATTEMPTS) {
+          onStatus?.(`${provider} network error`);
+          throw error;
+        }
+        onStatus?.(`${provider} network error · retrying`);
+        await sleep(Math.min(BASE_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS), signal);
+        continue;
+      }
       clearTimeout(slowTimer);
+
       const elapsed = Date.now() - startedAt;
-      if (response.status === 429) {
-        failures += 1;
-        onStatus?.(`${provider} rate limited (429) · retrying`);
-      } else if (response.status === 502 || response.status === 503 || response.status === 504) {
-        failures += 1;
-        onStatus?.(`${provider} high traffic (${response.status}) · retrying`);
-      } else if (!response.ok) {
-        failures = 0;
-        onStatus?.(`${provider} returned ${response.status}`);
-      } else {
-        failures = 0;
-        const connectedStatus = `${provider} connected · ${elapsed}ms`;
-        onStatus?.(connectedStatus);
+      if (response.ok) {
+        onStatus?.(`${provider} connected · ${elapsed}ms`);
         const clearTimer = setTimeout(() => {
           if (version === statusVersion) onStatus?.(null);
         }, 1_200);
         clearTimer.unref?.();
+        return response;
       }
-      return response;
-    } catch (error) {
-      clearTimeout(slowTimer);
-      failures += 1;
-      onStatus?.(`${provider} network error · retrying`);
-      throw error;
+
+      if (!RETRYABLE_STATUS.has(response.status) || attempt === MAX_ATTEMPTS) {
+        onStatus?.(
+          RETRYABLE_STATUS.has(response.status)
+            ? `${provider} still failing (${response.status}) · giving up`
+            : `${provider} returned ${response.status}`,
+        );
+        return response;
+      }
+
+      onStatus?.(
+        response.status === 429
+          ? `${provider} rate limited (429) · retrying`
+          : `${provider} high traffic (${response.status}) · retrying`,
+      );
+      const wait =
+        retryAfterMs(response) ?? Math.min(BASE_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+      /**
+       * Drain the body before waiting. A response left unread holds its socket
+       * — and under a keep-alive agent its connection slot — for the whole
+       * backoff, which is precisely the pressure we are backing off from.
+       */
+      await response.body?.cancel().catch(() => {});
+      await sleep(wait, signal);
     }
+    throw new Error(`${provider} exhausted ${MAX_ATTEMPTS} attempts`);
   };
   return {
     fetch: fetchWithStatus,

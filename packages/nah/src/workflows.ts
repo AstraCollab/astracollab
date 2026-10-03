@@ -6,6 +6,26 @@ import { z } from "zod";
 import { createStep, createWorkflow, createWorkflowRegistry, type WorkflowRegistry, type WorkflowStepDelegate } from "not-another-harness";
 const execFileAsync = promisify(execFile);
 
+/**
+ * The workspace-workflow surface, re-exported here.
+ *
+ * The published `./workflows` entry is bundled from `workflow-api.ts`, which
+ * re-exports these, so at runtime they have always been part of this entry.
+ * `vite-plugin-dts` emits one declaration per source file rather than one per
+ * bundle entry, though, so the `.d.ts` beside `dist/workflows.js` describes
+ * *this* file — and without this line the types said otherwise. Re-exported from
+ * `workspace-workflows` directly rather than from `workflow-api`, which would be a
+ * cycle: that module already re-exports the `createNahWorkflows` below.
+ */
+export {
+  WORKSPACE_WORKFLOW_DIR,
+  listWorkspaceWorkflowFiles,
+  loadWorkspaceWorkflows,
+  resolveWorkspaceWorkflow,
+  workspaceWorkflowDir,
+  type WorkspaceWorkflowLoadResult,
+} from "./workspace-workflows.js";
+
 /** Git here is fact-gathering, not judgement, so it runs inline with a ceiling. */
 const GIT_TIMEOUT_MS = 15_000;
 

@@ -24,7 +24,8 @@ import { pickModel } from "../model-picker.js";
 import { listSessions, pickSession, type SessionRow } from "../session-picker.js";
 import { resolveModel } from "../model.js";
 import { saveLastModel } from "../model-preferences.js";
-import { runTurn, resolveInjection, type SessionState } from "../session.js";
+import { flushStopNotice, runTurn, resolveInjection, type SessionState } from "../session.js";
+import { childEventLine } from "../child-events.js";
 import { applyUsageEvent, handleSlashCommand, setActiveModel, setupProvider } from "../repl.js";
 import { handleCogmemCommand } from "../cogmem-command.js";
 import { confirmOnStdout, runStudioCommand } from "../studio-command.js";
@@ -295,6 +296,38 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
     },
   } as unknown as NodeJS.WriteStream;
 
+  /**
+   * Render each delegated child as it works.
+   *
+   * The alternative was silence: the transcript showed one pending
+   * `delegate_task` and then nothing until the finished diff came back, so a
+   * fan-out that spent minutes in children looked exactly like a hang. Lines are
+   * indented under the child they belong to, which is what makes three
+   * concurrent runs readable rather than interleaved noise.
+   */
+  state.setChildEventHandler?.((event) => {
+    if (event.type === "subtask-start") {
+      output.addLine(c.dim(`  ⧗ ${event.title}`));
+      screen.requestRender();
+      return;
+    }
+    if (event.type === "subtask-finish") {
+      const { result } = event;
+      const calls = `${result.toolCalls} tool call${result.toolCalls === 1 ? "" : "s"}`;
+      output.addLine(
+        result.status === "error"
+          ? c.red(`  ✗ ${event.title} — ${result.error ?? "failed"}`)
+          : c.dim(`  ✓ ${event.title} — ${calls}, ${result.steps} steps`),
+      );
+      screen.requestRender();
+      return;
+    }
+    const line = childEventLine(event.title, event.event);
+    if (!line) return;
+    output.addLine(line);
+    screen.requestRender();
+  });
+
   const setStatus = (text: string) => {
     status.setText(text);
     screen.requestRender();
@@ -344,6 +377,13 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
           run.abort = null;
           run.turn = null;
           run.abortRequested = false;
+          // Before `refreshPrompt`, so a stop that is not a finish is the last
+          // thing on screen rather than scrolling away under a normal status
+          // line. Cleared after rendering, so it is shown once per occurrence.
+          if (state.stopNotice) {
+            flushStopNotice(state, (line) => output.addLine(c.yellow(`  ${line}`)));
+            screen.requestRender();
+          }
           await drainDeferred();
           refreshPrompt();
           screen.requestRender();

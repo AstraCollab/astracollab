@@ -30,75 +30,78 @@ const MIN_FILES = 3;
 const MAX_RECORDS = 24;
 
 export type SearchRecord = {
-  pattern: string;
-  files: string[];
+	pattern: string;
+	files: string[];
 };
 
 export type SearchLedger = {
-  /**
-   * Record a completed search and return a notice about earlier ones it
-   * duplicates, or null when this one is new.
-   */
-  note(pattern: string, scope: string | undefined, files: string[]): string | null;
-  /** Forget every search. Called on anything that can change a file. */
-  clear(): void;
-  /** Searches flagged as repeats of an earlier one. */
-  readonly repeats: number;
+	/**
+	 * Record a completed search and return a notice about earlier ones it
+	 * duplicates, or null when this one is new.
+	 */
+	note(
+		pattern: string,
+		scope: string | undefined,
+		files: string[],
+	): string | null;
+	/** Forget every search. Called on anything that can change a file. */
+	clear(): void;
+	/** Searches flagged as repeats of an earlier one. */
+	readonly repeats: number;
 };
 
 /** Two searches in the same scope, scored by how much of the earlier set returns. */
 const overlap = (earlier: string[], files: string[]): number => {
-  if (earlier.length === 0) return 0;
-  const found = new Set(files);
-  let hits = 0;
-  for (const file of earlier) {
-    if (found.has(file)) hits += 1;
-  }
-  return hits / earlier.length;
+	if (earlier.length === 0) return 0;
+	const found = new Set(files);
+	let hits = 0;
+	for (const file of earlier) {
+		if (found.has(file)) hits += 1;
+	}
+	return hits / earlier.length;
 };
 
 export const createSearchLedger = (): SearchLedger => {
-  let records: SearchRecord[] = [];
-  let repeats = 0;
+	let records: SearchRecord[] = [];
+	let repeats = 0;
 
-  return {
-    note(pattern, scope, files) {
-      const distinct = [...new Set(files)];
-      let notice: string | null = null;
+	return {
+		note(pattern, scope, files) {
+			const distinct = [...new Set(files)];
+			let notice: string | null = null;
 
-      for (const record of records) {
-        if (record.pattern === pattern) {
-          repeats += 1;
-          notice =
-            `[already searched] "${pattern}" returned these ${record.files.length} file(s) earlier in this ` +
-            "run and nothing has changed since. Read one of them instead of searching again.";
-          break;
-        }
-        const shared = overlap(record.files, distinct);
-        if (shared < OVERLAP_THRESHOLD) continue;
-        // Two searches landing on the same one or two files is not a pattern,
-        // it is just reading them. Below this, "similar" is coincidence.
-        if (Math.min(record.files.length, distinct.length) < MIN_FILES) continue;
-        repeats += 1;
-        notice =
-          `[redundant search] ${Math.round(shared * 100)}% of these files were already returned by "${record.pattern}"` +
-          `${scope ? ` (same scope: ${scope})` : ""}. Search once, read the files, and move on to the edit.`;
-        break;
-      }
+			for (const record of records) {
+				if (record.pattern === pattern) {
+					repeats += 1;
+					notice = `[already searched] "${pattern}" returned these ${record.files.length} file(s) earlier in this run and nothing has changed since. Read one of them instead of searching again.`;
+					break;
+				}
+				const shared = overlap(record.files, distinct);
+				if (shared < OVERLAP_THRESHOLD) continue;
+				// Two searches landing on the same one or two files is not a pattern,
+				// it is just reading them. Below this, "similar" is coincidence.
+				if (Math.min(record.files.length, distinct.length) < MIN_FILES)
+					continue;
+				repeats += 1;
+				notice =
+					`[redundant search] ${Math.round(shared * 100)}% of these files were already returned by "${record.pattern}"` +
+					`${scope ? ` (same scope: ${scope})` : ""}. Search once, read the files, and move on to the edit.`;
+				break;
+			}
 
-      records.push({ pattern, files: distinct });
-      if (records.length > MAX_RECORDS) {
-        records = records.slice(-MAX_RECORDS);
-      }
-      return notice;
-    },
-    clear() {
-      records = [];
-    },
-    get repeats() {
-      return repeats;
-    },
-  };
+			records.push({ pattern, files: distinct });
+			if (records.length > MAX_RECORDS) {
+				records = records.slice(-MAX_RECORDS);
+			}
+			return notice;
+		},
+		clear() {
+			records = [];
+		},
+		get repeats() {
+			return repeats;
+		},
+	};
 };
 
 /**
@@ -110,10 +113,10 @@ export const createSearchLedger = (): SearchLedger => {
  * circling, and that is worth saying once.
  */
 export type MutationLedger = {
-  /** Record a tool call; returns true when it was a mutation. */
-  note(toolName: string): boolean;
-  /** How many mutating calls this run has made. */
-  readonly mutations: number;
+	/** Record a tool call; returns true when it was a mutation. */
+	note(toolName: string): boolean;
+	/** How many mutating calls this run has made. */
+	readonly mutations: number;
 };
 
 /**
@@ -121,18 +124,25 @@ export type MutationLedger = {
  * usually built, tested, or inspected something, and either way it is doing
  * rather than reading — which is the distinction the nudge turns on.
  */
-const MUTATING = new Set(["edit", "write", "bash", "multi_edit", "notebook_edit", "apply_patch"]);
+const MUTATING = new Set([
+	"edit",
+	"write",
+	"bash",
+	"multi_edit",
+	"notebook_edit",
+	"apply_patch",
+]);
 
 export const createMutationLedger = (): MutationLedger => {
-  let mutations = 0;
-  return {
-    note(toolName) {
-      if (!MUTATING.has(toolName)) return false;
-      mutations += 1;
-      return true;
-    },
-    get mutations() {
-      return mutations;
-    },
-  };
+	let mutations = 0;
+	return {
+		note(toolName) {
+			if (!MUTATING.has(toolName)) return false;
+			mutations += 1;
+			return true;
+		},
+		get mutations() {
+			return mutations;
+		},
+	};
 };

@@ -130,8 +130,35 @@ export const toolLabel = (toolName: string, input: unknown): string => {
       return `write ${path}`;
     case "bash":
       return `$ ${typeof args.command === "string" ? clip(args.command) : ""}`;
+    /**
+     * The URL, minus the scheme.
+     *
+     * `https://` on every row is width spent saying nothing — the label is
+     * clipped to 50 characters by the callers that have only a line, and the
+     * scheme is the part of a URL least likely to be the interesting bit. What is
+     * left is usually the host and path, which is what identifies the fetch when
+     * scrolling back through a turn.
+     */
+    case "web_fetch": {
+      const raw = typeof args.url === "string" ? args.url : "";
+      return `web fetch ${clip(raw.replace(/^https?:\/\//, ""), 44)}`.trimEnd();
+    }
     case "delegate_task":
       return `delegate in isolated worktree: ${typeof args.title === "string" ? clip(args.title) : "task"}`;
+    case "delegate_explore":
+      return `explore read-only: ${typeof args.title === "string" ? clip(args.title) : "task"}`;
+    case "delegate_explores": {
+      const questions = Array.isArray(args.questions) ? (args.questions as Array<Record<string, unknown>>) : [];
+      // Same reasoning as delegate_tasks: the count is the point of the batch
+      // call, and a depth alongside a title is what says a cheap child and an
+      // expensive one were mixed deliberately rather than by accident.
+      return `explore ${questions.length} questions: ${questions
+        .map(({ title, depth }) => {
+          const label = typeof title === "string" ? clip(title, 24) : "question";
+          return depth === "quick" ? `${label} (quick)` : label;
+        })
+        .join(", ")}`;
+    }
     case "delegate_tasks": {
       const tasks = Array.isArray(args.tasks) ? (args.tasks as Array<Record<string, unknown>>) : [];
       // The count is the whole point of the batch call, so it leads; the titles
@@ -170,8 +197,20 @@ export const toolLabel = (toolName: string, input: unknown): string => {
  *
  * The call itself (`◆ read src/app.ts`) already says what happened; echoing the
  * body back just doubles the noise. Errors are always surfaced.
+ *
+ * `web_fetch` belongs here for the same reason `read` does: the label already
+ * carries the thing worth knowing (which URL), and the body is a converted page
+ * whose first line is the page's own `<h1>` — which tells the reader nothing they
+ * did not get from the label.
  */
-const QUIET_ON_SUCCESS = new Set(["read", "list", "glob", "grep", "task_ledger"]);
+const QUIET_ON_SUCCESS = new Set([
+  "read",
+  "list",
+  "glob",
+  "grep",
+  "task_ledger",
+  "web_fetch",
+]);
 
 export type ToolResultSummary = { show: boolean; text: string };
 

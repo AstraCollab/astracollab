@@ -175,8 +175,20 @@ describe("the sink", () => {
 });
 
 describe("tracing a turn", () => {
-  /** A Studio that records what it was sent, standing in for the real one. */
-  const fakeStudio = (): { studio: StudioTelemetry; posted: Array<Record<string, unknown>> } => {
+  /**
+   * A Studio that records what it was sent, standing in for the real one.
+   *
+   * Split into the posts that arrived while the run was going and the one that
+   * replaced them, because a turn now sends both and they are not the same claim:
+   * the first says "this is happening", the last says "this is what happened".
+   */
+  const fakeStudio = (): {
+    studio: StudioTelemetry;
+    /** Sent while the turn was still running. */
+    partials: () => Array<Record<string, unknown>>;
+    /** The post that replaced them all — what the trace list is built from. */
+    final: () => Record<string, unknown>;
+  } => {
     const posted: Array<Record<string, unknown>> = [];
     const agent = describeAgent({ cwd: "/repo", env: {}, id: "ag_test" });
     const endpoint = { url: "http://127.0.0.1:4111", pid: 1, startedAt: 0, version: "1" };
@@ -186,11 +198,13 @@ describe("tracing a turn", () => {
         return new Response("{}", { status: 200 });
       }) as typeof fetch,
     });
-    return { studio: { sink, agent, endpoint, settled: () => sink.settled() }, posted };
+    const partials = () => posted.filter((body) => body.final === false);
+    const final = () => posted.filter((body) => body.final !== false).at(-1)!;
+    return { studio: { sink, agent, endpoint, settled: () => sink.settled() }, partials, final };
   };
 
   it("records the run without changing what the caller sees", async () => {
-    const { studio, posted } = fakeStudio();
+    const { studio, partials, final } = fakeStudio();
     const events = turn();
     const seen: string[] = [];
 
@@ -204,15 +218,18 @@ describe("tracing a turn", () => {
     // A process about to exit waits for this; that is what makes one-shot mode
     // report at all.
     await studio.settled();
-    expect(posted).toHaveLength(1);
-    const body = posted[0]!;
+    // And the run was visible while it ran, which is the whole reason it is
+    // announced: a two-minute turn should not be a blank dashboard.
+    expect(partials().length).toBeGreaterThan(0);
+    expect(final()).toBeDefined();
+    const body = final();
     expect((body.trace as { tags: string[] }).tags).toContain("studio");
     expect((body.agent as { id: string }).id).toBe("ag_test");
     expect((body.spans as unknown[]).length).toBeGreaterThan(0);
   });
 
   it("reports a turn that failed, which is the one worth having", async () => {
-    const { studio, posted } = fakeStudio();
+    const { studio, final } = fakeStudio();
     // How the engine actually fails: an `error` event, then a `finish`, then the
     // queue closes. A stream that throws instead is a case the engine does not
     // produce, and the recorder cannot close a trace it was never given.
@@ -225,10 +242,157 @@ describe("tracing a turn", () => {
     for await (const _event of traced) void _event;
     await studio.settled();
 
-    expect(posted).toHaveLength(1);
-    const trace = posted[0]!.trace as { status: string; error?: { message: string } };
+    const trace = final().trace as { status: string; error?: { message: string } };
     expect(trace.status).toBe("error");
     expect(trace.error?.message).toContain("the provider went away");
+  });
+
+  it("gives the partial and the finished trace the same id", async () => {
+    const { studio, partials, final } = fakeStudio();
+    const traced = traceTurn(studio, stream(turn()), { prompt: "do the thing" });
+    for await (const _event of traced) void _event;
+    await studio.settled();
+
+    // Two ids would mean two traces: one that appears to be running forever and
+    // one that finished, which is exactly the confusion this removes.
+    const ids = new Set([
+      ...partials().map((body) => (body.trace as { id: string }).id),
+      (final().trace as { id: string }).id,
+    ]);
+    expect(ids.size).toBe(1);
+  });
+});
+
+describe("a run still in progress", () => {
+  const agent = describeAgent({ cwd: "/repo", env: {}, id: "ag_test" });
+  const endpoint = { url: "http://127.0.0.1:4111", pid: 1, startedAt: 0, version: "1" };
+  const hint = { id: "t1", name: "do the thing", startTime: 1, tags: ["studio"], metadata: {} };
+  const span = (id: string) => ({ id, traceId: "t1", parentId: null, name: "run", kind: "agent", startTime: 1, endTime: 2, status: "ok", attributes: {}, metadata: {} });
+  const trace = { id: "t1", name: "do the thing", startTime: 1, endTime: 2, rootSpanId: "s1", status: "ok", tags: [], metadata: {} };
+
+  /** A Studio that records what it was sent, and can be made to stop answering. */
+  const studio = (): {
+    posted: Array<Record<string, unknown>>;
+    sink: ReturnType<typeof createStudioSink>;
+    answer: () => void;
+    holding: () => boolean;
+  } => {
+    const posted: Array<Record<string, unknown>> = [];
+    const waiting: Array<() => void> = [];
+    let hold = true;
+    const sink = createStudioSink(endpoint, agent, {
+      fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) => {
+        posted.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        if (hold) await new Promise<void>((resolve) => waiting.push(resolve));
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch,
+    });
+    return {
+      posted,
+      sink,
+      holding: () => hold,
+      answer: () => {
+        hold = false;
+        for (const resolve of waiting.splice(0)) resolve();
+      },
+    };
+  };
+
+  it("appears as soon as its first span exists", () => {
+    const { posted, sink } = studio();
+    sink.begin(hint);
+    sink.emit(span("s1"));
+
+    // No flush, no wait, and no turn having finished. Holding this back until the
+    // end is what left a two-minute turn looking like a broken dashboard.
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.final).toBe(false);
+    expect((posted[0]!.trace as { name: string }).name).toBe("do the thing");
+  });
+
+  it("does not claim a running trace is finished", () => {
+    const { posted, sink } = studio();
+    sink.begin(hint);
+    sink.emit(span("s1"));
+
+    // The fields the run has not answered for yet are empty, not guessed. The
+    // finished trace overwrites all of them a moment later.
+    const partial = posted[0]!.trace as { endTime: number | null; status: string };
+    expect(partial.endTime).toBeNull();
+    expect(partial.status).toBe("unset");
+  });
+
+  it("keeps one request open per trace, however fast the run produces spans", async () => {
+    const { posted, sink, answer } = studio();
+    sink.begin(hint);
+    sink.emit(span("s1"));
+    sink.emit(span("s2"));
+    sink.emit(span("s3"));
+
+    // A tool-heavy turn closes a span every few hundred milliseconds. Queueing a
+    // request each would mean the turn finishes after its own dashboard does.
+    expect(posted).toHaveLength(1);
+
+    // What was waiting behind the open request goes out when it lands.
+    answer();
+    await sink.settled();
+    expect(posted.flatMap((body) => body.spans as unknown[])).toHaveLength(3);
+  });
+
+  it("sends the finished trace whole, including what it already sent", async () => {
+    const { posted, sink, answer } = studio();
+    sink.begin(hint);
+    sink.emit(span("s1"));
+    sink.emit(span("s2"));
+    answer();
+    await sink.settled();
+
+    await sink.flush(trace);
+
+    // The Studio replaces the trace outright on this post, so it has to carry the
+    // spans it was sent earlier as well as the rest — otherwise finishing a run
+    // would delete the half of it the dashboard was already drawing.
+    const finals = posted.filter((body) => body.final !== false);
+    expect(finals).toHaveLength(1);
+    expect(finals[0]!.spans).toHaveLength(2);
+  });
+
+  it("makes the finished trace the last write for its id", async () => {
+    const { posted, sink, answer } = studio();
+    sink.begin(hint);
+    // A partial, held open by a Studio slow to answer.
+    sink.emit(span("s1"));
+
+    let flushed = false;
+    const flushing = sink.flush(trace).then(() => {
+      flushed = true;
+    });
+
+    // The final must not overtake the partial still in the air: the last write
+    // for a trace id has to be the one saying the run is over, or a partial that
+    // lands afterwards is a claim about a run that has already ended.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(flushed).toBe(false);
+    expect(posted.every((body) => body.final === false)).toBe(true);
+
+    answer();
+    await flushing;
+    expect(posted.map((body) => body.final)).toEqual([false, true]);
+  });
+
+  it("sends a trace nobody announced once, whole, at the end", async () => {
+    const { posted, sink, answer } = studio();
+    // No `begin`: there is no name, tags or agent to say this run is, and
+    // inventing them would put it in the dashboard under a name nobody chose.
+    sink.emit(span("s1"));
+    expect(posted).toHaveLength(0);
+
+    const flushed = sink.flush(trace);
+    answer();
+    await flushed;
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.final).toBe(true);
+    expect(posted[0]!.spans).toHaveLength(1);
   });
 });
 

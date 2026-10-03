@@ -32,10 +32,10 @@
  */
 
 export type ScriptedMutation = {
-  /** The interpreter that was about to do the writing. */
-  interpreter: string;
-  /** The model-facing refusal. */
-  message: string;
+	/** The interpreter that was about to do the writing. */
+	interpreter: string;
+	/** The model-facing refusal. */
+	message: string;
 };
 
 /**
@@ -44,7 +44,8 @@ export type ScriptedMutation = {
  * Anchoring matters: `python3` inside a grep pattern or a filename is not an
  * invocation, and matching it would refuse ordinary search commands.
  */
-const INTERPRETER_HEAD = /(?:^|[\n;&|]\s*|\bexec\s+|\bsudo\s+|\benv\s+)(python3?(?:\.\d+)?|pypy3?|node|perl|ruby|php)\b/g;
+const INTERPRETER_HEAD =
+	/(?:^|[\n;&|]\s*|\bexec\s+|\bsudo\s+|\benv\s+)(python3?(?:\.\d+)?|pypy3?|node|perl|ruby|php)\b/g;
 
 /**
  * An inline program rather than a path to a saved one.
@@ -52,26 +53,27 @@ const INTERPRETER_HEAD = /(?:^|[\n;&|]\s*|\bexec\s+|\bsudo\s+|\benv\s+)(python3?
  * `python3 migrate.py` is reviewable and stays allowed; `python3 - <<'PY'`,
  * `python3 -c`, `perl -pi -e`, and `node -e` are not.
  */
-const INLINE_PROGRAM = /(?:-[a-zA-Z]*c[a-zA-Z]*\s|-[a-zA-Z]*e[a-zA-Z]*\s|<<-?\s*['"]?[A-Za-z_][A-Za-z0-9_]*['"]?)/;
+const INLINE_PROGRAM =
+	/(?:-[a-zA-Z]*c[a-zA-Z]*\s|-[a-zA-Z]*e[a-zA-Z]*\s|<<-?\s*['"]?[A-Za-z_][A-Za-z0-9_]*['"]?)/;
 
 /** Interpreter flags that write in place without an explicit `-e`/`-c`. */
 const INPLACE_FLAG = /-(?:[a-zA-Z]*i)(?:[a-zA-Z]*)\b/;
 
 /** Ways an inline program writes a file. */
 const WRITE_INTENT = new RegExp(
-  [
-    // node / python / ruby API writes
-    "\\b(?:writeFile|writeFileSync|appendFile|appendFileSync|write_text|write_bytes|createWriteStream)\\b",
-    // `open(f,'w')`, `open(f, "a")`, `open(f, 'wb+')` — a read-only open has no mode.
-    "\\bopen\\s*\\([^)]*['\"][waxr]\\+?b?['\"]",
-    // bare `.write(`, `fs.write(`
-    "\\.\\s*write\\s*\\(",
-    // perl/ruby in-place
-    INPLACE_FLAG.source,
-    // shell redirection inside the script body
-    "(?:^|[^<])>>?\\s*['\"]?[\\w@%+=:,./-]+\\.[A-Za-z0-9]{1,6}['\"]?\\s*$",
-  ].join("|"),
-  "m",
+	[
+		// node / python / ruby API writes
+		"\\b(?:writeFile|writeFileSync|appendFile|appendFileSync|write_text|write_bytes|createWriteStream)\\b",
+		// `open(f,'w')`, `open(f, "a")`, `open(f, 'wb+')` — a read-only open has no mode.
+		"\\bopen\\s*\\([^)]*['\"][waxr]\\+?b?['\"]",
+		// bare `.write(`, `fs.write(`
+		"\\.\\s*write\\s*\\(",
+		// perl/ruby in-place
+		INPLACE_FLAG.source,
+		// shell redirection inside the script body
+		"(?:^|[^<])>>?\\s*['\"]?[\\w@%+=:,./-]+\\.[A-Za-z0-9]{1,6}['\"]?\\s*$",
+	].join("|"),
+	"m",
 );
 
 /** Where one command ends, so a later unrelated command is not swept in. */
@@ -85,35 +87,47 @@ const COMMAND_END = /(?:\n|&&|\|\||;)/;
  * write it was about to perform.
  */
 const invocationText = (command: string, start: number): string => {
-  const rest = command.slice(start);
-  // Where this invocation's own command ends. A heredoc marker past this point
-  // belongs to a *later* command, and following it would blame that later
-  // command's write on the interpreter named first.
-  const end = COMMAND_END.exec(rest);
-  const head = end ? rest.slice(0, end.index) : rest;
-  const heredoc = /<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/.exec(head);
-  if (!heredoc) return head;
-  // The body follows on the lines after the marker, so the command has to be
-  // followed through to its terminator rather than cut at the newline.
-  const terminator = new RegExp(`^\\s*${heredoc[1]}\\s*$`, "m");
-  const after = terminator.exec(rest.slice(end ? end.index + 1 : 0));
-  return after ? rest.slice(0, (end ? end.index + 1 : 0) + after.index + after[0].length) : rest;
+	const rest = command.slice(start);
+	// Where this invocation's own command ends. A heredoc marker past this point
+	// belongs to a *later* command, and following it would blame that later
+	// command's write on the interpreter named first.
+	const end = COMMAND_END.exec(rest);
+	const head = end ? rest.slice(0, end.index) : rest;
+	const heredoc = /<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/.exec(head);
+	if (!heredoc) return head;
+	// The body follows on the lines after the marker, so the command has to be
+	// followed through to its terminator rather than cut at the newline.
+	const terminator = new RegExp(`^\\s*${heredoc[1]}\\s*$`, "m");
+	const after = terminator.exec(rest.slice(end ? end.index + 1 : 0));
+	return after
+		? rest.slice(0, (end ? end.index + 1 : 0) + after.index + after[0].length)
+		: rest;
 };
 
 /**
  * The inline-script file rewrite in `command`, or null when there isn't one.
  */
-export const detectScriptedMutation = (command: string): ScriptedMutation | null => {
-  INTERPRETER_HEAD.lastIndex = 0;
-  for (let match = INTERPRETER_HEAD.exec(command); match; match = INTERPRETER_HEAD.exec(command)) {
-    const interpreter = match[1];
-    if (!interpreter) continue;
-    const invocation = invocationText(command, match.index + match[0].length - interpreter.length);
-    if (!INLINE_PROGRAM.test(invocation) && !INPLACE_FLAG.test(invocation)) continue;
-    if (!WRITE_INTENT.test(invocation)) continue;
-    return { interpreter, message: scriptedMutationRefusal(interpreter) };
-  }
-  return null;
+export const detectScriptedMutation = (
+	command: string,
+): ScriptedMutation | null => {
+	INTERPRETER_HEAD.lastIndex = 0;
+	for (
+		let match = INTERPRETER_HEAD.exec(command);
+		match;
+		match = INTERPRETER_HEAD.exec(command)
+	) {
+		const interpreter = match[1];
+		if (!interpreter) continue;
+		const invocation = invocationText(
+			command,
+			match.index + match[0].length - interpreter.length,
+		);
+		if (!INLINE_PROGRAM.test(invocation) && !INPLACE_FLAG.test(invocation))
+			continue;
+		if (!WRITE_INTENT.test(invocation)) continue;
+		return { interpreter, message: scriptedMutationRefusal(interpreter) };
+	}
+	return null;
 };
 
 /**
@@ -124,11 +138,4 @@ export const detectScriptedMutation = (command: string): ScriptedMutation | null
  * forward just becomes a retry.
  */
 const scriptedMutationRefusal = (interpreter: string): string =>
-  `DENIED: \`${interpreter}\` with an inline program would rewrite files without your having read them. ` +
-  "Nothing bounds the blast radius — the same script that removes two blank lines can silently reformat " +
-  "hundreds of lines you never saw, and it lands in one atomic write so nothing surfaces the scale. " +
-  "It also bypasses read-before-write, the approval prompt, and the undo record.\n" +
-  "Use `edit` with a few lines of surrounding context for a targeted change, `replace_all` when the same " +
-  "change repeats within one file, or `write` a codemod script and then run it with bash so the change is " +
-  "reviewable in the diff. Real tools are fine — `prettier --write`, `tsc --fix`, `eslint --fix`. " +
-  "To read or analyse a file with code, that is allowed: run the interpreter without writing anything.";
+	`DENIED: \`${interpreter}\` with an inline program would rewrite files without your having read them. Nothing bounds the blast radius — the same script that removes two blank lines can silently reformat hundreds of lines you never saw, and it lands in one atomic write so nothing surfaces the scale. It also bypasses read-before-write, the approval prompt, and the undo record.\nUse \`edit\` with a few lines of surrounding context for a targeted change, \`replace_all\` when the same change repeats within one file, or \`write\` a codemod script and then run it with bash so the change is reviewable in the diff. Real tools are fine — \`prettier --write\`, \`tsc --fix\`, \`eslint --fix\`. To read or analyse a file with code, that is allowed: run the interpreter without writing anything.`;
