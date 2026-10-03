@@ -673,6 +673,19 @@ export class CognitiveMemory {
   }
 
   /**
+   * Drop one memory by id, from whichever tier holds it.
+   *
+   * The counterpart to `addMemory`, and the only way to retire a fact that has
+   * turned out to be wrong. One map is not enough to look in: a promotion or a
+   * demotion moves an id between them, so an id that is absent from the hot
+   * cache may still be in the warm store or the archive. Short-circuiting on the
+   * first hit is therefore safe — an id lives in exactly one of the three.
+   */
+  removeMemory(id: string): boolean {
+    return this.l1HotCache.delete(id) || this.l2WarmStore.delete(id) || this.l3ColdArchive.delete(id);
+  }
+
+  /**
    * Update the proprioceptive capability record for a domain.
    */
   recordDomainOutcome(domain: string, success: boolean, failurePattern?: string): void {
