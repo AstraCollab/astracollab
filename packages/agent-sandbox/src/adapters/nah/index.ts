@@ -4,6 +4,13 @@ import type { SandboxRuntime } from "../../types.js";
 import { createGlobResolver } from "./glob.js";
 import { buildGrepCommand, filterGrepOutput, GREP_TIMEOUT_SECONDS } from "./shell.js";
 
+export {
+  createBoatEnvironment,
+  DEFAULT_BOAT_REPO_DIR,
+  type BoatEnvironment,
+  type BoatEnvironmentOptions,
+} from "./boat-environment.js";
+
 export type NahToolEnvironmentOptions = {
   repoFs: RepoSandboxFs;
   sandbox: SandboxRuntime;

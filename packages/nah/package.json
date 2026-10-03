@@ -44,6 +44,7 @@
 		"@ai-sdk/anthropic": "^4.0.71",
 		"@ai-sdk/openai": "^4.0.83",
 		"@ai-sdk/openai-compatible": "^3.0.62",
+        "@astracollab/agent-sandbox": "workspace:*",
 		"cogmemory": "workspace:*",
 		"@blaxel/core": "^0.2.95",
 		"@earendil-works/pi-tui": "^0.99.2",

@@ -1,3 +1,8 @@
 packages:
   - "apps/*"
+  # `@astracollab/agent-sandbox` used to live at
+  # `packages/agent-sandbox/packages/agent-sandbox` with its own nested pnpm
+  # workspace, which excluded it from this graph entirely. It now sits directly
+  # at `packages/agent-sandbox`, so this glob picks it up like every other
+  # package — buildable, testable, lintable, and importable by siblings.
   - "packages/*"
