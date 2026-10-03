@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { StudioStore } from "../src/store.js";
-import { traceRun, type Span } from "@astracollab/not-another-harness";
+import { traceRun, type Span } from "not-another-harness";
 import { calledToolScorer, includesScorer, judgeScorer, notRefusedScorer, runOne, summarize } from "../src/evals.js";
 import { createStudioServer, registerBuiltinScorers, registeredScorers, startStudioServer } from "../src/server.js";
 

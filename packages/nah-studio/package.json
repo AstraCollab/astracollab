@@ -1,6 +1,6 @@
 {
   "name": "nah-studio",
-  "version": "0.0.1-beta.1",
+  "version": "0.0.1-beta.2",
   "description": "The nah Studio: a dashboard for watching agents, with traces, evaluations and chat. Started by `nah` with /studio.",
   "type": "module",
   "bin": {
@@ -38,9 +38,9 @@
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.ui.json"
   },
   "dependencies": {
-    "@astracollab/not-another-harness": "workspace:*",
     "ai": "^7.0.127",
-    "nah": "workspace:*"
+    "nah-ai": "workspace:^",
+    "not-another-harness": "workspace:^"
   },
   "devDependencies": {
     "@ai-sdk/provider": "^4.0.0",

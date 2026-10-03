@@ -26,7 +26,7 @@ export default defineConfig({
       // Same reasoning as the CLI: the engine and the terminal UI are published,
       // versioned packages, so inlining a copy here would let the dashboard
       // trace runs through a different build than the one it claims to debug.
-      external: [/^node:/, "@astracollab/not-another-harness", "nah", "@earendil-works/pi-tui", "@blaxel/core"],
+      external: [/^node:/, "not-another-harness", "nah-ai", "@earendil-works/pi-tui", "@blaxel/core"],
       output: {
         // Providers and the agent are lazy-imported; the banner makes the entry
         // executable, and only the entry — a shebang on a shared chunk is noise.

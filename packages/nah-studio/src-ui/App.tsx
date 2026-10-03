@@ -2,11 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api } from "./api";
 import { AgentsView } from "./views/Agents";
+import { AgentDetailView } from "./views/AgentDetail";
 import { OverviewView } from "./views/Overview";
 import { TracesView } from "./views/Traces";
 import { ChatView, EvaluationsView, ToolsView } from "./views/Evaluations";
 import { Badge, Button } from "./components/primitives";
 import { statusTone, useStudio } from "./store";
+import type { AgentSummary } from "./types";
 
 /**
  * The shell: the same chrome as the docs site — grid field, violet glow in the
@@ -14,9 +16,18 @@ import { statusTone, useStudio } from "./store";
  * than as a tool bolted onto it.
  */
 
-type View = "agents" | "overview" | "traces" | "tools" | "evaluations" | "chat";
+/**
+ * The nav is a set of places you can be; `agent` is not one of them.
+ *
+ * There is no agent view without an agent, so putting it in the nav would mean a
+ * permanent entry that is either empty or shows whichever one was last clicked. It
+ * is reached by drilling in from the list and left the same way, and ⌘1–⌘6 keep
+ * meaning the six things they always meant.
+ */
+type NavView = "agents" | "overview" | "traces" | "tools" | "evaluations" | "chat";
+type View = NavView | "agent";
 
-const NAV: Array<{ id: View; label: string; hint: string }> = [
+const NAV: Array<{ id: NavView; label: string; hint: string }> = [
   { id: "agents", label: "agents", hint: "who is running, and what it cost" },
   { id: "overview", label: "overview", hint: "volume, errors, spend, latency" },
   { id: "traces", label: "traces", hint: "every run, with a span waterfall" },
@@ -28,6 +39,10 @@ const NAV: Array<{ id: View; label: string; hint: string }> = [
 const App = () => {
   const { connected, info, agents, selectedAgentId, selectedAgent, setSelectedAgentId } = useStudio();
   const [view, setView] = useState<View>("agents");
+  // Which agent the detail view is showing. Kept separately from the header's
+  // scope: the scope says which agent the *other* views are about, and a detail
+  // view is about one agent regardless of what that happens to be.
+  const [focusAgent, setFocusAgent] = useState<string | null>(null);
   // A trace opened from elsewhere — a chat turn, an eval row — lands here and is
   // opened by the traces view when it sees the id change.
   const [focusTrace, setFocusTrace] = useState<string | null>(null);
@@ -46,10 +61,19 @@ const App = () => {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const openTracesFor = useCallback((agentId: string | null) => {
-    setSelectedAgentId(agentId);
+  const openAgent = useCallback((agentId: string) => {
+    setFocusAgent(agentId);
+    setView("agent");
+  }, []);
+
+  const openTrace = useCallback((traceId: string) => {
+    setFocusTrace(traceId);
     setView("traces");
-  }, [setSelectedAgentId]);
+  }, []);
+
+  // Which nav item is lit. The agent detail belongs to the agents section, so
+  // drilling in does not leave the nav claiming nothing is selected.
+  const activeNav: NavView | null = view === "agent" ? "agents" : view;
 
   const live = agents.filter((agent) => agent.status === "running" || agent.status === "starting").length;
 
@@ -78,9 +102,9 @@ const App = () => {
                 key={item.id}
                 type="button"
                 onClick={() => setView(item.id)}
-                aria-current={view === item.id ? "page" : undefined}
+                aria-current={activeNav === item.id ? "page" : undefined}
                 className={`group shrink-0 rounded-lg px-2.5 py-2 text-left transition ${
-                  view === item.id ? "bg-white/[0.07] text-white" : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200"
+                  activeNav === item.id ? "bg-white/[0.07] text-white" : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200"
                 }`}
               >
                 <span className="flex items-baseline gap-2">
@@ -109,10 +133,21 @@ const App = () => {
 
         <main className="min-w-0 px-4 py-6 sm:px-8 lg:px-10 lg:py-8">
           <header className="mb-6 flex flex-wrap items-end justify-between gap-3 border-b border-white/[0.08] pb-4">
-            <div>
-              <p className="eyebrow">{NAV.find((item) => item.id === view)?.label}</p>
-              <h1 className="mt-1.5 text-xl font-medium tracking-tight text-zinc-100">
+            <div className="min-w-0">
+              <p className="eyebrow flex items-center gap-1.5">
+                {view === "agent" && (
+                  // Breadcrumb, because this view is not one you arrived at from
+                  // the nav and the way out should be on screen, not in memory.
+                  <button type="button" onClick={() => setView("agents")} className="hover:text-zinc-300">
+                    agents
+                  </button>
+                )}
+                {view === "agent" && <span aria-hidden>/</span>}
+                {NAV.find((item) => item.id === view)?.label ?? (focusAgent ? agentName(agents, focusAgent) : "agent")}
+              </p>
+              <h1 className="mt-1.5 truncate text-xl font-medium tracking-tight text-zinc-100">
                 {view === "agents" && "Every agent, and what it is doing"}
+                {view === "agent" && (focusAgent ? agentName(agents, focusAgent) : "Agent")}
                 {view === "overview" && "How the work is going"}
                 {view === "traces" && "Every run, in detail"}
                 {view === "tools" && "What the tools are doing"}
@@ -121,13 +156,14 @@ const App = () => {
               </h1>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <AgentScope />
+              {view !== "agent" && <AgentScope />}
+              <Badge tone={connected ? "good" : "warn"}>{connected ? "live" : "polling · 4s"}</Badge>
               <Badge tone="neutral">read-only chat agent</Badge>
               {info?.launcher.available === false && <Badge tone="warn">cannot launch agents</Badge>}
             </div>
           </header>
 
-          {selectedAgent && (
+          {selectedAgent && view !== "agent" && (
             <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-violet-300/20 bg-violet-300/[0.05] px-4 py-2.5">
               <span className={`size-1.5 rounded-full ${statusTone(selectedAgent.status).dot}`} aria-hidden />
               <span className="text-xs text-zinc-200">scoped to {selectedAgent.name}</span>
@@ -138,19 +174,15 @@ const App = () => {
             </div>
           )}
 
-          {view === "agents" && <AgentsView onOpenTraces={openTracesFor} />}
+          {view === "agents" && <AgentsView onOpenAgent={openAgent} />}
+          {view === "agent" && focusAgent && (
+            <AgentDetailView agentId={focusAgent} onBack={() => setView("agents")} onOpenTrace={openTrace} />
+          )}
           {view === "overview" && <OverviewView onOpenTraces={() => setView("traces")} />}
           {view === "traces" && <TracesView focusTrace={focusTrace} onFocusHandled={() => setFocusTrace(null)} />}
           {view === "tools" && <ToolsView />}
           {view === "evaluations" && <EvaluationsView />}
-          {view === "chat" && (
-            <ChatView
-              onOpenTrace={(traceId) => {
-                setFocusTrace(traceId);
-                setView("traces");
-              }}
-            />
-          )}
+          {view === "chat" && <ChatView onOpenTrace={openTrace} />}
         </main>
       </div>
     </div>
@@ -186,5 +218,14 @@ const AgentScope = () => {
     </label>
   );
 };
+
+/**
+ * An agent's name for the header.
+ *
+ * Falls back to the id rather than nothing, because a header that says "Agent" with
+ * no name is indistinguishable from the view failing to load.
+ */
+const agentName = (agents: AgentSummary[], id: string): string =>
+  agents.find((agent) => agent.id === id)?.name ?? id;
 
 export default App;

@@ -4,45 +4,22 @@ import { api } from "../api";
 import { duration, percent, relativeTime, usd } from "../lib/format";
 import { Badge, Button, Empty, ErrorNote, Field, Panel, Stat, inputClass } from "../components/primitives";
 import { statusTone, useStudio } from "../store";
-import type { AgentLogLine, AgentSummary } from "../types";
+import type { AgentSummary } from "../types";
 
 /**
- * Agents: what is running, and what it cost.
+ * Agents: who is running, and what it cost.
  *
- * This is the view the rest of the dashboard hangs off. A trace belongs to an
- * agent, so "which agent was that" has to be answerable before the question "how
- * many traces were there" — otherwise every other number on the page is an
- * average over things you cannot tell apart.
+ * This is the index, not the detail. Every row here is a link into that agent's
+ * own view, because "what is this one doing" is a different question from "how are
+ * they all doing", and answering it in place means the answer arrives below a
+ * table it has nothing to do with.
  *
  * Live by way of the store's stream rather than a timer, so the list is current
  * when a turn finishes rather than up to ten seconds after.
  */
-export const AgentsView = ({ onOpenTraces }: { onOpenTraces: (agentId: string | null) => void }) => {
-  const { agents, selectedAgentId, setSelectedAgentId, info, agentVersion, connected } = useStudio();
-  const [logs, setLogs] = useState<AgentLogLine[]>([]);
+export const AgentsView = ({ onOpenAgent }: { onOpenAgent: (agentId: string) => void }) => {
+  const { agents, selectedAgentId, setSelectedAgentId, connected } = useStudio();
   const [launchError, setLaunchError] = useState<string | null>(null);
-
-  const selected = agents.find((agent) => agent.id === selectedAgentId) ?? null;
-  // The id, not the row: the row is a new object on every event the stream sends,
-  // so depending on it would refetch the log constantly and still say nothing new.
-  const selectedId = selected?.id ?? null;
-
-  useEffect(() => {
-    if (!selectedId) {
-      setLogs([]);
-      return;
-    }
-    let cancelled = false;
-    void api
-      .agentLogs(selectedId)
-      .then((next) => {
-        if (!cancelled) setLogs(next);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedId, agentVersion]);
 
   const totals = agents.reduce(
     (sum, agent) => ({
@@ -82,14 +59,8 @@ export const AgentsView = ({ onOpenTraces }: { onOpenTraces: (agentId: string | 
         title="agents"
         action={
           <div className="flex items-center gap-2">
-            {selected && (
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setSelectedAgentId(null);
-                  onOpenTraces(null);
-                }}
-              >
+            {selectedAgentId && (
+              <Button variant="ghost" onClick={() => setSelectedAgentId(null)}>
                 clear scope
               </Button>
             )}
@@ -123,9 +94,12 @@ export const AgentsView = ({ onOpenTraces }: { onOpenTraces: (agentId: string | 
                     key={agent.id}
                     agent={agent}
                     selected={agent.id === selectedAgentId}
-                    onSelect={() => {
+                    onOpen={() => {
+                      // Scoped as well as opened: the detail view is a place, and
+                      // the header's scope is a filter over every place — so both
+                      // should say the same thing once you are inside one agent.
                       setSelectedAgentId(agent.id);
-                      onOpenTraces(agent.id);
+                      onOpenAgent(agent.id);
                     }}
                   />
                 ))}
@@ -134,8 +108,6 @@ export const AgentsView = ({ onOpenTraces }: { onOpenTraces: (agentId: string | 
           </div>
         )}
       </Panel>
-
-      {selected && <AgentLogs agent={selected} logs={logs} onCleared={() => setLogs([])} />}
     </div>
   );
 };
@@ -143,11 +115,11 @@ export const AgentsView = ({ onOpenTraces }: { onOpenTraces: (agentId: string | 
 const AgentRow = ({
   agent,
   selected,
-  onSelect,
+  onOpen,
 }: {
   agent: AgentSummary;
   selected: boolean;
-  onSelect: () => void;
+  onOpen: () => void;
 }) => {
   const { setSelectedAgentId, agents } = useStudio();
   const tone = statusTone(agent.status);
@@ -169,7 +141,7 @@ const AgentRow = ({
   return (
     <tr className={`border-b border-white/[0.04] transition hover:bg-white/[0.03] ${selected ? "bg-white/[0.04]" : ""}`}>
       <td className="px-4 py-2.5">
-        <button type="button" onClick={onSelect} className="text-left">
+        <button type="button" onClick={onOpen} className="text-left">
           <span className="flex items-center gap-2 text-zinc-100">
             <span className={`size-1.5 shrink-0 rounded-full ${tone.dot}`} aria-hidden />
             {agent.name}
@@ -218,6 +190,19 @@ const AgentRow = ({
   );
 };
 
+/**
+ * The last two segments of a path: `packages/nah/dist/cli.js`.
+ *
+ * Enough to say which build will run, without a string that has to be truncated to
+ * fit. A bare name would be shorter still, but two identical `nah`s in two
+ * directories is exactly the case where the directory is the information.
+ */
+const launchTarget = (command: string | null | undefined): string => {
+  if (!command) return "";
+  const parts = command.split("/").filter(Boolean);
+  return parts.slice(-2).join("/");
+};
+
 const LaunchPanel = ({
   onError,
   error,
@@ -261,7 +246,13 @@ const LaunchPanel = ({
       title="start an agent"
       action={
         available ? (
-          <span className="eyebrow text-zinc-600">{info?.launcher.command}</span>
+          // The binary it will run, shortened. The eyebrow style uppercases, which
+          // turns a path into a wall of capitals that runs off the panel — and a
+          // path nobody reads is not what this space is for. The full value stays
+          // on hover.
+          <span className="eyebrow truncate text-zinc-600" title={info?.launcher.command ?? undefined}>
+            {launchTarget(info?.launcher.command)}
+          </span>
         ) : (
           <Badge tone="warn">no nah binary found</Badge>
         )
@@ -306,53 +297,6 @@ const LaunchPanel = ({
             <p className="text-[11px] text-zinc-600">Starting. The row appears the moment the process exists.</p>
           )}
         </div>
-      )}
-    </Panel>
-  );
-};
-
-const AgentLogs = ({
-  agent,
-  logs,
-  onCleared,
-}: {
-  agent: AgentSummary;
-  logs: AgentLogLine[];
-  onCleared: () => void;
-}) => {
-  const { setSelectedAgentId } = useStudio();
-  return (
-    <Panel
-      title={`output · ${agent.name}`}
-      action={
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setSelectedAgentId(null);
-              onCleared();
-            }}
-          >
-            close
-          </Button>
-        </div>
-      }
-      bodyClassName="p-0"
-    >
-      {logs.length === 0 ? (
-        <Empty title="No output yet" hint="A launched agent prints here as it runs, one JSON event per line." />
-      ) : (
-        <pre className="max-h-96 overflow-auto px-4 py-3 font-mono text-[11px] leading-5 text-zinc-400">
-          {logs.map((line) => (
-            <span
-              key={line.seq}
-              className={`block ${line.stream === "stderr" ? "text-rose-300/80" : line.stream === "system" ? "text-zinc-600" : ""}`}
-            >
-              <span className="text-zinc-700">{relativeTime(line.at)} </span>
-              {line.text}
-            </span>
-          ))}
-        </pre>
       )}
     </Panel>
   );

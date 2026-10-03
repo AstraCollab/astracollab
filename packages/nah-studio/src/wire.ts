@@ -15,7 +15,7 @@
  * the contract must not be able to drag `node:sqlite` or React along with it.
  */
 
-import type { Span as EngineSpan, SpanError as EngineSpanError, SpanKind, SpanStatus, Trace as EngineTrace } from "@astracollab/not-another-harness";
+import type { Span as EngineSpan, SpanError as EngineSpanError, SpanKind, SpanStatus, Trace as EngineTrace } from "not-another-harness";
 
 export type { SpanKind, SpanStatus };
 

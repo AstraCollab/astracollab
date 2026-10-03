@@ -13,7 +13,7 @@
  * and a turn carrying the previous one's history could answer a question about a
  * file it never read.
  */
-import { createReadonlyAgent, type StudioAgent } from "nah/agent";
+import { createReadonlyAgent, type StudioAgent } from "nah-ai/agent";
 import * as os from "node:os";
 import * as nodePath from "node:path";
 import { fileURLToPath } from "node:url";

@@ -42,6 +42,15 @@ export type StudioInfo = {
   launcher: { available: boolean; command: string | null };
 };
 
+/**
+ * How often to re-read the agent list when the event stream is unavailable.
+ *
+ * Fast enough that a dashboard left open while an agent starts still updates
+ * before anyone thinks to refresh, slow enough that a blocked stream does not
+ * turn into a request loop.
+ */
+const FALLBACK_POLL_MS = 4_000;
+
 const StudioContext = createContext<StudioState | null>(null);
 
 export const StudioProvider = ({ children }: { children: ReactNode }) => {
@@ -64,8 +73,8 @@ export const StudioProvider = ({ children }: { children: ReactNode }) => {
     setAgentVersion((version) => version + 1);
   }, []);
 
-  // The snapshot the stream sends on connect is authoritative; the fetch is the
-  // fallback for a server whose stream is blocked by a proxy.
+  // The first read, before the stream has said anything. The stream's `hello` frame
+  // replaces this the moment it arrives; until then this is what is on screen.
   useEffect(() => {
     let cancelled = false;
     void api
@@ -99,9 +108,8 @@ export const StudioProvider = ({ children }: { children: ReactNode }) => {
             upsert(event.agent);
             break;
           case "trace":
-            // The trace itself arrives with the agent id, so the one list that has
-            // to be exactly right — which agent did what — is updated directly
-            // rather than waited on a refetch.
+            // The one list that has to be exactly right is which agent did what,
+            // so it is announced rather than waited on a refetch.
             setTraceVersion((version) => version + 1);
             break;
           case "log":
@@ -114,6 +122,39 @@ export const StudioProvider = ({ children }: { children: ReactNode }) => {
     });
     return close;
   }, [upsert]);
+
+  /**
+   * Poll while the stream is not connected.
+   *
+   * The stream is the right mechanism and it is what makes this feel live, but a
+   * dashboard that only updates through one channel is a dashboard that shows
+   * nothing at all when that channel is blocked — by a proxy, an extension, a
+   * laptop that slept. Falling back to a slow poll costs a request every few
+   * seconds and turns "I have to refresh the page" into "it is a few seconds
+   * late", which is the difference between broken and merely not instantaneous.
+   *
+   * It stops as soon as the stream is back, so the two never both run.
+   */
+  useEffect(() => {
+    if (connected) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const next = await api.agents();
+        if (cancelled) return;
+        setAgents(next);
+        setAgentVersion((version) => version + 1);
+      } catch {
+        // Offline, or restarting. The next tick tries again.
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), FALLBACK_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [connected]);
 
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
