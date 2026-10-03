@@ -47,11 +47,11 @@ export default function Home() {
         <div className="mx-auto flex h-14 w-full max-w-5xl items-center justify-between px-6">
           <span className="font-medium tracking-tight">Nah Cloud</span>
           <nav className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" asChild>
-              <Link href="/sign-in">Sign in</Link>
+            <Button variant="ghost" size="sm" render={<Link href="/sign-in" />}>
+              Sign in
             </Button>
-            <Button size="sm" asChild>
-              <Link href="/sign-up">Get started</Link>
+            <Button size="sm" render={<Link href="/sign-up" />}>
+              Get started
             </Button>
           </nav>
         </div>
@@ -68,11 +68,11 @@ export default function Home() {
             the same interface drives an agent that outlives your laptop.
           </p>
           <div className="mt-8 flex flex-wrap items-center gap-3">
-            <Button size="lg" asChild>
-              <Link href="/sign-up">Create an agent</Link>
+            <Button size="lg" render={<Link href="/sign-up" />}>
+              Create an agent
             </Button>
-            <Button size="lg" variant="outline" asChild>
-              <Link href="/sign-in">I already have an account</Link>
+            <Button size="lg" variant="outline" render={<Link href="/sign-in" />}>
+              I already have an account
             </Button>
           </div>
         </section>

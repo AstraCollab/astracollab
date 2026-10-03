@@ -3,7 +3,7 @@ CREATE TABLE "nah_agents" (
 	"organization_id" text NOT NULL,
 	"name" text NOT NULL,
 	"repository" text NOT NULL,
-	"image" text DEFAULT 'ghcr.io/nahruntime/agent:latest' NOT NULL,
+	"template" text DEFAULT 'nah-runtime-base' NOT NULL,
 	"config" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"paused" boolean DEFAULT false NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -39,8 +39,9 @@ CREATE TABLE "nah_sandboxes" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"organization_id" text NOT NULL,
 	"agent_id" uuid,
-	"do_name" text NOT NULL,
+	"boat_sandbox_id" text NOT NULL,
 	"status" text DEFAULT 'starting' NOT NULL,
+	"runtime_url" text,
 	"bytes_used" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"destroy_at" timestamp with time zone
@@ -175,7 +176,7 @@ CREATE INDEX "run_events_run_idx" ON "nah_run_events" USING btree ("run_id");-->
 CREATE INDEX "runs_agent_idx" ON "nah_runs" USING btree ("agent_id");--> statement-breakpoint
 CREATE INDEX "runs_org_idx" ON "nah_runs" USING btree ("organization_id");--> statement-breakpoint
 CREATE INDEX "runs_status_idx" ON "nah_runs" USING btree ("status");--> statement-breakpoint
-CREATE UNIQUE INDEX "sandboxes_do_name_idx" ON "nah_sandboxes" USING btree ("do_name");--> statement-breakpoint
+CREATE UNIQUE INDEX "sandboxes_boat_id_idx" ON "nah_sandboxes" USING btree ("boat_sandbox_id");--> statement-breakpoint
 CREATE INDEX "sandboxes_org_idx" ON "nah_sandboxes" USING btree ("organization_id");--> statement-breakpoint
 CREATE INDEX "usage_org_idx" ON "nah_usage" USING btree ("organization_id","recorded_at");--> statement-breakpoint
 CREATE INDEX "account_userId_idx" ON "account" USING btree ("user_id");--> statement-breakpoint

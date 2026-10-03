@@ -36,7 +36,7 @@ export class StorageFailure extends Schema.TaggedError<StorageFailure>()("Storag
   cause: Schema.Defect()
 }) {}
 
-/** The Durable Object refused to start, or refused to keep running. */
+/** The hosted sandbox refused to start, or refused to keep running. */
 export class SandboxFailure extends Schema.TaggedError<SandboxFailure>()("SandboxFailure", {
   operation: Schema.String,
   sandboxId: Schema.String,

@@ -1,5 +1,5 @@
 {
-  "id": "6429aa5e-4483-4424-98c2-9f489f2909a4",
+  "id": "78ef3cbb-6c88-4a50-8807-b19c68fc0c27",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -33,12 +33,12 @@
           "primaryKey": false,
           "notNull": true
         },
-        "image": {
-          "name": "image",
+        "template": {
+          "name": "template",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'ghcr.io/nahruntime/agent:latest'"
+          "default": "'nah-runtime-base'"
         },
         "config": {
           "name": "config",
@@ -372,8 +372,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "do_name": {
-          "name": "do_name",
+        "boat_sandbox_id": {
+          "name": "boat_sandbox_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -384,6 +384,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'starting'"
+        },
+        "runtime_url": {
+          "name": "runtime_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "bytes_used": {
           "name": "bytes_used",
@@ -407,11 +413,11 @@
         }
       },
       "indexes": {
-        "sandboxes_do_name_idx": {
-          "name": "sandboxes_do_name_idx",
+        "sandboxes_boat_id_idx": {
+          "name": "sandboxes_boat_id_idx",
           "columns": [
             {
-              "expression": "do_name",
+              "expression": "boat_sandbox_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
