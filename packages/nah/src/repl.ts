@@ -651,7 +651,7 @@ export const handleSlashCommand = async (
       // Resolved from disk as well as from the registry: a file written during this
       // session is not in the registry yet, and telling a user "no workflow named X"
       // about a workflow that is sitting on their disk is the worst possible answer.
-      const workflow = registry.get(name);
+      const workflow = await resolveWorkspaceWorkflow({ cwd, registry, id: name });
       if (!workflow) {
         out.write(c.red(`no workflow named "${name}"\n`));
         out.write(`${formatWorkflowList(registry)}\n`);
