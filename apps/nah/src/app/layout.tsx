@@ -3,16 +3,16 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://nah.astracollab.com"),
-  title: "Not Another Harness — One agent loop. Every step in view.",
-  description: "An optionated coding agent: an open source TypeScript runtime and CLI with a manual step-capped loop, bounded tools, streaming events, and explicit permission controls.",
+  title: "not-another-harness — An agentic framework, and the coding agent built on it",
+  description: "not-another-harness is an explicit TypeScript agent loop: streamed events, spend and context budgets, bounded tools, sub-agent delegation and tracing. nah is the open source coding agent built on it.",
   authors: [{ name: "AstraCollab" }],
   robots: "index, follow",
   openGraph: {
     type: "website",
     locale: "en_US",
     url: "https://nah.astracollab.com",
-    title: "Not Another Harness — One agent loop. Every step in view.",
-    description: "An optionated coding agent: an open source TypeScript runtime and CLI with a manual step-capped loop, bounded tools, streaming events, and explicit permission controls.",
+    title: "not-another-harness — An agentic framework, and the coding agent built on it",
+    description: "not-another-harness is an explicit TypeScript agent loop: streamed events, spend and context budgets, bounded tools, sub-agent delegation and tracing. nah is the open source coding agent built on it.",
     siteName: "nah",
     images: [{ url: "/og.png", width: 1200, height: 630, alt: "nah" }],
   },

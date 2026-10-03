@@ -33,7 +33,7 @@ const isolationSample = `const isolation = {
   prepare: async ({ title, task }) => ({
     cwd: worktreePath,          // where the child's tools are confined
     boundaryNotes: [           // what the child cannot infer
-      "- The parent has uncommitted changes in src/, docs/.",
+      "- The parent's uncommitted working state is included in this worktree (src/, docs/), so you can build on it. It was frozen when this child started, so anything the parent changes after that is not here.",
     ],
     collect: async () => ({     // what the parent reviews
       baseRevision, changedPaths, diff,
