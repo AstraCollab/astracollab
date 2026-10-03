@@ -2,7 +2,7 @@
  * The model-backed arbiter, as a separate entry point.
  *
  * It needs `ai` and `zod`, and nothing else in this package does. Keeping it at
- * `@astracollab/cogmem/arbiter` means a consumer who only wants the client or
+ * `cogmemory/arbiter` means a consumer who only wants the client or
  * the deterministic core is not made to install them, and does not get a peer
  * warning for a dependency they will never use.
  *

@@ -8,7 +8,7 @@ four-tier memory for agents, served as a credentialed storage layer.
 ## Install
 
 ```sh
-npm i @astracollab/cogmem ofetch
+npm i cogmemory ofetch
 ```
 
 `ofetch` is a peer dependency on purpose — it is ~5kB, works in Node, Deno,
@@ -18,7 +18,7 @@ already has one helps nobody.
 ## Use
 
 ```ts
-import { createClient, runTurn } from "@astracollab/cogmem"
+import { createClient, runTurn } from "cogmemory"
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,
@@ -77,7 +77,7 @@ status, the scope that was missing, and any field issues — so callers ask
 semantic questions rather than matching status codes.
 
 ```ts
-import { CognitiveMemoryError } from "@astracollab/cogmem"
+import { CognitiveMemoryError } from "cogmemory"
 
 try {
   await memory.memories.create({ items: [{ content: "the build id is ZQ7X4M2K" }] })
@@ -103,7 +103,7 @@ error is never confused with an API error.
 ## Helpers
 
 ```ts
-import { runTurn, recallOrExplain, seedMemories } from "@astracollab/cogmem"
+import { runTurn, recallOrExplain, seedMemories } from "cogmemory"
 
 // Formatted for injection, and honest when nothing matched.
 const facts = await recallOrExplain(memory, "staging build id")
@@ -120,7 +120,7 @@ Every response and request type is exported, with literal unions rather than
 `string` so an editor offers exactly the valid values:
 
 ```ts
-import type { Memory, MemoryTier, InclusionReason, SelfModel } from "@astracollab/cogmem"
+import type { Memory, MemoryTier, InclusionReason, SelfModel } from "cogmemory"
 
 const tier: MemoryTier = "L1"          // "L0" | "L1" | "L2" | "L3"
 const reason: InclusionReason = "trigger" // index | trigger | tension | guardrail

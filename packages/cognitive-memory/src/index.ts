@@ -1,5 +1,5 @@
 /**
- * @astracollab/cogmem — Cognitive Memory for agents.
+ * cogmemory — Cognitive Memory for agents.
  *
  * Two things in one package, deliberately:
  *
