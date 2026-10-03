@@ -1,7 +1,13 @@
-# `@astracollab/aclient`
+# `@astracollab/agents`
 
-The `@astracollab/client` agent surface, running on
+Per-agent configuration for AstraCollab, running on
 [`not-another-harness`](../../not-another-harness) instead of Mastra.
+
+It is named in the plural because it is the home for *agent* definitions rather
+than one of them: today the ticket-coding agent and the workspace assistant, and
+whatever comes next. The harness owns the loop, the tools and the generic guards;
+everything here is what makes a particular agent behave the way this product needs
+it to.
 
 ## Why the tools are here and not in the harness
 
@@ -46,7 +52,7 @@ directly rather than through an agent run.
 ## Usage
 
 ```ts
-import { createCodingAgentRun, wrapToolsWithSanitisers } from "@astracollab/aclient";
+import { createCodingAgentRun, wrapToolsWithSanitisers } from "@astracollab/agents";
 import { createNodeEnvironment } from "not-another-harness/node";
 
 const run = createCodingAgentRun({

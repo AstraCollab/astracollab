@@ -1,5 +1,5 @@
 /**
- * `@astracollab/aclient` — the @astracollab/client agent surface, on NAH.
+ * `@astracollab/agents` — the @astracollab/client agent surface, on NAH.
  *
  * ## Why this package exists
  *
@@ -34,6 +34,29 @@ export {
   usageSummary,
   wroteFiles,
 } from "./run-shape.js";
+export {
+  createAntiLoopStop,
+  evaluateAntiLoop,
+  isGitVerificationCommand,
+  isHallucinatedToolName,
+  reconstructSteps,
+  resolveGitVerifyStreak,
+  resolveHallucinatedToolStreak,
+  resolveValidationFailureStreak,
+  type AntiLoopOptions,
+  type AntiLoopVerdict,
+  type ReconstructedStep,
+  type ShouldStopOptions,
+} from "./anti-loop.js";
+export { withExtraTools } from "./tools.js";
+export {
+  logImplementTurn,
+  resolveImplementStepCap,
+  resolveStepCap,
+  turnLogEnabled,
+  type StepCapOptions,
+  type TurnLogInput,
+} from "./turn-log.js";
 export {
   buildCodingTools,
   createCodingAgentRun,
