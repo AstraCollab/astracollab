@@ -2,7 +2,7 @@ import { tool } from "ai";
 import { z } from "zod";
 
 import { detectScriptedMutation } from "./bash-guard.js";
-import { DEFAULT_CAPS, capHead, capTail, sliceFileLines, toLines } from "./caps.js";
+import { DEFAULT_CAPS, capHead, capTail, resolveCaps, sliceFileLines, toLines, type CapsOverrides } from "./caps.js";
 import { createOutlineTool } from "./outline.js";
 import { createSearchLedger } from "./search-ledger.js";
 import type { ToolEnvironment } from "./types.js";
@@ -37,6 +37,16 @@ export type CodingToolsOptions = {
   onFileWrite?: (change: { path: string; existed: boolean; content?: string; after: string }) => void;
   /** Called after an approved shell command completes, for recovery/audit records. */
   onShellCommand?: (command: string) => void;
+  /**
+   * Override the tool-output caps for this run.
+   *
+   * The defaults are tuned for an interactive session on a repository, and a
+   * different workload legitimately wants different numbers — a batch job that
+   * only ever reads small files can afford more per read, and an agent reading a
+   * generated file wants fewer. Without this the only options are the defaults or
+   * a private copy of the tools.
+   */
+  caps?: CapsOverrides;
 };
 
 /** Default gate scope: read/list/grep/glob are always auto-allowed. */
@@ -179,6 +189,10 @@ export const createCodingTools = (
   env: ToolEnvironment,
   options: CodingToolsOptions = {},
 ): Record<string, unknown> => {
+  // Resolved once so a cap cannot be tightened in one place and read from the
+  // default in another — which is how two tools end up disagreeing about the same
+  // limit.
+  const caps = resolveCaps(options.caps);
   const requireRead = options.requireReadBeforeWrite !== false;
   const readPaths = new Set<string>();
   /**
@@ -190,7 +204,7 @@ export const createCodingTools = (
   const read = tool({
     description:
       "Read a file with 1-based line numbers. Large files are capped at " +
-      `${DEFAULT_CAPS.read.maxLines} lines — page further with offset/limit instead of re-reading.`,
+      `${caps.read.maxLines} lines — page further with offset/limit instead of re-reading.`,
     inputSchema: z.object({
       path: z.string().min(1).describe("File path"),
       offset: z.number().int().min(1).optional().describe("First line to read (1-based)"),
@@ -199,7 +213,7 @@ export const createCodingTools = (
         .int()
         .min(1)
         .optional()
-        .describe(`Max lines to return (capped at ${DEFAULT_CAPS.read.maxLines})`),
+        .describe(`Max lines to return (capped at ${caps.read.maxLines})`),
     }),
     execute: async ({ path, offset, limit }) => {
       try {
@@ -233,7 +247,7 @@ export const createCodingTools = (
     lines: string[],
     showHidden: boolean,
   ): Promise<void> => {
-    if (depth > maxDepth || lines.length > DEFAULT_CAPS.list.maxLines) {
+    if (depth > maxDepth || lines.length > caps.list.maxLines) {
       return;
     }
     let entries;
@@ -278,8 +292,8 @@ export const createCodingTools = (
       }
       return capHead(
         lines.join("\n"),
-        DEFAULT_CAPS.list.maxLines,
-        DEFAULT_CAPS.list.maxChars,
+        caps.list.maxLines,
+        caps.list.maxChars,
         "Narrow with path/maxDepth or use grep to find files by content.",
       );
     },
@@ -304,14 +318,14 @@ export const createCodingTools = (
         .number()
         .int()
         .min(1)
-        .max(DEFAULT_CAPS.grep.maxMatches)
+        .max(caps.grep.maxMatches)
         .optional()
         .describe(
-          `Max results — files in the default mode, matching lines in "content" (default 50, max ${DEFAULT_CAPS.grep.maxMatches})`,
+          `Max results — files in the default mode, matching lines in "content" (default 50, max ${caps.grep.maxMatches})`,
         ),
     }),
     execute: async ({ pattern, path, outputMode, ignoreCase, includeHidden, maxResults }) => {
-      const limit = Math.min(maxResults ?? 50, DEFAULT_CAPS.grep.maxMatches);
+      const limit = Math.min(maxResults ?? 50, caps.grep.maxMatches);
       const mode = outputMode ?? "files_with_matches";
       let raw: string;
       try {
@@ -319,7 +333,7 @@ export const createCodingTools = (
           pattern,
           path,
           ignoreCase: ignoreCase ?? false,
-          maxPerFile: DEFAULT_CAPS.grep.maxPerFile,
+          maxPerFile: caps.grep.maxPerFile,
           includeHidden: includeHidden ?? false,
         });
       } catch (e) {
@@ -346,7 +360,7 @@ export const createCodingTools = (
       const fileOf = (line: string): string => /^(.*?):(\d+):/.exec(line)?.[1] ?? line;
 
       if (mode === "content") {
-        const capped = lines.map((l) => truncate(l, DEFAULT_CAPS.grep.lineMaxChars));
+        const capped = lines.map((l) => truncate(l, caps.grep.lineMaxChars));
         const shown = capped.slice(0, limit);
         const more =
           capped.length > shown.length
@@ -473,15 +487,15 @@ export const createCodingTools = (
         .number()
         .int()
         .min(1)
-        .max(DEFAULT_CAPS.glob.maxMatches)
+        .max(caps.glob.maxMatches)
         .optional()
-        .describe(`Max paths to return (default ${DEFAULT_CAPS.glob.maxMatches})`),
+        .describe(`Max paths to return (default ${caps.glob.maxMatches})`),
     }),
     execute: async ({ pattern, path, includeHidden, limit }) => {
       if (typeof env.glob !== "function") {
         return "Error: this environment does not support glob. Use list or bash find instead.";
       }
-      const cap = Math.min(limit ?? DEFAULT_CAPS.glob.maxMatches, DEFAULT_CAPS.glob.maxMatches);
+      const cap = Math.min(limit ?? caps.glob.maxMatches, caps.glob.maxMatches);
       try {
         const matches = await env.glob({ pattern, path, includeHidden: includeHidden ?? false, limit: cap });
         if (matches.length === 0) {
@@ -539,7 +553,7 @@ export const createCodingTools = (
         const out = [
           res.stdout.trim().length > 0 ? capTail(res.stdout, caps.maxLines, caps.maxChars, hint) : "",
           res.stderr.trim().length > 0
-            ? `stderr:\n${capTail(res.stderr, DEFAULT_CAPS.bashFailure.maxLines, DEFAULT_CAPS.bashFailure.maxChars, hint)}`
+            ? `stderr:\n${capTail(res.stderr, caps.bashFailure.maxLines, caps.bashFailure.maxChars, hint)}`
             : "",
           `exit ${res.exitCode}`,
         ]

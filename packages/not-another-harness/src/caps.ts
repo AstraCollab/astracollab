@@ -37,6 +37,33 @@ export const DEFAULT_CAPS = {
 export type OutputCaps = typeof DEFAULT_CAPS;
 
 /**
+ * Per-tool cap overrides, partial at the number level.
+ *
+ * `Partial<OutputCaps>` would force a caller to restate every field of a tool to
+ * change one — `{ read: { maxLines: 400 } }` is the override anyone actually
+ * wants, and making them look up `maxChars` to go with it is how an override ends
+ * up silently loosening the thing it was meant to keep.
+ */
+export type CapsOverrides = { [K in keyof OutputCaps]?: Partial<OutputCaps[K]> };
+
+/**
+ * Merge overrides over the defaults, per tool.
+ *
+ * Exported because a caller assembling its own tools — a client with a custom
+ * read, say — needs the same numbers the built-in tools get, or it silently
+ * loses the caps the harness ships with.
+ */
+export const resolveCaps = (overrides?: CapsOverrides): OutputCaps => {
+  if (!overrides) return DEFAULT_CAPS;
+  const merged = { ...DEFAULT_CAPS } as OutputCaps;
+  for (const [tool, values] of Object.entries(overrides) as Array<[keyof OutputCaps, Record<string, number> | undefined]>) {
+    if (!values) continue;
+    merged[tool] = { ...merged[tool], ...values };
+  }
+  return merged;
+};
+
+/**
  * Split text into lines, ignoring the empty trailing element produced by a
  * final newline.
  *
