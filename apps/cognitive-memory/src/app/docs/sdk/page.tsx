@@ -38,12 +38,12 @@ const SECTIONS: readonly DocSectionSpec[] = [
     title: "Install",
     body: (
       <>
-        <CodeBlock language="sh">{"pnpm add @astracollab/cogmem"}</CodeBlock>
+        <CodeBlock language="sh">{"pnpm add cogmemory"}</CodeBlock>
         <p>
           ~3kB gzipped, ESM-first, and its only hard dependency is{" "}
           <code>ofetch</code>. <code>ai</code> and <code>zod</code> are optional
           peers, needed solely for the model-backed arbiter on the{" "}
-          <code>@astracollab/cogmem/arbiter</code> entry point — so a consumer with
+          <code>cogmemory/arbiter</code> entry point — so a consumer with
           no model provider installs neither.
         </p>
         <p>
@@ -59,7 +59,7 @@ const SECTIONS: readonly DocSectionSpec[] = [
     title: "The client",
     body: (
       <>
-        <CodeBlock language="ts">{`import { createClient } from "@astracollab/cogmem"
+        <CodeBlock language="ts">{`import { createClient } from "cogmemory"
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,
@@ -95,7 +95,7 @@ const memory = createClient({
           being answered, run the model, learn from the finished exchange, then
           record how the domain went.
         </p>
-        <CodeBlock language="ts">{`import { createClient, runTurn } from "@astracollab/cogmem"
+        <CodeBlock language="ts">{`import { createClient, runTurn } from "cogmemory"
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,
@@ -159,7 +159,7 @@ const { context, learning, learningSkipped } = await runTurn(
           ]}
         />
 
-        <CodeBlock language="ts">{`import { recallOrExplain, seedMemories } from "@astracollab/cogmem"
+        <CodeBlock language="ts">{`import { recallOrExplain, seedMemories } from "cogmemory"
 
 // Recall, already formatted to paste into a prompt.
 const brief = await recallOrExplain(memory, "where do we deploy", { limit: 5 })
@@ -268,7 +268,7 @@ const { stored, merged, rejected } = await seedMemories(memory, {
           therefore distinguishable in a catch block, without matching on message
           text.
         </p>
-        <CodeBlock language="ts">{`import { CognitiveMemoryError } from "@astracollab/cogmem"
+        <CodeBlock language="ts">{`import { CognitiveMemoryError } from "cogmemory"
 
 try {
   await memory.turns.learn({ userMessage, assistantResponse })
@@ -325,7 +325,7 @@ try {
         </p>
         <Callout>
           The model-backed arbiter is a separate entry point —{" "}
-          <code>@astracollab/cogmem/arbiter</code> — precisely so that{" "}
+          <code>cogmemory/arbiter</code> — precisely so that{" "}
           <code>ai</code> and <code>zod</code> stay optional. Importing the
           deterministic layer never pulls in a model dependency.
         </Callout>

@@ -33,7 +33,7 @@ import {
   relevanceTokens,
   runFastGate,
   similarity
-} from "@astracollab/cogmem"
+} from "cogmemory"
 import { MemoryStore } from "../services/memory-store"
 import { TurnExtractor } from "./turn-extractor"
 

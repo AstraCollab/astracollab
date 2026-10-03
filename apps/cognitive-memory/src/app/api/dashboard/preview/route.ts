@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { toContextView } from "@/server/http/views"
 import { requireOrganization, respond } from "@/server/runtime"
 import { MemoryEngine } from "@/server/engine/memory-engine"
-import { extractIdentifiers } from "@astracollab/cogmem"
+import { extractIdentifiers } from "cogmemory"
 
 /**
  * Preview the block an agent would be given, without an agent.

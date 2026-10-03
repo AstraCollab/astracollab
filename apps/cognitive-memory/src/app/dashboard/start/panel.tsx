@@ -98,7 +98,7 @@ const CALLS: ReadonlyArray<Call> = [
   }
 ]
 
-const SDK = `import { createClient, runTurn } from "@astracollab/cogmem"
+const SDK = `import { createClient, runTurn } from "cogmemory"
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,
@@ -189,7 +189,7 @@ export function StartPanel() {
       />
 
       <Panel title="1 · Install the SDK" hint="Or skip it and use the HTTP API directly — it is the same contract.">
-        <Code>{`pnpm add @astracollab/cogmem`}</Code>
+        <Code>{`pnpm add cogmemory`}</Code>
       </Panel>
 
       <Panel

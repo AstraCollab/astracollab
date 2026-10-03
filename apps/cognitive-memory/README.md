@@ -7,7 +7,7 @@ pinned into every prompt until it is answered, an index line by default, full
 bodies only where something earned them, and no model in the retrieval path.
 
 - **Web:** [apps/cognitive-memory](apps/cognitive-memory) — the service, its API, and the dashboard
-- **SDK:** [packages/cognitive-memory](packages/cognitive-memory) — `@astracollab/cogmem`
+- **SDK:** [packages/cognitive-memory](packages/cognitive-memory) — `cogmemory`
 
 ## Why it exists
 
@@ -59,7 +59,7 @@ pnpm --filter cognitive-memory dev
 Open <http://localhost:3000>, sign up, and mint a key from the dashboard. Then:
 
 ```ts
-import { createClient, runTurn } from "@astracollab/cogmem"
+import { createClient, runTurn } from "cogmemory"
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,
@@ -177,8 +177,8 @@ pnpm --filter cognitive-memory measure         # the numbers above
 pnpm --filter cognitive-memory smoke           # in-process smoke run
 pnpm --filter cognitive-memory smoke:http      # 63 checks over real HTTP
 
-pnpm --filter @astracollab/cogmem build   # SDK: ESM + CJS + .d.ts
-pnpm --filter @astracollab/cogmem test
+pnpm --filter cogmemory build   # SDK: ESM + CJS + .d.ts
+pnpm --filter cogmemory test
 ```
 
 ## Configuration

@@ -60,10 +60,10 @@ const SECTIONS: readonly DocSectionSpec[] = [
     body: (
       <>
         <p>
-          One official package, <code>@astracollab/cogmem</code>. It is ~3kB
+          One official package, <code>cogmemory</code>. It is ~3kB
           gzipped, ESM-first, and its only hard dependency is <code>ofetch</code>.
         </p>
-        <CodeBlock language="sh">{"pnpm add @astracollab/cogmem"}</CodeBlock>
+        <CodeBlock language="sh">{"pnpm add cogmemory"}</CodeBlock>
         <p>
           It contains two things, deliberately. The <b>client</b> talks to this
           service over HTTP. The <b>deterministic layer</b> — tiering, ranking,
@@ -87,7 +87,7 @@ const SECTIONS: readonly DocSectionSpec[] = [
           being answered, run the model, learn from the finished exchange, then
           record how the domain went.
         </p>
-        <CodeBlock language="ts">{`import { createClient, runTurn } from "@astracollab/cogmem"
+        <CodeBlock language="ts">{`import { createClient, runTurn } from "cogmemory"
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,

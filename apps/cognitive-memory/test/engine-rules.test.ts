@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 // The deterministic core is the published layer, not a local copy: these tests
-// exist to pin the behaviour of `@astracollab/cogmem`, and a local reimplementation
+// exist to pin the behaviour of `cogmemory`, and a local reimplementation
 // under test would only prove that the local copy agrees with itself.
 import {
   extractDeterministic,
@@ -13,7 +13,7 @@ import {
   relevanceTokens,
   runFastGate,
   similarity
-} from "@astracollab/cogmem"
+} from "cogmemory"
 
 /**
  * The deterministic layer.

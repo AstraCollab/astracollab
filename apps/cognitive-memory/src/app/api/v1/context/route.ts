@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { extractIdentifiers } from "@astracollab/cogmem"
+import { extractIdentifiers } from "cogmemory"
 
 import { ContextBody } from "@/server/domain/api"
 import { decodeBody, readJson } from "@/server/http/respond"

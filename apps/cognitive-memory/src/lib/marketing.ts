@@ -419,9 +419,9 @@ export const SDK_CLIENTS: readonly SdkClient[] = [
   }
 ]
 
-export const INSTALL = "pnpm add @astracollab/cogmem"
+export const INSTALL = "pnpm add cogmemory"
 
-export const TURN_SAMPLE = `import { createClient, runTurn } from "@astracollab/cogmem"
+export const TURN_SAMPLE = `import { createClient, runTurn } from "cogmemory"
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,

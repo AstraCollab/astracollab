@@ -68,7 +68,7 @@ const SECTIONS: readonly DocSectionSpec[] = [
           Framework-agnostic, and the shape any framework wrapper should have.
           Note which lines cannot fail the turn.
         </p>
-        <CodeBlock language="ts" emphasise={[15, 19, 23, 33]}>{`import { createClient, runTurn } from "@astracollab/cogmem"
+        <CodeBlock language="ts" emphasise={[15, 19, 23, 33]}>{`import { createClient, runTurn } from "cogmemory"
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,
@@ -128,7 +128,7 @@ async function recordOutcome(domain: string, ok: boolean, note?: string) {
               label: "Vercel AI SDK",
               node: (
                 <CodeBlock language="ts">{`import { streamText } from "ai"
-import { createClient } from "@astracollab/cogmem"
+import { createClient } from "cogmemory"
 
 const memory = createClient({ apiKey: process.env.COGNITIVE_MEMORY_KEY! })
 
@@ -196,7 +196,7 @@ await fetch(\`\${baseUrl}/api/v1/turns\`, {
           <code>recallOrExplain</code> exists for that: it returns a string ready
           to put in a prompt, and it handles the empty case by saying so out loud.
         </p>
-        <CodeBlock language="ts">{`import { recallOrExplain } from "@astracollab/cogmem"
+        <CodeBlock language="ts">{`import { recallOrExplain } from "cogmemory"
 
 const brief = await recallOrExplain(memory, "where do we deploy", { limit: 5 })
 const answer = await callYourModel({ system: brief, userMessage })`}</CodeBlock>
@@ -227,7 +227,7 @@ const answer = await callYourModel({ system: brief, userMessage })`}</CodeBlock>
           already have the facts — a conventions file, a runbook, a table of hosts
           — load them once.
         </p>
-        <CodeBlock language="ts">{`import { seedMemories } from "@astracollab/cogmem"
+        <CodeBlock language="ts">{`import { seedMemories } from "cogmemory"
 
 const { stored, merged, rejected } = await seedMemories(memory, {
   facts: [
@@ -306,7 +306,7 @@ await memory.selfModel.record({
           <code>CognitiveMemoryError</code> otherwise, with predicates so you branch
           on meaning rather than on status numbers:
         </p>
-        <CodeBlock language="ts">{`import { CognitiveMemoryError } from "@astracollab/cogmem"
+        <CodeBlock language="ts">{`import { CognitiveMemoryError } from "cogmemory"
 
 try {
   await memory.turns.learn({ userMessage, assistantResponse })
@@ -338,7 +338,7 @@ try {
           the fast gate — as pure functions, so the decisions can be asserted
           without a database, a network, or a model.
         </p>
-        <CodeBlock language="ts">{`import { extractDeterministic, relevanceTokens, isLossyRewrite } from "@astracollab/cogmem"
+        <CodeBlock language="ts">{`import { extractDeterministic, relevanceTokens, isLossyRewrite } from "cogmemory"
 import { describe, expect, it } from "vitest"
 
 it("learns a stated requirement in the user's own words", () => {

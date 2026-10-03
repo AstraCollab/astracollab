@@ -90,7 +90,7 @@ const SECTIONS: readonly DocSectionSpec[] = [
           before the app on a fresh checkout.
         </p>
         <CodeBlock language="sh">{`pnpm install
-pnpm --filter @astracollab/cogmem build
+pnpm --filter cogmemory build
 pnpm --filter cognitive-memory dev`}</CodeBlock>
         <p>
           Open <code>http://localhost:3000</code>, sign up, and mint a key. Every
