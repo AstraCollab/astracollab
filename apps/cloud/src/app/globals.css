@@ -128,3 +128,134 @@
     @apply font-sans;
   }
 }
+
+/**
+ * The marketing surface.
+ *
+ * Scoped to `.landing` rather than to `:root` or `.dark` on purpose: sign-in and
+ * sign-up are app chrome a real user stares at while authenticating, and they
+ * read better on the light default. Only the front door gets the dark treatment.
+ *
+ * The palette is near-monochrome with one signal colour. A landing page for a
+ * developer tool competes with the terminal screenshots it shows, and a
+ * multi-colour palette fights the syntax highlighting inside them. Ink carries
+ * the hierarchy; `signal` is spent only on things that are actually clickable
+ * or genuinely running.
+ */
+@layer components {
+  .landing {
+    --surface: oklch(0.16 0.006 265);
+    --surface-raised: oklch(0.2 0.007 265);
+    --surface-inset: oklch(0.13 0.006 265);
+    --line: oklch(1 0 0 / 9%);
+    --line-strong: oklch(1 0 0 / 16%);
+    --ink: oklch(0.99 0 0);
+    --ink-muted: oklch(0.68 0.008 265);
+    --ink-faint: oklch(0.5 0.008 265);
+    --signal: oklch(0.82 0.19 145);
+    --signal-dim: oklch(0.55 0.13 145);
+    --warn: oklch(0.78 0.15 80);
+
+    background-color: var(--surface);
+    color: var(--ink);
+  }
+
+  /**
+   * The hairline grid behind the hero.
+   *
+   * Two overlaid linear-gradients rather than an image or an SVG: it costs
+   * nothing to ship, scales to any viewport without a second asset, and — the
+   * reason it is a background and not a positioned div — it cannot affect
+   * layout. Masked to fade out downward so it does not fight the section below.
+   */
+  .landing-grid {
+    background-image:
+      linear-gradient(to right, var(--line) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
+  }
+
+  /** A one-pixel top highlight, the trick that makes flat dark panels read as physical. */
+  .landing-rule {
+    box-shadow: inset 0 1px 0 0 var(--line-strong);
+  }
+}
+
+@layer utilities {
+  /* The signal colour, as a token Tailwind can reference. */
+  .text-signal {
+    color: var(--signal);
+  }
+  .text-signal-dim {
+    color: var(--signal-dim);
+  }
+  .bg-signal {
+    background-color: var(--signal);
+  }
+  .border-line-strong {
+    border-color: var(--line-strong);
+  }
+  .border-line {
+    border-color: var(--line);
+  }
+}
+
+/**
+ * Motion.
+ *
+ * Everything here is opt-in per animation and guarded by the user's own
+ * setting. A `prefers-reduced-motion` block that only sets `animation: none`
+ * still leaves the element mid-transform, so the reveal components also check
+ * the media query in JS and render their final state directly.
+ */
+@keyframes landing-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes landing-caret {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes landing-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(200%);
+  }
+}
+
+.animate-fade-up {
+  animation: landing-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-caret {
+  animation: landing-caret 1.1s steps(1) infinite;
+}
+
+.animate-sweep {
+  animation: landing-sweep 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .animate-caret,
+  .animate-sweep {
+    animation: none;
+  }
+}
