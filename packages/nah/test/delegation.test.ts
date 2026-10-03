@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import type { Orchestrator } from "not-another-harness";
+
+import { createDelegationTools } from "../src/delegation.js";
 import { toolLabel } from "../src/render.js";
 import { composeTurnRequest } from "../src/session.js";
 import type { SessionState } from "../src/session.js";
@@ -163,5 +166,88 @@ describe("a fan-out reads as one decision in the transcript", () => {
 
   it("still labels a single delegation", () => {
     expect(toolLabel("delegate_task", { title: "extract parser" })).toBe("delegate in isolated worktree: extract parser");
+  });
+});
+
+describe("an explore child hands back a bounded answer", () => {
+  /** A child that found plenty and wrote all of it down, which is the case that used to fill the parent's window. */
+  const verboseChild = (title: string) => ({
+    title,
+    status: "done" as const,
+    steps: 4,
+    toolCalls: 9,
+    durationMs: 12,
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, estimated: false },
+    text: "FOUND-IT ".repeat(1_000),
+  });
+
+  const tools = (
+    children: ReturnType<typeof verboseChild>[],
+  ) =>
+    createDelegationTools({
+      orchestrator: {
+        run: async (spec: { title: string }) => verboseChild(spec.title),
+        runAll: async (specs: { title: string }[]) => specs.map((s) => verboseChild(s.title)),
+      } as unknown as Orchestrator,
+      approve: async () => true,
+    });
+
+  /** Just the answer text of each child, with headers, metrics and separators excluded. */
+  const answers = (result: string): string[] =>
+    result
+      .split("Child report:")
+      .slice(1)
+      .map((chunk) => chunk.split("Delegated task:")[0]!.trim());
+
+  it("caps a quick child's answer harder than a thorough one, since quick owes the reader less", async () => {
+    const t = tools([]);
+    const quick = await t.delegate_explore!.execute!({ title: "a", question: "q", depth: "quick" }, {} as never);
+    const thorough = await t.delegate_explore!.execute!({ title: "a", question: "q", depth: "thorough" }, {} as never);
+    expect(answers(String(quick))[0]!.length).toBeLessThan(answers(String(thorough))[0]!.length);
+  });
+
+  it("keeps the child's actual finding in what it hands back", async () => {
+    const t = tools([]);
+    const quick = await t.delegate_explore!.execute!({ title: "a", question: "q", depth: "quick" }, {} as never);
+    expect(String(quick)).toContain("FOUND-IT");
+  });
+
+  it("caps each child in a fan-out at its own depth, not at the batch's widest", async () => {
+    const t = tools([]);
+    const mixed = String(
+      await t.delegate_explores!.execute!(
+        {
+          questions: [
+            { title: "quick", question: "q", depth: "quick" as const },
+            { title: "thorough", question: "q", depth: "thorough" as const },
+          ],
+        },
+        {} as never,
+      ),
+    );
+    // Without positional caps the thorough sibling would lift the quick one's ceiling
+    // too, and the batch would report two full-size answers for a task that owes one.
+    const perChild = mixed.split("Child report:").slice(1).map((s) => s.length);
+    expect(perChild[0]).toBeLessThan(perChild[1]!);
+  });
+
+  it("keeps a six-child fan-out proportional to the answers, not to the child's transcript", async () => {
+    const t = tools([]);
+    const one = String(await t.delegate_explore!.execute!({ title: "a", question: "q", depth: "thorough" }, {} as never));
+    const six = String(
+      await t.delegate_explores!.execute!(
+        {
+          questions: Array.from({ length: 6 }, (_, i) => ({ title: `q${i}`, question: "q", depth: "thorough" as const })),
+        },
+        {} as never,
+      ),
+    );
+    // Six children each wrote a 9k-char report; the parent should see six capped
+    // answers, not six transcripts. The child pays for the searching either way.
+    const perChild = answers(six);
+    expect(perChild).toHaveLength(6);
+    for (const answer of perChild) expect(answer.length).toBeLessThanOrEqual(2_500);
+    expect(answers(one)[0]!.length).toBe(2_500);
+    expect(perChild.reduce((n, a) => n + a.length, 0)).toBe(6 * 2_500);
   });
 });

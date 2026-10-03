@@ -70,6 +70,22 @@ const createExploreTools =
  */
 const EXPLORE_STEPS = { quick: 8, thorough: 20 } as const;
 
+/**
+ * How much of an explore child's answer is allowed back into the parent.
+ *
+ * Scaled to the depth knob rather than fixed, because the two depths owe the
+ * reader very different amounts: a `quick` child was told to stop at the first
+ * place the answer shows up, so a long report from one means it padded, not
+ * that it found more. Truncating here is cheap — the child's own window already
+ * paid for the searching, and a cut-off tail costs the parent a re-read rather
+ * than the parent paying to read the whole thing.
+ *
+ * This only ever applies to the read-only tools. A `delegate_task` child changed
+ * files, so its diff *is* the work product, and the harness default leaves those
+ * intact.
+ */
+const EXPLORE_REPORT_CHARS = { quick: 1_200, thorough: 2_500 } as const;
+
 type ExploreDepth = keyof typeof EXPLORE_STEPS;
 
 /** Enough questions to make a fan-out worthwhile without turning one call into a session. */
@@ -162,11 +178,26 @@ const WORKTREE_NOTE = "temporary Git worktree";
 export const createDelegationTools = (options: DelegateToolOptions): Record<string, Tool> => {
 	const { orchestrator } = options;
 
-	/** One child's block verbatim; several get a count line so the parent can see what it fanned out. */
-	const report = (results: Awaited<ReturnType<typeof orchestrator.runAll>>): string =>
+	/**
+	 * One child's block; several get a count line so the parent can see what it fanned out.
+	 *
+	 * `maxReportChars` matters only for the read-only tools. A `delegate_task`
+	 * child changed files, so its diff and paths are the work product and the
+	 * harness default leaves those intact. An explore child is supposed to hand
+	 * back an *answer*, and the harness default is tuned for diffs — so a child
+	 * that did its job well still filled the parent's window with a report long
+	 * enough that the parent felt obliged to go and check it, which is the cost
+	 * delegation exists to remove. Anthropic makes the same point about copying
+	 * large subagent outputs back through conversation history: hand back the
+	 * reference, not the payload.
+	 */
+	const report = (
+		results: Awaited<ReturnType<typeof orchestrator.runAll>>,
+		caps?: (number | undefined)[],
+	): string =>
 		[
 			results.length > 1 ? `${results.length} delegated subtasks completed. Review each diff before integrating any of them.` : "",
-			...results.map((result) => formatSubtaskReport(result)),
+			...results.map((result, i) => formatSubtaskReport(result, { maxReportChars: caps?.[i] })),
 		]
 			.filter(Boolean)
 			.join("\n\n");
@@ -261,6 +292,7 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 			"Send a child to answer one question about the codebase, and get back only its answer.",
 			"Use this before you start editing anything, and whenever the next step is a search rather than a change: finding where something happens, tracing a call path, checking how a pattern is used elsewhere, listing what a module exposes.",
 			"The child reads, searches, and runs commands in your workspace, then returns a summary. None of that work enters your context, so it is far cheaper than doing the same reads yourself, and you can hand it several questions at once with `delegate_explores`.",
+			"Take the answer as the result. If you find yourself re-reading the files it names to confirm what it said, the search was cheaper to do yourself — the whole point is that its findings land in your context and its reads do not.",
 			"It has no edit or write tool, so it has no way to change a file on purpose. It does have a shell — it can run tests, scripts, and git to check its own answer — and that shell goes through the same approval prompt as yours, so you see every command before it runs.",
 			"Pass depth `quick` when one search would answer it and `thorough` when the answer is spread across files and you want it verified. That is the one knob worth thinking about: a quick child that answers immediately is much cheaper than a thorough one that keeps going.",
 			"Prefer this over `delegate_task` whenever the work is finding something out. Reach for `delegate_task` only when the child must actually change files.",
@@ -270,7 +302,7 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 			const approved = await options.approve("delegate_explore", { title, question, depth });
 			if (!approved) return "Exploration was not started because approval was denied.";
 			try {
-				return report([await orchestrator.run(exploreSpec({ title, question, depth }))]);
+				return report([await orchestrator.run(exploreSpec({ title, question, depth }))], [EXPLORE_REPORT_CHARS[depth]]);
 			} catch (error) {
 				if (error instanceof OrchestratorBusyError) return `Error: ${error.message}.`;
 				return `Exploration failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -307,7 +339,16 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 				titles: questions.map(({ title }) => title),
 			});
 			if (!approved) return "Exploration was not started because approval was denied.";
-			return report(await orchestrator.runAll(questions.map(exploreSpec)));
+			// A fan-out multiplies the parent's inbound text by the number of children, so
+			// each report is capped at the depth its own question asked for — positionally,
+			// so a batch of mixed depths cannot let one thorough child raise every other
+			// one's ceiling. Six thorough children asking six independent questions is the
+			// best case this tool has; it should not also be the one that fills the window it
+			// was called to protect.
+			return report(
+				await orchestrator.runAll(questions.map(exploreSpec)),
+				questions.map(({ depth }) => EXPLORE_REPORT_CHARS[depth]),
+			);
 		},
 	});
 

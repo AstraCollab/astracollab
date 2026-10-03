@@ -26,7 +26,7 @@ import type { ModelMessage } from "ai";
 
 const CODING_AGENT_SUMMARY_MAX_CHARS = 500;
 
-type ToolCall = { toolName: string; input: unknown };
+type ToolCall = { toolCallId: string; toolName: string; input: unknown };
 
 /** Every tool call in the run, in call order. */
 export const toolCallsIn = (result: Pick<HarnessRunResult, "messages">): ToolCall[] => {
@@ -35,7 +35,11 @@ export const toolCallsIn = (result: Pick<HarnessRunResult, "messages">): ToolCal
     if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
     for (const part of message.content as unknown as Array<Record<string, unknown>>) {
       if (part.type !== "tool-call") continue;
-      calls.push({ toolName: String(part.toolName ?? ""), input: part.input });
+      calls.push({
+        toolCallId: String(part.toolCallId ?? ""),
+        toolName: String(part.toolName ?? ""),
+        input: part.input,
+      });
     }
   }
   return calls;
@@ -85,11 +89,53 @@ export const executeCommandsFrom = (
   return commands;
 };
 
+/**
+ * Calls the run recorded no successful result for.
+ *
+ * A `tool-call` part says the model *asked*; the paired `tool` message says what
+ * happened. Ignoring the second is how a completion gate ends up asserting that a
+ * run changed files when every `edit` it attempted failed on a stale path — the
+ * transcript says both things, in order, and a reader that stops at the call sees
+ * only the flattering half.
+ *
+ * A call with **no** result message counts as unsuccessful, which is the honest
+ * reading: the SDK always writes one for a tool it executed, so its absence means
+ * the run was cut off before the tool settled.
+ *
+ * Success is `text` or `json` output. Everything else the SDK can write —
+ * `error-text`, `error-json`, `execution-denied`, `output-denied` — means the tool
+ * did not do the thing that was asked of it.
+ */
+const callsWithoutSuccess = (result: Pick<HarnessRunResult, "messages">): Set<string> => {
+  const succeeded = new Set<string>();
+  const failed = new Set<string>();
+  for (const message of result.messages as unknown as ModelMessage[]) {
+    if (message.role !== "tool" || !Array.isArray(message.content)) continue;
+    for (const part of message.content as unknown as Array<Record<string, unknown>>) {
+      if (part.type !== "tool-result") continue;
+      const id = String(part.toolCallId ?? "");
+      const outputType = (part.output as { type?: string } | undefined)?.type;
+      if (outputType === "text" || outputType === "json") succeeded.add(id);
+      else failed.add(id);
+    }
+  }
+  const unsuccessful = new Set(failed);
+  for (const call of toolCallsIn(result)) {
+    if (!succeeded.has(call.toolCallId)) unsuccessful.add(call.toolCallId);
+  }
+  return unsuccessful;
+};
+
 /** Did the run actually change anything? */
 export const wroteFiles = (
   result: Pick<HarnessRunResult, "messages">,
   tools: readonly string[] = ["write", "write_file", "edit", "edit_file", "apply_patch"],
-): boolean => toolNamesFrom(result).some((name) => tools.includes(name));
+): boolean => {
+  const unsuccessful = callsWithoutSuccess(result);
+  return toolCallsIn(result).some(
+    (call) => tools.includes(call.toolName) && !unsuccessful.has(call.toolCallId),
+  );
+};
 
 const normalizeParagraph = (text: string): string => text.replace(/\s+/g, " ").trim().toLowerCase();
 

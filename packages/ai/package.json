@@ -1,125 +1,121 @@
 {
-  "name": "@astracollab/ai",
-  "version": "0.0.1-beta.2",
-  "private": false,
-  "description": "AstraCollab AI provider SDKs \u2014 Cursor Composer inference, gateway and Mastra compatibility, and Vercel AI SDK integration.",
-  "type": "module",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    },
-    "./cursor": {
-      "types": "./dist/cursor/index.d.ts",
-      "import": "./dist/cursor/index.js",
-      "require": "./dist/cursor/index.cjs"
-    },
-    "./workflows": {
-      "types": "./dist/workflows/index.d.ts",
-      "import": "./dist/workflows/index.js",
-      "require": "./dist/workflows/index.cjs"
-    },
-    "./workflows/mastra": {
-      "types": "./dist/workflows/mastra/index.d.ts",
-      "import": "./dist/workflows/mastra/index.js",
-      "require": "./dist/workflows/mastra/index.cjs"
-    },
-    "./package.json": "./package.json",
-    "./reasoning-compat": {
-      "types": "./dist/reasoning-compat/index.d.ts",
-      "import": "./dist/reasoning-compat/index.js",
-      "require": "./dist/reasoning-compat/index.cjs"
-    },
-    "./mastra-messages": {
-      "types": "./dist/mastra-messages/index.d.ts",
-      "import": "./dist/mastra-messages/index.js",
-      "require": "./dist/mastra-messages/index.cjs"
-    }
-  },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE.md"
-  ],
-  "sideEffects": false,
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
-  },
-  "license": "MIT",
-  "author": "AstraCollab",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/astracollab/astracollab.git",
-    "directory": "packages/ai"
-  },
-  "keywords": [
-    "astracollab",
-    "cursor",
-    "composer",
-    "ai-sdk",
-    "openai-compatible",
-    "inference",
-    "reasoning-content",
-    "middleware",
-    "aiml",
-    "openai-compatible",
-    "mastra",
-    "migration",
-    "message-mapping"
-  ],
-  "scripts": {
-    "build": "node scripts/build-entries.mjs",
-    "dev": "vite build --watch",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "tsc --noEmit",
-    "type-check": "tsc --noEmit"
-  },
-  "peerDependencies": {
-    "@ai-sdk/openai-compatible": "^0.2.0 || ^1.0.0",
-    "@mastra/core": ">=1.35.0",
-    "ai": "^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0",
-    "zod": "^3.25.0 || ^4.0.0",
-    "@ai-sdk/provider": "^1.0.0 || ^2.0.0"
-  },
-  "peerDependenciesMeta": {
-    "@ai-sdk/openai-compatible": {
-      "optional": true
-    },
-    "@mastra/core": {
-      "optional": true
-    },
-    "ai": {
-      "optional": true
-    },
-    "zod": {
-      "optional": true
-    },
-    "@ai-sdk/provider": {
-      "optional": true
-    }
-  },
-  "dependencies": {
-    "ofetch": "^1.4.0",
-    "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "@ai-sdk/openai-compatible": "^1.0.39",
-    "@mastra/core": "1.35.0",
-    "@types/node": "^20.11.30",
-    "ai": "^5.0.0",
-    "typescript": "^5.8.2",
-    "vite": "^5.4.10",
-    "vite-plugin-dts": "^4.3.0",
-    "vitest": "^3.0.9",
-    "zod": "^4.3.6"
-  },
-  "engines": {
-    "node": ">=20"
-  }
+	"name": "@astracollab/ai",
+	"version": "0.0.1-beta.2",
+	"private": false,
+	"description": "AstraCollab AI provider SDKs \u2014 Cursor Composer inference, gateway and Mastra compatibility, and Vercel AI SDK integration.",
+	"type": "module",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"require": "./dist/index.cjs"
+		},
+		"./cursor": {
+			"types": "./dist/cursor/index.d.ts",
+			"import": "./dist/cursor/index.js",
+			"require": "./dist/cursor/index.cjs"
+		},
+		"./workflows": {
+			"types": "./dist/workflows/index.d.ts",
+			"import": "./dist/workflows/index.js",
+			"require": "./dist/workflows/index.cjs"
+		},
+		"./workflows/mastra": {
+			"types": "./dist/workflows/mastra/index.d.ts",
+			"import": "./dist/workflows/mastra/index.js",
+			"require": "./dist/workflows/mastra/index.cjs"
+		},
+		"./package.json": "./package.json",
+		"./reasoning-compat": {
+			"types": "./dist/reasoning-compat/index.d.ts",
+			"import": "./dist/reasoning-compat/index.js",
+			"require": "./dist/reasoning-compat/index.cjs"
+		},
+		"./mastra-messages": {
+			"types": "./dist/mastra-messages/index.d.ts",
+			"import": "./dist/mastra-messages/index.js",
+			"require": "./dist/mastra-messages/index.cjs"
+		}
+	},
+	"files": ["dist", "README.md", "LICENSE.md"],
+	"sideEffects": false,
+	"publishConfig": {
+		"access": "public",
+		"registry": "https://registry.npmjs.org/"
+	},
+	"license": "MIT",
+	"author": "AstraCollab",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/astracollab/astracollab.git",
+		"directory": "packages/ai"
+	},
+	"keywords": [
+		"astracollab",
+		"cursor",
+		"composer",
+		"ai-sdk",
+		"openai-compatible",
+		"inference",
+		"reasoning-content",
+		"middleware",
+		"aiml",
+		"openai-compatible",
+		"mastra",
+		"migration",
+		"message-mapping"
+	],
+	"scripts": {
+		"build": "node scripts/build-entries.mjs",
+		"dev": "vite build --watch",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"lint": "tsc --noEmit",
+		"type-check": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"@ai-sdk/openai-compatible": "^0.2.0 || ^1.0.0",
+		"@mastra/core": ">=1.35.0",
+		"ai": "^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0",
+		"zod": "^3.25.0 || ^4.0.0",
+		"@ai-sdk/provider": "^1.0.0 || ^2.0.0"
+	},
+	"peerDependenciesMeta": {
+		"@ai-sdk/openai-compatible": {
+			"optional": true
+		},
+		"@mastra/core": {
+			"optional": true
+		},
+		"ai": {
+			"optional": true
+		},
+		"zod": {
+			"optional": true
+		},
+		"@ai-sdk/provider": {
+			"optional": true
+		}
+	},
+	"dependencies": {
+		"ofetch": "^1.4.0",
+		"zod": "^4.3.6"
+	},
+	"devDependencies": {
+		"@ai-sdk/openai-compatible": "^1.0.39",
+		"@mastra/core": "1.35.0",
+		"@types/node": "^20.11.30",
+		"ai": "^5.0.0",
+		"typescript": "^5.8.2",
+		"vite": "^5.4.10",
+		"vite-plugin-dts": "^4.3.0",
+		"vitest": "^3.0.9",
+		"zod": "^4.3.6"
+	},
+	"engines": {
+		"node": ">=20"
+	}
 }

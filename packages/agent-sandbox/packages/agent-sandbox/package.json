@@ -1,105 +1,100 @@
 {
-  "name": "@astracollab/agent-sandbox",
-  "version": "0.1.0",
-  "description": "Framework-neutral coding sandbox core with Mastra and NAH adapters (clone, run, snapshot, lifecycle).",
-  "type": "module",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    },
-    "./helpers": {
-      "types": "./dist/helpers/index.d.ts",
-      "import": "./dist/helpers/index.js",
-      "require": "./dist/helpers/index.cjs"
-    },
-    "./errors": {
-      "types": "./dist/errors.d.ts",
-      "import": "./dist/errors.js",
-      "require": "./dist/errors.cjs"
-    },
-    "./package.json": "./package.json",
-    "./mastra": {
-      "types": "./dist/adapters/mastra/index.d.ts",
-      "import": "./dist/adapters/mastra/index.js",
-      "require": "./dist/adapters/mastra/index.cjs"
-    },
-    "./nah": {
-      "types": "./dist/adapters/nah/index.d.ts",
-      "import": "./dist/adapters/nah/index.js",
-      "require": "./dist/adapters/nah/index.cjs"
-    }
-  },
-  "files": [
-    "dist",
-    "src",
-    "README.md",
-    "LICENSE"
-  ],
-  "sideEffects": false,
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
-  },
-  "license": "MIT",
-  "author": "AstraCollab",
-  "homepage": "https://github.com/astracollab/agent-sandbox-sdk/tree/main/packages/agent-sandbox#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/astracollab/agent-sandbox-sdk.git",
-    "directory": "packages/agent-sandbox"
-  },
-  "bugs": {
-    "url": "https://github.com/astracollab/agent-sandbox-sdk/issues"
-  },
-  "keywords": [
-    "mastra",
-    "nah",
-    "sandbox",
-    "agent",
-    "workspace",
-    "blaxel",
-    "e2b",
-    "snapshot",
-    "tigris",
-    "s3"
-  ],
-  "scripts": {
-    "build": "vite build",
-    "test": "vitest run",
-    "lint": "tsc --noEmit"
-  },
-  "peerDependencies": {
-    "@blaxel/core": ">=0.2.0",
-    "@mastra/core": ">=1.35.0",
-    "ofetch": "^1.4.0",
-    "zod": "^3.25.0 || ^4.0.0"
-  },
-  "peerDependenciesMeta": {
-    "@blaxel/core": { "optional": true },
-    "@mastra/core": { "optional": true },
-    "zod": { "optional": true }
-  },
-  "dependencies": {
-    "picomatch": "^4.0.2"
-  },
-  "devDependencies": {
-    "@blaxel/core": "^0.2.82",
-    "@mastra/core": "1.35.0",
-    "@types/node": "^20.11.30",
-    "@types/picomatch": "^3.0.2",
-    "ofetch": "^1.4.0",
-    "zod": "^4.3.6",
-    "typescript": "^5.6.3",
-    "vite": "^5.4.10",
-    "vite-plugin-dts": "^4.3.0",
-    "vitest": "^2.1.4"
-  },
-  "engines": {
-    "node": ">=20"
-  }
+	"name": "@astracollab/agent-sandbox",
+	"version": "0.1.0",
+	"description": "Framework-neutral coding sandbox core with Mastra and NAH adapters (clone, run, snapshot, lifecycle).",
+	"type": "module",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"require": "./dist/index.cjs"
+		},
+		"./helpers": {
+			"types": "./dist/helpers/index.d.ts",
+			"import": "./dist/helpers/index.js",
+			"require": "./dist/helpers/index.cjs"
+		},
+		"./errors": {
+			"types": "./dist/errors.d.ts",
+			"import": "./dist/errors.js",
+			"require": "./dist/errors.cjs"
+		},
+		"./package.json": "./package.json",
+		"./mastra": {
+			"types": "./dist/adapters/mastra/index.d.ts",
+			"import": "./dist/adapters/mastra/index.js",
+			"require": "./dist/adapters/mastra/index.cjs"
+		},
+		"./nah": {
+			"types": "./dist/adapters/nah/index.d.ts",
+			"import": "./dist/adapters/nah/index.js",
+			"require": "./dist/adapters/nah/index.cjs"
+		}
+	},
+	"files": ["dist", "src", "README.md", "LICENSE"],
+	"sideEffects": false,
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"license": "MIT",
+	"author": "AstraCollab",
+	"homepage": "https://github.com/astracollab/agent-sandbox-sdk/tree/main/packages/agent-sandbox#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/astracollab/agent-sandbox-sdk.git",
+		"directory": "packages/agent-sandbox"
+	},
+	"bugs": {
+		"url": "https://github.com/astracollab/agent-sandbox-sdk/issues"
+	},
+	"keywords": [
+		"mastra",
+		"nah",
+		"sandbox",
+		"agent",
+		"workspace",
+		"blaxel",
+		"e2b",
+		"snapshot",
+		"tigris",
+		"s3"
+	],
+	"scripts": {
+		"build": "vite build",
+		"test": "vitest run",
+		"lint": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"@blaxel/core": ">=0.2.0",
+		"@mastra/core": ">=1.35.0",
+		"ofetch": "^1.4.0",
+		"zod": "^3.25.0 || ^4.0.0"
+	},
+	"peerDependenciesMeta": {
+		"@blaxel/core": { "optional": true },
+		"@mastra/core": { "optional": true },
+		"zod": { "optional": true }
+	},
+	"dependencies": {
+		"picomatch": "^4.0.2"
+	},
+	"devDependencies": {
+		"@blaxel/core": "^0.2.82",
+		"@mastra/core": "1.35.0",
+		"@types/node": "^20.11.30",
+		"@types/picomatch": "^3.0.2",
+		"ofetch": "^1.4.0",
+		"zod": "^4.3.6",
+		"typescript": "^5.6.3",
+		"vite": "^5.4.10",
+		"vite-plugin-dts": "^4.3.0",
+		"vitest": "^2.1.4"
+	},
+	"engines": {
+		"node": ">=20"
+	}
 }

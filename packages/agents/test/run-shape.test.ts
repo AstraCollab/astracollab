@@ -22,17 +22,37 @@ import {
 type Part = Record<string, unknown>;
 type Msg = { role: string; content: Part[] | string };
 
-const result = (parts: Part[], text = "done") =>
+const result = (parts: Part[], toolParts: Part[] = [], text = "done") =>
   ({
-    messages: parts.map((part, index) => ({ role: "assistant", content: [part] }) as Msg),
+    messages: [
+      ...parts.map((part, index) => ({ role: "assistant", content: [part] }) as Msg),
+      ...toolParts.map((part) => ({ role: "tool", content: [part] }) as Msg),
+    ],
     text,
     usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
     steps: 2,
     reason: "completed",
   }) as never;
 
-const call = (toolName: string, input: unknown): Part => ({ type: "tool-call", toolCallId: `t${toolName}`, toolName, input });
+const call = (toolName: string, input: unknown, toolCallId = `t${toolName}`): Part => ({
+  type: "tool-call",
+  toolCallId,
+  toolName,
+  input,
+});
 const text = (value: string): Part => ({ type: "text", text: value });
+/** A tool result the SDK would write for a tool that did its job. */
+const ok = (toolCallId: string): Part => ({
+  type: "tool-result",
+  toolCallId,
+  output: { type: "text", value: "done" },
+});
+/** And for one that threw — which is how a failure reaches the transcript. */
+const failed = (toolCallId: string): Part => ({
+  type: "tool-result",
+  toolCallId,
+  output: { type: "error-text", value: "Error: ENOENT: no such file" },
+});
 
 describe("tool names", () => {
   it("reads tool names in call order", () => {
@@ -79,9 +99,43 @@ describe("shell commands", () => {
     expect(executeCommandsFrom(result([call("execute_command", { command: "ls" })]), ["execute_command"])).toEqual(["ls"]);
   });
 
-  it("notices a write", () => {
-    expect(wroteFiles(result([call("read", {})]))).toBe(false);
-    expect(wroteFiles(result([call("edit", {})]))).toBe(true);
+  it("notices a write that worked", () => {
+    expect(wroteFiles(result([call("read", {})], [ok("tread")]))).toBe(false);
+    expect(wroteFiles(result([call("edit", {})], [ok("tedit")]))).toBe(true);
+  });
+});
+
+describe("a write that did not happen", () => {
+  it("does not count a failed edit", () => {
+    // The gate this replaces counted calls. A run whose every `edit` threw on a
+    // stale path passes that gate and ships a claim of work that was never done,
+    // and the transcript says so in the very next message.
+    const run = result([call("edit", { path: "src/a.ts" })], [failed("tedit")]);
+    expect(toolNamesFrom(run)).toContain("edit");
+    expect(wroteFiles(run)).toBe(false);
+  });
+
+  it("counts the edit that worked even when another failed", () => {
+    const run = result(
+      [call("edit", { path: "src/a.ts" }, "tedit1"), call("edit", { path: "src/b.ts" }, "tedit2")],
+      [failed("tedit1"), ok("tedit2")],
+    );
+    expect(wroteFiles(run)).toBe(true);
+  });
+
+  it("does not count a call with no result, which means the run was cut off", () => {
+    expect(wroteFiles(result([call("edit", {})], []))).toBe(false);
+  });
+
+  it("does not count a denied call", () => {
+    // An approval the user refused is a deliberate non-action, and it arrives as a
+    // result part like any other — only its output type gives it away.
+    const denied = {
+      type: "tool-result",
+      toolCallId: "tedit",
+      output: { type: "execution-denied", reason: "user said no" },
+    };
+    expect(wroteFiles(result([call("edit", {})], [denied]))).toBe(false);
   });
 });
 
