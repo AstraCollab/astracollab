@@ -327,6 +327,34 @@ importers:
         specifier: 4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.1)(@types/node@22.19.9)(jiti@2.7.0)(jsdom@28.0.0(@noble/hashes@2.4.0))(less@4.4.1)(lightningcss@1.32.0)(sass@1.77.4)(terser@5.43.1)(tsx@4.21.0)(yaml@2.9.1)
 
+  packages/aclient:
+    dependencies:
+      not-another-harness:
+        specifier: workspace:*
+        version: link:../not-another-harness
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.3
+        version: 22.19.9
+      ai:
+        specifier: ^7.0.127
+        version: 7.0.127(zod@4.6.5)
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.2
+      vite:
+        specifier: ^5.4.10
+        version: 5.4.21(@types/node@22.19.9)(less@4.4.1)(lightningcss@1.32.0)(sass@1.77.4)(terser@5.43.1)
+      vite-plugin-dts:
+        specifier: ^4.5.4
+        version: 4.5.4(@types/node@22.19.9)(rollup@4.49.0)(typescript@5.9.2)(vite@5.4.21(@types/node@22.19.9)(less@4.4.1)(lightningcss@1.32.0)(sass@1.77.4)(terser@5.43.1))
+      vitest:
+        specifier: ^3.0.9
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.19.9)(jsdom@28.0.0(@noble/hashes@2.4.0))(less@4.4.1)(lightningcss@1.32.0)(sass@1.77.4)(terser@5.43.1)
+      zod:
+        specifier: ^4.3.6
+        version: 4.6.5
+
   packages/agent-sandbox:
     devDependencies:
       '@changesets/cli':
@@ -475,9 +503,6 @@ importers:
       '@astracollab/cogmem':
         specifier: workspace:*
         version: link:../cognitive-memory
-      '@astracollab/not-another-harness':
-        specifier: workspace:*
-        version: link:../not-another-harness
       '@blaxel/core':
         specifier: ^0.2.95
         version: 0.2.95(@hey-api/openapi-ts@0.99.0(magicast@0.3.5)(typescript@5.9.2))
@@ -487,6 +512,9 @@ importers:
       ai:
         specifier: ^7.0.127
         version: 7.0.127(zod@4.6.5)
+      not-another-harness:
+        specifier: workspace:^
+        version: link:../not-another-harness
       ofetch:
         specifier: ^1.4.1
         version: 1.5.1
@@ -512,15 +540,15 @@ importers:
 
   packages/nah-studio:
     dependencies:
-      '@astracollab/not-another-harness':
-        specifier: workspace:*
-        version: link:../not-another-harness
       ai:
         specifier: ^7.0.127
         version: 7.0.127(zod@4.6.5)
-      nah:
-        specifier: workspace:*
+      nah-ai:
+        specifier: workspace:^
         version: link:../nah
+      not-another-harness:
+        specifier: workspace:^
+        version: link:../not-another-harness
     devDependencies:
       '@ai-sdk/provider':
         specifier: ^4.0.0
