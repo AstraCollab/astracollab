@@ -48,7 +48,7 @@ export function HeroPrimary() {
         <motion.div {...reveal} className="mb-8">
           <Link href="/docs" className="group inline-flex max-w-full items-center gap-2 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 font-mono text-[11px] text-zinc-300 transition hover:border-indigo-300/30 hover:bg-indigo-300/[0.06]">
             <span className="size-1.5 shrink-0 rounded-full bg-indigo-300" />
-            <span className="truncate">Open source · coding-agent runtime</span> <ArrowRight className="size-3 shrink-0 text-zinc-500 transition group-hover:translate-x-0.5 group-hover:text-indigo-200" />
+            <span className="truncate">An optionated coding agent</span> <ArrowRight className="size-3 shrink-0 text-zinc-500 transition group-hover:translate-x-0.5 group-hover:text-indigo-200" />
           </Link>
         </motion.div>
         <motion.h1 {...reveal} transition={{ ...reveal.transition, delay: 0.08 }} className="max-w-5xl text-balance text-5xl font-medium leading-[0.98] tracking-[-0.065em] text-transparent sm:text-7xl lg:text-[5.8rem]">
@@ -57,7 +57,7 @@ export function HeroPrimary() {
           <span className="bg-gradient-to-b from-zinc-100 to-zinc-500 bg-clip-text">Every step in view.</span>
         </motion.h1>
         <motion.p {...reveal} transition={{ ...reveal.transition, delay: 0.16 }} className="mt-7 max-w-2xl text-pretty text-base leading-7 text-zinc-400 sm:text-lg">
-          NAH is a small TypeScript runtime and CLI. Bring an AI SDK model, follow streamed tool calls, and set clear limits on what the agent can do.
+          NAH is an optionated coding agent: a small TypeScript runtime and CLI. Bring an AI SDK model, follow streamed tool calls, and set clear limits on what the agent can do.
         </motion.p>
         <motion.div {...reveal} transition={{ ...reveal.transition, delay: 0.24 }} className="mt-9 flex w-full flex-col items-center justify-center gap-3 sm:w-auto sm:flex-row">
           <Link href="/docs/installation" className="inline-flex w-full items-center justify-center gap-2 whitespace-nowrap rounded-full bg-zinc-100 px-5 py-3 text-sm font-medium text-zinc-950 transition hover:bg-white sm:w-auto">

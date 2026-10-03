@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   metadataBase: new URL("https://nah.astracollab.com"),
   title: "Not Another Harness — One agent loop. Every step in view.",
-  description: "An open source TypeScript coding-agent runtime and CLI with a manual step-capped loop, bounded tools, streaming events, and explicit permission controls.",
+  description: "An optionated coding agent: an open source TypeScript runtime and CLI with a manual step-capped loop, bounded tools, streaming events, and explicit permission controls.",
   authors: [{ name: "AstraCollab" }],
   robots: "index, follow",
   openGraph: {
@@ -12,7 +12,7 @@ export const metadata: Metadata = {
     locale: "en_US",
     url: "https://nah.astracollab.com",
     title: "Not Another Harness — One agent loop. Every step in view.",
-    description: "An open source TypeScript coding-agent runtime and CLI with a manual step-capped loop, bounded tools, streaming events, and explicit permission controls.",
+    description: "An optionated coding agent: an open source TypeScript runtime and CLI with a manual step-capped loop, bounded tools, streaming events, and explicit permission controls.",
     siteName: "nah",
     images: [{ url: "/og.png", width: 1200, height: 630, alt: "nah" }],
   },
