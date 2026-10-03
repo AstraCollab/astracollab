@@ -1,4 +1,4 @@
-import { streamText, stepCountIs, type ModelMessage, type ToolSet } from "ai";
+import { streamText, stepCountIs, type ModelMessage, type ToolChoice, type ToolSet } from "ai";
 import type { SharedV2ProviderOptions } from "@ai-sdk/provider";
 
 import { compactMessages } from "./compaction.js";
@@ -22,6 +22,7 @@ import type {
   HarnessSteerDelivery,
   HarnessStopReason,
   HarnessUsage,
+  StepOverrides,
 } from "./types.js";
 
 /**
@@ -691,6 +692,10 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
       let nudged = false;
       /** Tool-call signatures made during the step being assembled. */
       let stepCallSignatures: string[] = [];
+      /** Tool names called in the step currently streaming. */
+      let stepToolNames: string[] = [];
+      /** Tool calls per completed step, which is what `prepareStep` is asked about. */
+      const toolCallsByStep: Array<{ step: number; toolNames: string[] }> = [];
       /** Whether the step being assembled has changed anything. */
       let mutatedThisStep = false;
       /**
@@ -830,6 +835,23 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
         const stepOutputLimit = stepOutputAllowance(estimatedInputTokens);
         steps = step;
         dedupe.beginStep();
+
+        // The hook runs before onStepStart so a returned override is in force for
+        // this step's request, and so a hook that throws stops the run before any
+        // work is done rather than halfway through it.
+        let overrides: StepOverrides = {};
+        if (options.prepareStep) {
+          overrides =
+            (await options.prepareStep({
+              stepNumber: step,
+              messages: [...messages],
+              // A snapshot, like `messages`: handing out the live array would let
+              // a consumer rewrite the run's own bookkeeping.
+              steps: toolCallsByStep.map((entry) => ({ step: entry.step, toolNames: [...entry.toolNames] })),
+            })) ?? {};
+        }
+        const stepToolChoice = overrides.toolChoice ?? options.toolChoice;
+
         await options.onStepStart?.(step, [...messages]);
         events.push({ type: "step-start", step });
 
@@ -850,13 +872,19 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
         );
 
         const stepResult = streamText({
-          model: options.model,
+          model: overrides.model ?? options.model,
           system: options.system,
           messages: cachedRequestMessages,
           tools: cachedTools as ToolSet,
+          // Left unset rather than defaulted. streamText resolves an unset
+          // toolChoice to "auto" itself today, so passing "auto" would be
+          // equivalent — and pinning it here would freeze a default the SDK is
+          // free to change, in a harness whose job is not to second-guess it.
+          ...(stepToolChoice === undefined ? {} : { toolChoice: stepToolChoice as ToolChoice<ToolSet> }),
+          ...(overrides.temperature === undefined ? {} : { temperature: overrides.temperature }),
           ...(effectiveProviderOptions ? { providerOptions: effectiveProviderOptions } : {}),
           abortSignal: signal,
-          maxOutputTokens: stepOutputLimit,
+          maxOutputTokens: overrides.maxOutputTokens ?? stepOutputLimit,
           // One model round-trip (+ its tool executions) per loop iteration —
           // stop conditions, compaction, and events live in *this* loop.
           stopWhen: stepCountIs(1),
@@ -867,6 +895,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
             streamedText += part.text;
             events.push({ type: "text-delta", step, text: part.text });
           } else if (part.type === "tool-call") {
+            stepToolNames.push(part.toolName);
             if (MUTATING_TOOL_NAMES.has(part.toolName)) {
               mutations += 1;
               mutatedThisStep = true;
@@ -1068,6 +1097,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
          * a harness cannot, so the next best thing is to put the observation in
          * front of the model while there is still budget to act on it.
          */
+        if (stepToolNames.length > 0) toolCallsByStep.push({ step, toolNames: [...stepToolNames] });
         const singleCall = stepCallSignatures.length === 1 ? stepCallSignatures[0] : undefined;
         recentSteps.push(singleCall ?? `\u0000multi:${stepCallSignatures.length}`);
         if (recentSteps.length > REPEAT_CALL_THRESHOLD) recentSteps.shift();

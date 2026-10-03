@@ -1,6 +1,6 @@
 {
-  "name": "@astracollab/not-another-harness",
-  "version": "0.0.1-beta.1",
+  "name": "not-another-harness",
+  "version": "0.0.1-beta.2",
   "description": "not another harness \u2014 a small, transparent coding-agent harness. Pi-style minimal capped tools, a manual agent loop with streaming events, token budgets, mid-run compaction, and JSONL sessions. Bring any AI SDK v5 model.",
   "type": "module",
   "main": "./dist/index.cjs",

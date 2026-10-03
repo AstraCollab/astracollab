@@ -1,11 +1,11 @@
 # Not Another Harness
 
-`@astracollab/not-another-harness` is a small, explicit coding-agent runtime built on the Vercel AI SDK. It owns the agent loop, streamed events, spend and context budgets, prompt caching, and transcript compaction; you provide the model and decide how tools are approved and displayed.
+`not-another-harness` is a small, explicit coding-agent runtime built on the Vercel AI SDK. It owns the agent loop, streamed events, spend and context budgets, prompt caching, and transcript compaction; you provide the model and decide how tools are approved and displayed.
 
 ## Install
 
 ```sh
-npm install @astracollab/not-another-harness ai zod
+npm install not-another-harness ai zod
 npm install @ai-sdk/anthropic
 ```
 
@@ -19,8 +19,8 @@ import {
   buildSystemPrompt,
   createCodingTools,
   runAgent,
-} from "@astracollab/not-another-harness";
-import { createNodeEnvironment } from "@astracollab/not-another-harness/node";
+} from "not-another-harness";
+import { createNodeEnvironment } from "not-another-harness/node";
 
 const cwd = process.cwd();
 const model = createAnthropic({
@@ -64,6 +64,7 @@ console.error(`\n${result.reason}; ${result.usage.totalTokens} tokens`);
 - `buildSystemPrompt` creates a concise coding-agent prompt and can include project context files and extra constraints.
 - `compactMessages` and the run options support model-based summarization, lossy truncation, or disabled compaction.
 - `createJsonlSessionStore` persists messages and branches as JSONL. The CLI uses this store for resumable sessions.
+- `Orchestrator` runs bounded subtasks as isolated child agents and returns their work as a reviewable diff.
 - `createNodeEnvironment(root)` provides local filesystem and shell access rooted at a workspace directory, plus optional snapshots and restore operations.
 
 The Node environment is a workspace adapter, not an operating-system sandbox. In particular, shell commands can have effects beyond files the adapter can snapshot. Apply your own process, network, and approval restrictions where required.
@@ -229,6 +230,59 @@ Both share one measurement with the exploration nudge, which fires at seven
 non-mutating steps: nudge early, stop late, and no mechanism that only fires on
 the failure it was written for.
 
+## Steering a step: `prepareStep` and `toolChoice`
+
+`onStepStart` is a notification. It receives a copy of the transcript and its
+return value is discarded, so it can watch a step but not change one — which
+matters when the thing you need to change is the tool choice.
+
+```ts
+const run = runAgent({
+  model, system, prompt, tools,
+  // Force an action until the agent has taken one. A model that answers in prose
+  // when the task needs the filesystem cannot be corrected any other way.
+  prepareStep: ({ stepNumber, steps }) =>
+    steps.length === 0 ? { toolChoice: "required" } : {},
+});
+```
+
+| Option | Overrides |
+|---|---|
+| `toolChoice` | `"auto"` \| `"none"` \| `"required"` \| `{ type: "tool", toolName }` |
+| `temperature` | The run's temperature, for this step |
+| `maxOutputTokens` | The step's computed allowance |
+| `model` | A different model for this step only |
+
+`toolChoice` on the run applies to every step, and `prepareStep` wins where they
+disagree. Left unset, the SDK's own default applies — the harness forwards
+nothing rather than pinning `"auto"`.
+
+The context carries `stepNumber`, the transcript as it stands, and `steps`: the
+tool calls made in each completed step, as a snapshot. That last one is there
+because "require a tool until one has happened" needs to know what already ran
+rather than re-reading messages.
+
+Returning nothing leaves the step alone. **Throwing ends the run**, deliberately: a
+hook that fails while deciding whether to require a tool would otherwise be
+indistinguishable from one that decided not to.
+
+## Persisting a run: `sessionUpdate`
+
+`result.messages` is the transcript **after** the run, which after a compaction is
+a summary plus a recent tail — not an append-only delta. It shares no reliable
+prefix with the input, so `result.messages.slice(before)` is not "the new
+messages". It silently returns the wrong ones, and a store that appends them loses
+the middle of a conversation without erroring.
+
+```ts
+const update = sessionUpdate(before, result);
+if (update.mode === "replace") await store.replace(update.messages);
+else await store.append(update.messages);
+```
+
+`replace` is not an error condition — it is what compaction means. The decision
+lives in one place so no caller re-derives it and gets it wrong.
+
 ## Budgets and compaction
 
 ```ts
@@ -290,9 +344,68 @@ Semantics, matching Pi and opencode:
 
 Events: `user-message` fires twice per message — `phase: "queued"` when accepted and `phase: "delivered"` when it actually enters the transcript. Render a pending chip on the first and clear it on the second.
 
+## Delegating to sub-agents: `Orchestrator`
+
+`runAgent` is one agent in one workspace. `Orchestrator` is the parent-and-children
+workflow: the parent hands a bounded subtask to a child, the child works in a
+**fresh transcript against an isolated workspace**, and its work comes back as a
+reviewable artifact.
+
+```ts
+import {
+  createCodingTools,
+  createGitWorktreeIsolation,
+  Orchestrator,
+  formatSubtaskReport,
+  orchestratorPrompt,
+} from "not-another-harness";
+import { createNodeEnvironment } from "not-another-harness/node";
+
+const orchestrator = new Orchestrator({
+  model,
+  system: `${buildSystemPrompt({ cwdLabel: cwd })}\n\n${orchestratorPrompt({ concurrency: 3 })}`,
+  isolation: createGitWorktreeIsolation({ cwd }),
+  createTools: (root) => createCodingTools(createNodeEnvironment(root), { approveToolCall }),
+  maxConcurrency: 3,
+  maxSteps: 20,
+  onUsage: (usage) => session.rollSpend(usage), // child spend is real spend
+});
+
+// Fan out, or await one with `orchestrator.run(spec)`.
+const results = await orchestrator.runAll([
+  { title: "extract the parser", task: "Move parse() out of index.ts into parser.ts. Keep the export." },
+  { title: "cover the parser", task: "Add unit tests for parse() edge cases in parser.test.ts." },
+]);
+
+for (const result of results) {
+  tool_result(formatSubtaskReport(result)); // identity, base, metrics, paths, diff
+}
+```
+
+Isolation is the point, so it is an interface rather than a default. Three pieces:
+`prepare` hands back a root for the child's tools plus the boundary facts it needs;
+`collect` returns the artifact a reviewer can act on; `cleanup` releases it.
+`createGitWorktreeIsolation` branches a detached worktree from `HEAD`, so a child
+cannot see uncommitted parent work and cannot collide with a sibling — and it tells
+the child which parent paths are invisible rather than letting it re-implement them.
+`sharedWorkspaceIsolation()` is the no-repo fallback.
+
+Three behaviours worth knowing:
+
+- **Saturation throws (`OrchestratorBusyError`) instead of queueing.** A queued child
+  starts later than the parent expected and can outlive the run that asked for it.
+- **A diff too large to inline retains its workspace** and says so in the report,
+  because a truncated diff nobody can open is not a result.
+- **A failed child still cleans up and still reports.** `runAll` settles every
+  task; one child erroring is not a reason to lose the other children's diffs.
+
+`orchestratorPrompt()` exists because two constraints cannot be discovered from
+inside a child: it cannot see uncommitted parent work, and its diff is never applied
+for you. Append it to the parent's system prompt.
+
 ## Cognitive Memory Cache
 
-`@astracollab/not-another-harness` includes an intelligent 4-tier cache layer (`CognitiveMemory`):
+`not-another-harness` includes an intelligent 4-tier cache layer (`CognitiveMemory`):
 - **L0 (Registers)**: Always injected into the prompt. Stores the agent's per-domain reliability record (scores, failure patterns) and any unresolved contradiction.
 - **L1 (Hot Cache)**: Pre-staged prompt context prepared asynchronously at the end of the previous turn.
 - **L2 (Warm Store)**: Indexed memories ready for promotion by the Arbiter.
@@ -301,7 +414,7 @@ Events: `user-message` fires twice per message — `phase: "queued"` when accept
 - **Zero Added TTFT**: Memory arbitration executes asynchronously post-turn; prompt context concatenation takes `<1ms`.
 
 ```ts
-import { CognitiveMemory, createModelArbiter } from "@astracollab/not-another-harness";
+import { CognitiveMemory, createModelArbiter } from "not-another-harness";
 
 const memory = new CognitiveMemory({
   maxL0Tokens: 2000,
@@ -322,14 +435,14 @@ await memory.postTurnAsync({
 
 ## Package exports
 
-- `@astracollab/not-another-harness`: agent loop, tools, prompt builder, caps, compaction, session store, CognitiveMemory, and types.
-- `@astracollab/not-another-harness/node`: local Node.js workspace environment.
+- `not-another-harness`: agent loop, orchestrator, tools, prompt builder, caps, compaction, session store, CognitiveMemory, and types.
+- `not-another-harness/node`: local Node.js workspace environment.
 
 ## Develop in this monorepo
 
 ```sh
 pnpm install
-pnpm --filter @astracollab/not-another-harness build
-pnpm --filter @astracollab/not-another-harness lint
-pnpm --filter @astracollab/not-another-harness test
+pnpm --filter not-another-harness build
+pnpm --filter not-another-harness lint
+pnpm --filter not-another-harness test
 ```

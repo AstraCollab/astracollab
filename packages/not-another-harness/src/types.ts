@@ -314,6 +314,21 @@ export type HarnessRunOptions = {
   /** Optional awaited callbacks at each model step boundary. */
   onStepStart?: (step: number, messages: ModelMessage[]) => void | Promise<void>;
   onStepFinish?: (step: number, messages: ModelMessage[]) => void | Promise<void>;
+  /**
+   * Adjust each step before its model call.
+   *
+   * `onStepStart` is a notification: it receives a copy and its return value is
+   * discarded, so it cannot change what the step does. This one can.
+   */
+  prepareStep?: PrepareStep;
+  /**
+   * Tool choice for every step.
+   *
+   * Overridden per step by `prepareStep`. Left undefined, the provider default
+   * applies — which for most providers is "auto", and is why an agent that must
+   * act sometimes answers in prose instead.
+   */
+  toolChoice?: StepToolChoice;
 };
 
 export type HarnessRunResult = {
@@ -321,13 +336,102 @@ export type HarnessRunResult = {
   reason: HarnessStopReason;
   steps: number;
   usage: HarnessUsage;
-  /** Full transcript after the run (append + persist for sessions). */
+  /**
+   * The transcript after the run.
+   *
+   * **Post-compaction, and not an append-only delta.** When `compactions > 0`
+   * this array is a summary plus a recent tail: its length is unrelated to how
+   * many messages were added, and it shares no reliable prefix with the input. So
+   * `result.messages.slice(before)` is not "the new messages" — it silently
+   * returns the wrong ones, and a store that appends them loses history without
+   * erroring.
+   *
+   * Use `sessionUpdate(before, result)`, which decides append-vs-replace for you,
+   * or check `compactions` yourself.
+   */
   messages: ModelMessage[];
   /** Number of compactions performed during the run. */
   compactions: number;
   /** True when the run was ended by a wrap-up step rather than cut off. */
   wrappedUp: boolean;
 };
+
+/**
+ * How a store should be brought up to date with a finished run.
+ *
+ * `append` is the common case and the cheap one. `replace` is not an error
+ * condition — it is what compaction *means*, and a store that cannot represent
+ * "the transcript was summarised" has to take the whole thing or lose history.
+ */
+export type SessionUpdate = { mode: "append"; messages: ModelMessage[] } | { mode: "replace"; messages: ModelMessage[] };
+
+/**
+ * Decide how to persist a finished run.
+ *
+ * The decision lives here because every caller otherwise re-derives it, and the
+ * wrong derivation is silent: appending a compacted transcript does not throw, it
+ * just quietly loses the middle of a conversation.
+ *
+ * @param before the transcript length before the run started, or the transcript
+ * itself. Passing the array is safer, because a caller that holds a mutated
+ * reference cannot get the count wrong.
+ */
+export const sessionUpdate = (
+  before: number | readonly ModelMessage[],
+  result: Pick<HarnessRunResult, "messages" | "compactions">,
+): SessionUpdate => {
+  const beforeCount = typeof before === "number" ? before : before.length;
+  if (result.compactions > 0 || result.messages.length < beforeCount) {
+    return { mode: "replace", messages: result.messages };
+  }
+  return { mode: "append", messages: result.messages.slice(beforeCount) };
+};
+
+/**
+ * Tool choice for one step.
+ *
+ * Mirrors the AI SDK's vocabulary so a value can be handed straight through,
+ * named here because `toolChoice` is the option and this is the value.
+ */
+export type StepToolChoice = "auto" | "none" | "required" | { type: "tool"; toolName: string };
+
+/** Per-step overrides for the model call. Omitted fields fall back to the run's. */
+export type StepOverrides = {
+  /**
+   * `required` forces a tool call this step, which is how a caller stops a model
+   * that answers in prose when the task needs the filesystem.
+   */
+  toolChoice?: StepToolChoice;
+  temperature?: number;
+  maxOutputTokens?: number;
+  /** A different model for this step only. */
+  model?: LanguageModel;
+};
+
+export type PrepareStepContext = {
+  /** 1-based, matching the `step-start` event and `onStepStart`. */
+  stepNumber: number;
+  /** The transcript as it stands, before this step. A copy — mutating it does nothing. */
+  messages: readonly ModelMessage[];
+  /**
+   * Tool calls made in each completed step of this run.
+   *
+   * Present because "force a tool until one has happened" is the common rule, and
+   * answering it needs to know what already ran rather than re-reading messages.
+   */
+  steps: ReadonlyArray<{ step: number; toolNames: readonly string[] }>;
+};
+
+/**
+ * Adjust a step before its model call.
+ *
+ * Returning nothing leaves the step on the run's settings. Throwing ends the run,
+ * which is deliberate: a hook that fails while deciding whether to require a tool
+ * would otherwise be indistinguishable from one that decided not to.
+ */
+export type PrepareStep = (
+  context: PrepareStepContext,
+) => StepOverrides | void | Promise<StepOverrides | void>;
 
 export type HarnessRun = {
   /** Typed event stream — drive UIs / JSONL logs from this. */

@@ -1,6 +1,6 @@
 # Harness real-task evaluations
 
-Run the deterministic harness regression tasks with `pnpm --filter @astracollab/not-another-harness exec vitest run test/evals.test.ts`.
+Run the deterministic harness regression tasks with `pnpm --filter not-another-harness exec vitest run test/evals.test.ts`.
 
 ### Difficulty ladder
 

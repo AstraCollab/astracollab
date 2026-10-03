@@ -1,4 +1,5 @@
 export { runAgent } from "./agent.js";
+export { sessionUpdate } from "./types.js";
 export { compactMessages, alignTailToToolBoundary, type CompactionOutcome } from "./compaction.js";
 export {
   cacheAccountingFor,
@@ -21,6 +22,32 @@ export {
   type ModelRates,
 } from "./spend.js";
 export { buildSystemPrompt } from "./prompt.js";
+/*
+ * The orchestrator is the multi-agent half of the runtime: a parent agent handing
+ * bounded subtasks to isolated children, rather than spending its own context on
+ * them. Exported from the root because it is the same contract as `runAgent` —
+ * give it a model, a tool factory, and an isolation strategy.
+ *
+ * `createGitWorktreeIsolation` is exported here too, not from `./node`, because
+ * like the JSONL session store it is a Node implementation of a root-level
+ * interface rather than a workspace adapter.
+ */
+export {
+  Orchestrator,
+  OrchestratorBusyError,
+  formatSubtaskReport,
+  orchestratorPrompt,
+  sharedWorkspaceIsolation,
+  createGitWorktreeIsolation,
+  type OrchestratorOptions,
+  type OrchestratorEvent,
+  type SubtaskSpec,
+  type SubtaskResult,
+  type SubtaskArtifact,
+  type SubtaskIsolation,
+  type IsolationHandle,
+  type GitWorktreeIsolationOptions,
+} from "./orchestrator.js";
 export { detectScriptedMutation, type ScriptedMutation } from "./bash-guard.js";
 export {
   createSearchLedger,
@@ -46,6 +73,27 @@ export {
 export { DEFAULT_CAPS, capHead, capTail, sliceFileLines, toLines } from "./caps.js";
 export { globToRegExp, globStaticPrefix, hasGlobMagic } from "./glob.js";
 export { estimateMessageTokens, estimateRequestTokens, estimateTextTokens } from "./estimate.js";
+/*
+ * Tracing.
+ *
+ * Re-exported from the root because it is consumed together with `runAgent` and
+ * its event stream, and an event stream you cannot trace is half a contract.
+ */
+export {
+  traceRun,
+  memorySink,
+  type Span,
+  type SpanAttributes,
+  type SpanError,
+  type SpanKind,
+  type SpanStatus,
+  type Sampling,
+  type TelemetryLimits,
+  type TelemetryOptions,
+  type TelemetrySink,
+  type Trace,
+  type TraceContext,
+} from "./telemetry.js";
 /*
  * The cognitive layer lives in `@astracollab/cogmem`, next to the client for
  * the service that runs it, so the two cannot disagree about what a memory is or
@@ -99,6 +147,11 @@ export type {
   HarnessRun,
   HarnessRunOptions,
   HarnessRunResult,
+  PrepareStep,
+  PrepareStepContext,
+  SessionUpdate,
+  StepOverrides,
+  StepToolChoice,
   HarnessSteerDelivery,
   HarnessStopReason,
   HarnessUsage,
