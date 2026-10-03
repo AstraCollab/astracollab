@@ -535,7 +535,7 @@ export const createCodingTools = (
          * cheapest saving available because failure output is where the bulk
          * tends to be.
          */
-        const caps = res.exitCode === 0 ? DEFAULT_CAPS.bash : DEFAULT_CAPS.bashFailure;
+        const commandCaps = res.exitCode === 0 ? caps.bash : caps.bashFailure;
       // A shell command can have changed anything, so prior search results are no
       // longer a reliable answer to "have I already looked here?".
       searches.clear();
@@ -551,9 +551,11 @@ export const createCodingTools = (
          */
         const hint = "Do not re-run the command to see the rest — re-run it with a narrower filter (| head, | grep, | tail) so the expensive work is not repeated.";
         const out = [
-          res.stdout.trim().length > 0 ? capTail(res.stdout, caps.maxLines, caps.maxChars, hint) : "",
+          res.stdout.trim().length > 0
+            ? capTail(res.stdout, commandCaps.maxLines, commandCaps.maxChars, hint)
+            : "",
           res.stderr.trim().length > 0
-            ? `stderr:\n${capTail(res.stderr, caps.bashFailure.maxLines, caps.bashFailure.maxChars, hint)}`
+            ? `stderr:\n${capTail(res.stderr, commandCaps.maxLines, commandCaps.maxChars, hint)}`
             : "",
           `exit ${res.exitCode}`,
         ]

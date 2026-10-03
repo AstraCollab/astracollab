@@ -109,7 +109,8 @@ export {
   type SessionStepUsage,
   type SessionUsage,
 } from "./session.js";
-export { DEFAULT_CAPS, capHead, capTail, sliceFileLines, toLines } from "./caps.js";
+export { DEFAULT_CAPS, capHead, capTail, resolveCaps, sliceFileLines, toLines } from "./caps.js";
+export type { CapsOverrides, OutputCaps } from "./caps.js";
 export { globToRegExp, globStaticPrefix, hasGlobMagic } from "./glob.js";
 export { estimateMessageTokens, estimateRequestTokens, estimateTextTokens } from "./estimate.js";
 /*
