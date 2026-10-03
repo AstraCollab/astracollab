@@ -334,6 +334,16 @@ export const runTurn = (
 
   const { system, prompt: requestPrompt } = composeTurnRequest(state, prompt, injectionText);
 
+  /**
+   * Prices for this turn, or null when the model cannot be priced.
+   *
+   * Null is not a failure to compute, it is the answer for a free route. The
+   * harness then carries no dollar rail at all, so nothing is invented for a
+   * model the user is not billed for and `maxSpendUsd` stays inert instead of
+   * quietly sizing a budget on a guess.
+   */
+  const turnRates = ratesFor(state.model.modelId);
+
   const run = runAgent({
     model: state.model.model,
     // Enables Anthropic-style prompt-cache breakpoints. Safe and worthwhile
@@ -360,7 +370,7 @@ export const runTurn = (
     // Money, not tokens. A cached token costs a tenth of a fresh one, so a token
     // count charges a well-cached run at ~10x its real cost and fires on harness
     // efficiency rather than on money spent.
-    rates: ratesFor(state.model.modelId),
+    ...(turnRates ? { rates: turnRates } : {}),
     // No ceiling unless the user asked for one. `0` is the harness's "no budget",
     // and it is the default because a turn that stops mid-task for money the user
     // never agreed to spend is worse than one that runs long.

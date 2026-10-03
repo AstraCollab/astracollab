@@ -222,6 +222,14 @@ const usageDelta = (current: HarnessUsage, previous: HarnessUsage): HarnessUsage
   totalTokens: Math.max(0, current.totalTokens - previous.totalTokens),
   cachedInputTokens: Math.max(0, (current.cachedInputTokens ?? 0) - (previous.cachedInputTokens ?? 0)),
   cacheCreationInputTokens: Math.max(0, (current.cacheCreationInputTokens ?? 0) - (previous.cacheCreationInputTokens ?? 0)),
+  // Dollar spend rides along with the tokens. Without this line the cost of a
+  // single request does not exist anywhere on the wire: `HarnessUsage.spendUsd`
+  // is cumulative for the run, so the only figure available was the run total,
+  // and every request in a session read as though it had spent everything the
+  // session spent.
+  ...(current.spendUsd === undefined && previous.spendUsd === undefined
+    ? {}
+    : { spendUsd: Math.max(0, (current.spendUsd ?? 0) - (previous.spendUsd ?? 0)) }),
 });
 
 const EMPTY_USAGE: HarnessUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
@@ -286,6 +294,16 @@ export const traceRun = async (
   const open = new Map<string, Span>();
   const toolSpans = new Map<string, Span>();
   let previousUsage: HarnessUsage = EMPTY_USAGE;
+  /**
+   * Money attributed to the requests inside this trace, accumulated from
+   * per-request deltas rather than copied off a single cumulative reading.
+   *
+   * Two things fall out of keeping it here. A run that dies before `finish`
+   * still reports what it had spent up to that point, and the total is never
+   * read back off one mutable field on the root span — which is what let a
+   * cumulative figure be presented as the cost of one request.
+   */
+  let tracedSpendUsd = 0;
 
   const emit = async (span: Span): Promise<void> => {
     spans.push(span);
@@ -388,8 +406,16 @@ export const traceRun = async (
           ...(totalInputTokens === undefined ? {} : { "nah.request.total_input_tokens": totalInputTokens }),
           ...(freshInputTokens === undefined ? {} : { "nah.request.fresh_input_tokens": freshInputTokens }),
           ...(cachedFraction === undefined ? {} : { "nah.request.cache_hit_rate": Number(cachedFraction.toFixed(4)) }),
+          // What *this* request cost, so the waterfall reads per request rather
+          // than as a running total. Absent when no rates were supplied, which
+          // is the honest state for a model we cannot price.
+          ...(delta.spendUsd === undefined ? {} : { "nah.cost.usd": delta.spendUsd }),
           ...(event.usage.estimated ? { "nah.usage.estimated": true } : {}),
         };
+        if (delta.spendUsd !== undefined) {
+          tracedSpendUsd += delta.spendUsd;
+          root.attributes["nah.cost.usd"] = tracedSpendUsd;
+        }
         if (model) {
           Object.assign(model.attributes, attributes);
           await close(model);
@@ -426,7 +452,14 @@ export const traceRun = async (
         if (event.usage.cacheCreationInputTokens !== undefined) {
           root.attributes["gen_ai.usage.cache_write_tokens"] = event.usage.cacheCreationInputTokens;
         }
-        if (event.usage.spendUsd !== undefined) root.attributes["nah.cost.usd"] = event.usage.spendUsd;
+        if (event.usage.spendUsd !== undefined) {
+          // The steps have already been charged to the trace total. Compaction
+          // bills through the same meter but reports no `step-finish`, so the
+          // remainder since the last step is added here instead of the
+          // accumulated figure being overwritten with the run total.
+          tracedSpendUsd += Math.max(0, event.usage.spendUsd - (previousUsage.spendUsd ?? 0));
+          root.attributes["nah.cost.usd"] = tracedSpendUsd;
+        }
         if (event.usage.estimated) root.attributes["nah.usage.estimated"] = true;
         await close(root, { output: event.text });
         break;

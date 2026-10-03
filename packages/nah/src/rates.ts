@@ -31,26 +31,35 @@ const TABLE: Array<{ match: RegExp; rates: ModelRates }> = [
 ];
 
 /**
- * Assumed rates for a model the table does not recognise, and when they apply.
+ * A model missing from the table has no rates, and that is the whole point.
  *
- * Sonnet's rates, because they are the middle of the Claude range. That is a
- * guess, and a guess presented as a measurement is worse than no guess at all:
- * `gpt-5` and `stealth/space-bunny-alpha` both matched nothing here, so a free
- * route was accounted as though it cost $3/M in and $15/M out. `/stats` then
- * showed a confident dollar figure for a model the user pays nothing for, and
- * `maxSpendUsd` sized a budget on it.
+ * This used to fall back to Sonnet's rates — the middle of the Claude range —
+ * for anything unrecognised, and both `gpt-5` and `stealth/space-bunny-alpha`
+ * matched nothing here. So a free route was accounted as though it cost $3/M in
+ * and $15/M out: `/stats` printed a confident dollar figure for a model the user
+ * pays nothing for, and `maxSpendUsd` sized a budget on it. Because every turn
+ * re-sends the whole transcript, the figure also grew turn after turn, which
+ * made the guess read more like a meter the longer the session ran.
  *
- * So the assumption is reported rather than hidden. `NAH_RATES` is the way to
- * replace it with a real figure; `null` rates mean no dollar rail at all, which
- * is the honest state for a model we cannot price.
+ * A guess presented as a measurement is worse than no figure at all, so the
+ * fallback is gone. Unrecognised means `null` — no dollar rail, so spend stays at
+ * zero instead of inventing money. `NAH_RATES` is how a real figure gets
+ * supplied, including `NAH_RATES='{"input":0,"output":0}'` to state outright that
+ * a model is free.
  */
-const ASSUMED: ModelRates = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 6 };
+
+/** Zero in and zero out: a route the provider does not charge for. */
+const isFree = (rates: ModelRates): boolean => rates.input === 0 && rates.output === 0;
 
 export type RateLookup = {
   /** Rates to bill against, or null when the model cannot be priced. */
   rates: ModelRates | null;
-  /** Where the figures came from, so a display can say "assumed". */
-  source: "env" | "table" | "assumed" | "unknown";
+  /**
+   * Where the figures came from, so a display can say whether it is measuring or
+   * repeating a default. `free` is a measurement — the model genuinely costs
+   * nothing — and `unknown` is the absence of one.
+   */
+  source: "env" | "table" | "free" | "unknown";
 };
 
 const fromEnv = (env: NodeJS.ProcessEnv): ModelRates | null => {
@@ -59,7 +68,16 @@ const fromEnv = (env: NodeJS.ProcessEnv): ModelRates | null => {
   try {
     const parsed = JSON.parse(raw) as Partial<ModelRates>;
     if (typeof parsed.input === "number" && typeof parsed.output === "number") {
-      return { ...ASSUMED, ...parsed };
+      // Cache multipliers come off the *supplied* input rate rather than a
+      // default table. Spreading a default in meant `{"input":0,"output":0}` —
+      // the way to declare a model free — still billed cache reads and writes,
+      // so "free" was not free.
+      return {
+        input: parsed.input,
+        output: parsed.output,
+        cacheRead: typeof parsed.cacheRead === "number" ? parsed.cacheRead : parsed.input * 0.1,
+        cacheWrite: typeof parsed.cacheWrite === "number" ? parsed.cacheWrite : parsed.input * 2,
+      };
     }
   } catch {
     // Fall through to the table rather than failing startup over a bad env var.
@@ -68,26 +86,28 @@ const fromEnv = (env: NodeJS.ProcessEnv): ModelRates | null => {
 };
 
 /**
- * Prices for `modelId`, from `NAH_RATES` if set, else the table, else an
- * explicitly-labelled assumption.
+ * Prices for `modelId`, from `NAH_RATES` if set, else the table, else nothing.
  *
- * Use `ratesFor` for the number and `lookupRates` when the provenance matters -
- * a UI showing dollars needs to know whether they are measured or guessed.
+ * Use `ratesFor` when you need the numbers to bill against and `lookupRates`
+ * when the provenance matters — a UI showing dollars needs to know whether it is
+ * reporting a measurement or the absence of one.
  */
 export const lookupRates = (modelId: string, env: NodeJS.ProcessEnv = process.env): RateLookup => {
   const override = fromEnv(env);
-  if (override) return { rates: override, source: "env" };
+  if (override) return { rates: override, source: isFree(override) ? "free" : "env" };
   const matched = TABLE.find((entry) => entry.match.test(modelId));
-  if (matched) return { rates: matched.rates, source: "table" };
-  return { rates: ASSUMED, source: "assumed" };
+  if (matched) return { rates: matched.rates, source: isFree(matched.rates) ? "free" : "table" };
+  return { rates: null, source: "unknown" };
 };
 
 /**
- * Just the rates, for callers that do not care where they came from.
+ * Just the rates, or null when the model cannot be priced.
  *
- * Deliberately still returns a number for an unrecognised model, so existing
- * callers keep working. A display that shows money should use `lookupRates`
- * instead and check `source` before presenting the figure as measured.
+ * Null used to be a number borrowed from a different model, which is what put
+ * invented dollars on a free route. Callers now have to decide what an unpriced
+ * model means for them, and no dollar rail at all is the honest reading. A
+ * display that wants to say *why* it is showing nothing should use
+ * `lookupRates` and read `source`.
  */
-export const ratesFor = (modelId: string, env: NodeJS.ProcessEnv = process.env): ModelRates =>
-  lookupRates(modelId, env).rates ?? ASSUMED;
+export const ratesFor = (modelId: string, env: NodeJS.ProcessEnv = process.env): ModelRates | null =>
+  lookupRates(modelId, env).rates;

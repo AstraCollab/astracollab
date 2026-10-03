@@ -20,7 +20,7 @@ import { runStudioCommand, confirmOnStdout } from "./studio-command.js";
 import { attachStudio, detachStudio, setTelemetryState, telemetryState } from "./telemetry-export.js";
 import { formatTaskLedger } from "./task-ledger.js";
 import { saveLastModel } from "./model-preferences.js";
-import { ratesFor } from "./rates.js";
+import { lookupRates } from "./rates.js";
 import { formatUsd, projectStepCostUsd } from "./budget.js";
 import { formatTokens } from "./tui/sidebar.js";
 
@@ -515,7 +515,10 @@ export const handleSlashCommand = async (
        * previous version computed a number nobody chose and stopped turns at it
        * mid-task, which is the whole reason this is now empty by default.
        */
-      const rates = state.model ? ratesFor(state.model.modelId) : null;
+      const priced = state.model
+        ? lookupRates(state.model.modelId)
+        : { rates: null, source: "unknown" as const };
+      const rates = priced.rates;
       if (arg === "off" || arg === "none") {
         state.turnSpendLimitUsd = null;
         out.write(c.dim("(no per-turn ceiling — a turn runs until the task is done)\n"));
@@ -532,7 +535,14 @@ export const handleSlashCommand = async (
         return "handled";
       }
       const lines = [
-        `${formatUsd(state.spendUsd)} spent this session`,
+        // Say *why* there is no dollar figure, rather than printing `$0.000` as
+        // though a measurement had come back. A model we cannot price is usually
+        // a free one, and "not tracked" is true where "$0" is a guess.
+        priced.source === "unknown"
+          ? "spend not tracked — this model has no price here (set NAH_RATES to track it)"
+          : priced.source === "free"
+            ? `${formatUsd(state.spendUsd)} spent this session · this model is free`
+            : `${formatUsd(state.spendUsd)} spent this session`,
         state.turnSpendLimitUsd === null
           ? "no per-turn ceiling — turns run until the task is done"
           : `${formatUsd(state.turnSpendLimitUsd)} per-turn ceiling`,

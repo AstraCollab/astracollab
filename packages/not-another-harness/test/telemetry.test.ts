@@ -58,6 +58,45 @@ const run = (over: { spendUsd?: number } = {}): HarnessEvent[] => [
   } as HarnessEvent,
 ];
 
+/**
+ * A run whose steps carry cumulative spend, exactly as the harness emits it.
+ *
+ * Every usage figure here is a running total — that is the shape of the real
+ * event stream, and the whole reason per-request cost has to be derived rather
+ * than read off.
+ */
+const spentRun = (stepSpendUsd: number[]): HarnessEvent[] => {
+  const events: HarnessEvent[] = [{ type: "run-start", stepBudget: null, tokenBudget: 400_000 } as HarnessEvent];
+  let cachedInputTokens = 0;
+  for (const [index, spendUsd] of stepSpendUsd.entries()) {
+    const inputTokens = 100 * (index + 1);
+    const outputTokens = 10 * (index + 1);
+    cachedInputTokens += 50;
+    events.push({ type: "step-start", step: index + 1 } as HarnessEvent);
+    events.push(
+      step(
+        index + 1,
+        { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cachedInputTokens, spendUsd },
+        { totalInputTokens: 1000, freshInputTokens: 900, cachedInputTokens: 50 },
+      ),
+    );
+  }
+  const last = stepSpendUsd.length;
+  events.push({
+    type: "finish",
+    reason: "completed",
+    text: "done",
+    usage: usage({
+      inputTokens: 100 * last,
+      outputTokens: 10 * last,
+      totalTokens: 110 * last,
+      cachedInputTokens: 50 * last,
+      spendUsd: stepSpendUsd.at(-1),
+    }),
+  } as HarnessEvent);
+  return events;
+};
+
 const byKind = (spans: Span[], kind: string): Span[] => spans.filter((span) => span.kind === kind);
 const find = (spans: Span[], name: string): Span | undefined => spans.find((span) => span.name === name);
 
@@ -132,7 +171,7 @@ describe("cost attribution", () => {
     expect(steps[0]!.attributes["nah.request.cache_hit_rate"]).toBe(0);
   });
 
-  it("puts total spend and the stop reason on the root only", async () => {
+  it("puts the trace total and the stop reason on the root", async () => {
     const sink = memorySink();
     await traceRun({ sink }, stream(run({ spendUsd: 0.42 })));
 
@@ -140,9 +179,52 @@ describe("cost attribution", () => {
     expect(root.attributes["nah.cost.usd"]).toBe(0.42);
     expect(root.attributes["nah.stop_reason"]).toBe("completed");
     expect(root.attributes["gen_ai.usage.input_tokens"]).toBe(450);
-    // Per-step cost is not derivable without rates per step, and guessing would
-    // put a wrong number on the most-looked-at number in the UI.
+    // These steps carried no spend at all, because no rates were supplied. There
+    // is no per-request figure to report and inventing one would put a wrong
+    // number on the most-looked-at number in the UI.
     expect(byKind(sink.spans, "step")[0]!.attributes["nah.cost.usd"]).toBeUndefined();
+  });
+
+  it("reports what each request cost rather than a running total", async () => {
+    // The stream reports cumulative usage per step, which is what a session's
+    // requests add up to. Reading that straight onto a span is how every
+    // request in a session came to look as though it had spent the whole
+    // session.
+    const sink = memorySink();
+    await traceRun({ sink }, stream(spentRun([0.1, 0.36, 0.42])));
+
+    const steps = byKind(sink.spans, "step");
+    expect(steps).toHaveLength(3);
+    const costs = steps.map((span) => span.attributes["nah.cost.usd"] as number);
+    expect(costs[0]).toBeCloseTo(0.1, 6);
+    expect(costs[1]).toBeCloseTo(0.26, 6);
+    expect(costs[2]).toBeCloseTo(0.06, 6);
+    // The trace total stays the sum of its own requests, so the Studio's
+    // per-trace figures still add up across a session.
+    expect(byKind(sink.spans, "agent")[0]!.attributes["nah.cost.usd"]).toBeCloseTo(0.42, 6);
+  });
+
+  it("counts spend that arrives outside a step, such as compaction", async () => {
+    // Compaction bills through the same meter but reports no step-finish, so the
+    // total has to pick up the remainder rather than trusting the last step.
+    const sink = memorySink();
+    await traceRun(
+      { sink },
+      stream([
+        { type: "step-start", step: 1 } as HarnessEvent,
+        step(1, { inputTokens: 100, outputTokens: 20, totalTokens: 120, spendUsd: 0.1 }),
+        { type: "compacted", droppedMessages: 10, keptMessages: 4, summaryChars: 900 } as HarnessEvent,
+        {
+          type: "finish",
+          reason: "completed",
+          text: "done",
+          usage: usage({ inputTokens: 100, outputTokens: 20, totalTokens: 120, spendUsd: 0.13 }),
+        } as HarnessEvent,
+      ]),
+    );
+
+    expect(byKind(sink.spans, "step")[0]!.attributes["nah.cost.usd"]).toBeCloseTo(0.1, 6);
+    expect(byKind(sink.spans, "agent")[0]!.attributes["nah.cost.usd"]).toBeCloseTo(0.13, 6);
   });
 });
 
