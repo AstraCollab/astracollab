@@ -1,6 +1,6 @@
 {
   "name": "@astracollab/ai",
-  "version": "0.0.1-beta.1",
+  "version": "0.0.1-beta.2",
   "private": false,
   "description": "AstraCollab AI provider SDKs \u2014 Cursor Composer inference, gateway and Mastra compatibility, and Vercel AI SDK integration.",
   "type": "module",
