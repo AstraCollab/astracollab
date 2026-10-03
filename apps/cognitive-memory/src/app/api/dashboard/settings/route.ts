@@ -49,6 +49,10 @@ const read = Effect.gen(function* () {
     deployment: {
       databasePath: config.databasePath,
       modelName: config.modelName,
+      // The provider, not just the model name: `gpt-4o-mini` is served by more
+      // than one gateway, and the page is the only place an operator sees
+      // whether their key is being sent where they think.
+      modelProvider: config.modelProviderLabel,
       modelConfigured: config.modelApiKey !== null,
       authConfigured: authConfigured(),
       defaults: {

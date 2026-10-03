@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createHttpClient } from "../src/client"
 import { CognitiveMemoryError } from "../src/errors"
 import { createClient } from "../src/cogmem"
+import { TURN_FIELD_LIMIT } from "../src/resources/turns"
 
 /**
  * The HTTP layer, tested at the HTTP layer.
@@ -140,5 +141,33 @@ describe("resources", () => {
     await memory.memories.get("a/b")
 
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/memories/a%2Fb")
+  })
+
+  it("clips a turn to what the service accepts instead of losing it", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ stored: [], mergedInto: [], rejected: [] }))
+    const memory = createClient({ apiKey: "k", baseUrl: "https://memory.test" })
+
+    // The service answers 400 above this, and a rejected turn learns nothing —
+    // so an un-clipped runaway string is the whole exchange, thrown away.
+    await memory.turns.learn({
+      userMessage: "explain the scheduler",
+      assistantResponse: "z".repeat(TURN_FIELD_LIMIT + 1000)
+    })
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))
+    expect(body.assistantResponse).toHaveLength(TURN_FIELD_LIMIT + 1)
+    expect(body.userMessage).toBe("explain the scheduler")
+  })
+
+  it("leaves a turn that fits alone", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ stored: [], mergedInto: [], rejected: [] }))
+    const memory = createClient({ apiKey: "k", baseUrl: "https://memory.test" })
+
+    await memory.turns.learn({ userMessage: "we deploy on Fridays", assistantResponse: "Noted." })
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      userMessage: "we deploy on Fridays",
+      assistantResponse: "Noted."
+    })
   })
 })

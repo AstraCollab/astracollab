@@ -97,6 +97,19 @@ const toTension = (tension: {
   actionableQuestion: tension.actionableQuestion,
 });
 
+/**
+ * What `/v1/turns` accepts per field. The service rejects anything longer with
+ * a 400, and a rejected turn learns nothing at all — so the client clips
+ * instead. The limit is generous because the service windows a long turn rather
+ * than truncating it: the conclusion at the end of a long answer is exactly what
+ * is worth learning, so this is a backstop against a runaway string, not a
+ * rationing of a normal reply.
+ */
+const TURN_FIELD_LIMIT = 200000;
+
+const clipTurnField = (text: string): string =>
+  text.length > TURN_FIELD_LIMIT ? `${text.slice(0, TURN_FIELD_LIMIT)}…` : text;
+
 /** A short, specific line: what failed, and what to do about it. */
 const describeFailure = (error: unknown): string => {
   if (error instanceof CognitiveMemoryError) {
@@ -203,8 +216,8 @@ export const hostedMemory = (options: HostedMemoryOptions): HostedMemory => {
     async postTurnAsync(turn) {
       try {
         await warm.turns.learn({
-          userMessage: turn.userMessage,
-          assistantResponse: turn.assistantResponse,
+          userMessage: clipTurnField(turn.userMessage),
+          assistantResponse: clipTurnField(turn.assistantResponse),
           ...(turn.sessionId === undefined ? {} : { sessionId: turn.sessionId }),
         });
         failure = null;

@@ -39,9 +39,20 @@ export const RecallBody = Schema.Struct({
   limit: Schema.optional(Schema.Number)
 })
 
+/**
+ * Longest accepted turn field, in characters.
+ *
+ * Generous on purpose. It used to be 20000, which rejected a long answer with a
+ * 400 and cost the whole exchange — while extraction only ever read 2000
+ * characters of it anyway, so the cap bought no accuracy and cost a turn. The
+ * bound is here to stop an unbounded body, not to ration a normal reply; the
+ * reading of a genuinely huge turn is windowed in the extractor.
+ */
+export const TURN_FIELD_LIMIT = 200000
+
 export const TurnBody = Schema.Struct({
-  userMessage: Schema.String.pipe(Schema.check(Schema.isMaxLength(20000))),
-  assistantResponse: Schema.String.pipe(Schema.check(Schema.isMaxLength(20000))),
+  userMessage: Schema.String.pipe(Schema.check(Schema.isMaxLength(TURN_FIELD_LIMIT))),
+  assistantResponse: Schema.String.pipe(Schema.check(Schema.isMaxLength(TURN_FIELD_LIMIT))),
   sessionId: Schema.optional(Schema.String)
 })
 

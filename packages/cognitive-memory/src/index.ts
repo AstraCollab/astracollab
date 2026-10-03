@@ -40,7 +40,7 @@ export {
 export { MemoriesResource } from "./resources/memories"
 export { ContextResource } from "./resources/context"
 export { RecallResource } from "./resources/recall"
-export { TurnsResource } from "./resources/turns"
+export { TurnsResource, TURN_FIELD_LIMIT } from "./resources/turns"
 export { TensionsResource } from "./resources/tensions"
 export { SelfModelResource } from "./resources/self-model"
 export { StatsResource, fetchHealth } from "./resources/stats"

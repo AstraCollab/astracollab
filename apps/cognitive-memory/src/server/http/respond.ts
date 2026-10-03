@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Schema } from "effect"
+import { Cause, Effect, Exit, Schema, SchemaIssue } from "effect"
 
 import { InvalidRequest, CognitiveMemoryError } from "../domain/errors"
 
@@ -109,13 +109,21 @@ export const decodeBody = <S extends Schema.Top>(schema: S, raw: unknown) =>
   Schema.decodeUnknownEffect(schema)(raw).pipe(
     // A real `InvalidRequest`, not a lookalike object: the HTTP layer maps on
     // `_tag`, and a plain object would not be assignable to `CognitiveMemoryError`.
-    Effect.mapError(
-      (error) =>
-        new InvalidRequest({
-          message: "Request body did not match the expected shape.",
-          issues: [error.message]
-        })
-    )
+    Effect.mapError((error) => {
+      // The rendered issue names the field and says what it got, which
+      // `error.message` only does as a multi-line blob. A 400 the caller cannot
+      // act on is indistinguishable from a bug on their side, and they are the
+      // ones who have to fix it.
+      const issues = [SchemaIssue.makeFormatterDefault()(error.issue)]
+      // A body that never matched the schema is our only chance to say why:
+      // `InvalidRequest` is otherwise silent, and the client logs the status
+      // line without the body that explains it.
+      Effect.logWarning(`Request body rejected — ${issues.join("; ")}`).pipe(Effect.runFork)
+      return new InvalidRequest({
+        message: "Request body did not match the expected shape.",
+        issues
+      })
+    })
   )
 
 /** Read a JSON body, treating an empty or malformed one as `{}`. */

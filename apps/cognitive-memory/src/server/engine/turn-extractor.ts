@@ -1,9 +1,10 @@
+import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai"
 import { LanguageModel } from "effect/ai"
 import { Context, Effect, Layer, Redacted, Schema } from "effect"
 import { FetchHttpClient } from "effect/http"
 
-import { settings } from "../config"
+import { type ModelClient, settings } from "../config"
 
 /**
  * Learning from a turn, and deciding what to do about a restatement.
@@ -92,7 +93,41 @@ export interface TurnExtractorService {
 
 const EMPTY_TURN: TurnExtraction = { memories: [], tensions: [] }
 
-const clip = (value: string, max: number): string => (value.length > max ? `${value.slice(0, max)}…` : value)
+/** What the model is shown of one field in a single call. */
+const WINDOW = 2000
+
+/**
+ * Windows per field, which is also the ceiling on what one turn can cost.
+ *
+ * A long turn used to be truncated to its *first* `WINDOW` characters, which
+ * threw away the part most likely to hold the fact: the conclusion of an answer,
+ * the port that got confirmed, the decision that was made. Head and tail first,
+ * and only then more windows, because a pasted file must not fan out into fifty
+ * model calls to run a background job.
+ */
+const MAX_WINDOWS = 4
+
+/**
+ * Split one field into the windows the model will read, in order.
+ *
+ * Up to `MAX_WINDOWS * WINDOW` the windows tile the field and meet at the seams.
+ * Past that they are spread evenly and the gaps are the loss — a bounded loss,
+ * chosen over the unbounded one, and the "part i of n" line in the prompt says
+ * the turn was partial rather than implying it was read whole.
+ */
+export const windows = (value: string): ReadonlyArray<string> => {
+  if (value.length <= WINDOW) return [value]
+  const count = Math.min(MAX_WINDOWS, Math.ceil(value.length / WINDOW))
+  if (count === 1) return [value.slice(0, WINDOW)]
+  return Array.from({ length: count }, (_, index) => {
+    const start = Math.round((index * (value.length - WINDOW)) / (count - 1))
+    return value.slice(start, start + WINDOW)
+  })
+}
+
+/** Pair the two fields without multiplying the number of calls. */
+const at = (parts: ReadonlyArray<string>, index: number): string =>
+  parts[Math.min(index, parts.length - 1)] ?? ""
 
 const EXTRACT_INSTRUCTION = `You maintain durable memory for a coding agent.
 
@@ -140,20 +175,31 @@ const usable = (content: string): boolean => {
 }
 
 /**
- * The provider is OpenAI-compatible rather than OpenAI specifically, so a
- * gateway or a local server is a URL change rather than a code change.
+ * The client is chosen by protocol, not by brand.
+ *
+ * OpenAI, OpenRouter, Groq, Together and any local server all speak OpenAI's
+ * wire format, so a gateway is a URL change rather than a code change. Anthropic
+ * does not, so it gets its own client — a base-URL override of the OpenAI client
+ * would send OpenAI-shaped requests and fail in the response parser, which is
+ * the worst place to find out a provider was misconfigured.
  */
 const buildLayer = (options: {
+  readonly client: ModelClient
   readonly apiKey: string
   readonly modelName: string
   readonly apiUrl: string | null
 }): Layer.Layer<LanguageModel.LanguageModel> => {
-  const client = OpenAiClient.layer({
-    apiKey: Redacted.make(options.apiKey),
-    ...(options.apiUrl === null ? {} : { apiUrl: options.apiUrl })
-  })
+  const apiKey = Redacted.make(options.apiKey)
+  const apiUrl = options.apiUrl === null ? {} : { apiUrl: options.apiUrl }
+  const http = FetchHttpClient.layer
+
+  if (options.client === "anthropic") {
+    return AnthropicLanguageModel.layer({ model: options.modelName }).pipe(
+      Layer.provide(Layer.provideMerge(AnthropicClient.layer({ apiKey, ...apiUrl }), http))
+    )
+  }
   return OpenAiLanguageModel.layer({ model: options.modelName }).pipe(
-    Layer.provide(Layer.provideMerge(client, FetchHttpClient.layer))
+    Layer.provide(Layer.provideMerge(OpenAiClient.layer({ apiKey, ...apiUrl }), http))
   )
 }
 
@@ -167,6 +213,7 @@ const makeTurnExtractor = Effect.gen(function* () {
   // branch, which is the kind of dependency that turns into a missing-service
   // error at 3am instead of a compile error.
   const modelLayer = buildLayer({
+    client: config.modelClient,
     apiKey: config.modelApiKey ?? "cognitive-memory-no-model-configured",
     modelName: config.modelName,
     apiUrl: config.modelBaseUrl
@@ -175,38 +222,70 @@ const makeTurnExtractor = Effect.gen(function* () {
   const extract: TurnExtractorService["extract"] = (turn) => {
     if (!enabled || turn.allowModel === false) return Effect.succeed(EMPTY_TURN)
 
-    const ask = Effect.flatMap(LanguageModel.LanguageModel, (model) =>
-      model.generateObject({
-        objectName: "extracted_memories",
-        schema: ExtractedTurn,
-        prompt: [
-          EXTRACT_INSTRUCTION,
-          "<user>",
-          clip(turn.userMessage, 2000),
-          "</user>",
-          "<assistant>",
-          clip(turn.assistantResponse, 2000),
-          "</assistant>"
-        ].join("\n\n")
-      })
-    ).pipe(
-      Effect.map((response) => response.value),
-      // Extraction is a background concern. A failed extraction must not fail
-      // the turn; the deterministic rules already got their chance.
-      Effect.catchCause((cause) =>
-        Effect.logWarning("model extraction failed; falling back to rules only", cause).pipe(
-          Effect.as(EMPTY_TURN)
-        )
-      ),
-      Effect.provide(modelLayer)
-    )
+    const userWindows = windows(turn.userMessage)
+    const assistantWindows = windows(turn.assistantResponse)
+    const parts = Math.max(userWindows.length, assistantWindows.length)
 
-    return Effect.map(ask, (value) => ({
-      memories: value.memories
-        .filter((memory) => usable(memory.content))
-        .map((memory) => ({ content: memory.content.trim(), domains: memory.domains ?? [] })),
-      tensions: value.tensions ?? []
-    }))
+    return Effect.gen(function* () {
+      const model = yield* LanguageModel.LanguageModel
+      // Sequential, and one call per window: a window that fails costs that
+      // window, not the turn. A whole-turn failure used to discard every window
+      // that had already succeeded, which is the one outcome worse than a
+      // partial read.
+      const perWindow = yield* Effect.forEach(
+        Array.from({ length: parts }, (_, index) => index),
+        (index) =>
+          model
+            .generateObject({
+              objectName: "extracted_memories",
+              schema: ExtractedTurn,
+              prompt: [
+                EXTRACT_INSTRUCTION,
+                ...(parts > 1
+                  ? [
+                      `This is part ${index + 1} of ${parts} of a longer turn. The other parts were not shown to you, so a fact you cannot see here is not a fact you should doubt — and do not report a fact this part does not contain.`
+                    ]
+                  : []),
+                "<user>",
+                at(userWindows, index),
+                "</user>",
+                "<assistant>",
+                at(assistantWindows, index),
+                "</assistant>"
+              ].join("\n\n")
+            })
+            .pipe(
+              Effect.map((response) => response.value),
+              // Extraction is a background concern. A failed extraction must not
+              // fail the turn; the deterministic rules already got their chance.
+              Effect.catchCause((cause) =>
+                Effect.logWarning(
+                  `model extraction failed on window ${index + 1}/${parts}; falling back to rules only`,
+                  cause
+                ).pipe(Effect.as(EMPTY_TURN))
+              )
+            )
+      )
+
+      // Neighbouring windows share their seams, so the same sentence can be
+      // extracted twice. Identical statements are dropped here; restatements are
+      // left to the merge in the engine, which is the thing that understands
+      // them.
+      const seen = new Set<string>()
+      const memories = perWindow.flatMap((value) =>
+        value.memories
+          .filter((memory) => usable(memory.content))
+          .filter((memory) => {
+            const key = memory.content.trim().toLowerCase()
+            if (seen.has(key)) return false
+            seen.add(key)
+            return true
+          })
+          .map((memory) => ({ content: memory.content.trim(), domains: memory.domains ?? [] }))
+      )
+
+      return { memories, tensions: perWindow.flatMap((value) => value.tensions ?? []) }
+    }).pipe(Effect.provide(modelLayer))
   }
 
   const reconcile: TurnExtractorService["reconcile"] = (input) =>

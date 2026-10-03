@@ -98,7 +98,11 @@ export function SettingsPanel() {
           label="extraction"
           value={data.effective.extraction}
           tone={data.effective.extraction === "rules-only" ? "warn" : "plain"}
-          hint={data.deployment.modelConfigured ? data.deployment.modelName : "no model key configured"}
+          hint={
+            data.deployment.modelConfigured
+              ? `${data.deployment.modelProvider} · ${data.deployment.modelName}`
+              : "no model key configured"
+          }
         />
       </Grid>
 
@@ -139,7 +143,12 @@ export function SettingsPanel() {
         <Facts
           rows={[
             ["database", <span key="db" className="truncate">{data.deployment.databasePath}</span>],
-            ["model", data.deployment.modelConfigured ? data.deployment.modelName : "not configured"],
+            [
+              "model",
+              data.deployment.modelConfigured
+                ? `${data.deployment.modelProvider} · ${data.deployment.modelName}`
+                : "not configured"
+            ],
             ["sign-in secret", data.deployment.authConfigured ? "set" : "development fallback"],
             [
               "store",

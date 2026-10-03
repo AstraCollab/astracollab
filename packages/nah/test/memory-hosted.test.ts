@@ -228,6 +228,25 @@ describe("hosted learning", () => {
     expect(memory.degraded).toBeNull();
   });
 
+  it("clips an over-long reply to what the service accepts", async () => {
+    routes.set("POST /api/v1/turns", () => ({
+      stored: [],
+      mergedInto: [],
+      counts: { stored: 0, merged: 0, rejected: 0, tensions: 0, promoted: 0 },
+      rejected: [],
+    }));
+    const memory = hostedMemory({ apiKey: "key-123", baseUrl: BASE });
+
+    await memory.postTurnAsync({
+      userMessage: "explain the scheduler",
+      assistantResponse: "z".repeat(250000),
+    });
+
+    const sent = calls.at(-1)?.body as { assistantResponse: string };
+    expect(sent.assistantResponse).toHaveLength(200001);
+    expect(memory.degraded).toBeNull();
+  });
+
   it("records a learn failure instead of raising it into the turn", async () => {
     routes.set("POST /api/v1/turns", () => respond({ error: "InvalidRequest", message: "too long" }, 400));
     const memory = hostedMemory({ apiKey: "key-123", baseUrl: BASE });

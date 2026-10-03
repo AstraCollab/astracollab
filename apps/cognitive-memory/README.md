@@ -108,6 +108,10 @@ numbers because a setting that silently reverts is worse than no setting at all.
 
 1. **Capture.** Deterministic patterns first: URLs, assignments, stated
    requirements. No model, no refusal, no silent loss.
+   A turn longer than the extractor reads is read in windows rather than
+   truncated — head and tail included, because the conclusion of a long answer
+   is the part worth learning, and at most four calls per field so a pasted file
+   cannot fan the cost out.
 2. **Reconcile.** Restatements are folded into what is held — but only when the
    merge keeps every distinctive token, or both entries are kept.
 3. **File.** Into a tier. New facts land hot, so the next prompt already has them.
@@ -195,8 +199,9 @@ deployment again. Every value is optional in development; see
 | `COGNITIVE_MEMORY_MAX_INDEX_ITEMS` | `60` | Index lines per prompt |
 | `COGNITIVE_MEMORY_DEFAULT_RECALL_LIMIT` | `8` | Default results for a recall |
 | `COGNITIVE_MEMORY_MODEL_API_KEY` | — | Enables model-backed extraction |
-| `COGNITIVE_MEMORY_MODEL_BASE_URL` | OpenAI | Any OpenAI-compatible gateway |
-| `COGNITIVE_MEMORY_MODEL_NAME` | `gpt-4o-mini` | |
+| `COGNITIVE_MEMORY_MODEL_PROVIDER` | `openai` | `openai`, `openrouter`, `groq`, `together`, `anthropic`, `custom` |
+| `COGNITIVE_MEMORY_MODEL_BASE_URL` | from the provider | Any OpenAI-compatible gateway |
+| `COGNITIVE_MEMORY_MODEL_NAME` | from the provider | Overrides the provider's default model |
 | `COGNITIVE_MEMORY_ENV` | `dev` / `prod` | The segment of a minted key |
 | `BETTER_AUTH_SECRET` | dev fallback | **Required in production** |
 | `BETTER_AUTH_URL` | `http://localhost:3000` | |
@@ -204,6 +209,31 @@ deployment again. Every value is optional in development; see
 An unusable value is reported by `/api/v1/health` and on the dashboard's overview
 rather than thrown during module load, which would take down `next build` instead
 of the one request that needed the setting.
+
+### Choosing a provider
+
+`COGNITIVE_MEMORY_MODEL_PROVIDER` picks the endpoint *and* the default model, so
+pointing extraction at another gateway is one variable:
+
+| Provider | Client | Endpoint | Default model |
+| --- | --- | --- | --- |
+| `openai` | OpenAI-compatible | the client's own default | `gpt-4o-mini` |
+| `openrouter` | OpenAI-compatible | `https://openrouter.ai/api/v1` | `openai/gpt-4o-mini` |
+| `groq` | OpenAI-compatible | `https://api.groq.com/openai/v1` | must be set |
+| `together` | OpenAI-compatible | `https://api.together.xyz/v1` | must be set |
+| `anthropic` | Anthropic | the client's own default | `claude-haiku-4-5` |
+| `custom` | OpenAI-compatible | must be set | must be set |
+
+An unknown provider name, or a provider with no default model and none
+configured, is reported as a problem by `/api/v1/health` rather than failing a
+request. `COGNITIVE_MEMORY_MODEL_BASE_URL` and `COGNITIVE_MEMORY_MODEL_NAME` still
+win when set, so the provider supplies defaults and the operator overrides them —
+including pointing `anthropic` at a proxy of its own API.
+
+`anthropic` is the one provider that is not a base-URL change: its API is not
+OpenAI's wire format, so it uses `@effect/ai-anthropic`. The rest share
+`@effect/ai-openai`. A provider that is neither shape needs its own extractor, not
+another entry in this table.
 
 The settings that are per organisation rather than per deployment — budgets,
 whether model extraction runs, how long the logs are kept — live in

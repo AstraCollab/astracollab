@@ -292,6 +292,7 @@ export interface SettingsResponse {
   deployment: {
     databasePath: string
     modelName: string
+    modelProvider: string
     modelConfigured: boolean
     authConfigured: boolean
     defaults: { maxTotalTokens: number; maxIndexItems: number; defaultRecallLimit: number }

@@ -26,6 +26,17 @@ const program = Effect.gen(function* () {
     service: "cognitive-memory",
     version: "0.1.0",
     extractor: mode,
+    // Which provider extraction actually talks to. Without this the only way to
+    // tell an OpenRouter deployment from an OpenAI one was to read the request
+    // log, and the health endpoint answered "fine" for both.
+    model: {
+      provider: config.modelProvider,
+      label: config.modelProviderLabel,
+      client: config.modelClient,
+      name: config.modelName,
+      baseUrl: config.modelBaseUrl,
+      configured: config.modelApiKey !== null
+    },
     limits: {
       maxTotalTokens: config.maxTotalTokens,
       maxIndexItems: config.maxIndexItems,
