@@ -14,6 +14,7 @@ const external = [
   "ai",
   "zod",
   /^@ai-sdk\//,
+  "@ai-sdk/provider",
   /^ai\//,
 ];
 
@@ -22,6 +23,8 @@ const entries = [
   { name: "cursor/index", file: "src/cursor/index.ts" },
   { name: "workflows/index", file: "src/workflows/index.ts" },
   { name: "workflows/mastra/index", file: "src/workflows/mastra/index.ts" },
+  { name: "reasoning-compat/index", file: "src/reasoning-compat/index.ts" },
+  { name: "mastra-messages/index", file: "src/mastra-messages/index.ts" },
 ];
 
 let first = true;

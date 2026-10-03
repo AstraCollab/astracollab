@@ -71,6 +71,36 @@ export type MemoryDescription = {
   degraded: string | null;
 };
 
+/** A fact being written, before any backend has decided where it lands. */
+export type MemoryWrite = {
+  /** The statement itself. Backends store it as given, trimmed. */
+  content: string;
+  /** Short tags for grouping. Optional: a fact with none is still a fact. */
+  domains?: string[];
+  /**
+   * Which cache it goes in.
+   *
+   * L1 is pre-staged into every context build and is what the user sees as
+   * "remembered"; L2 is recalled on demand; L3 is the archive. Default L1,
+   * because a fact a person bothered to state out loud is one they expect to be
+   * there next turn without anyone asking for it.
+   */
+  tier?: "L1" | "L2" | "L3";
+};
+
+/** What a write actually did, as opposed to what was asked for. */
+export type MemoryWriteResult = {
+  /** Ids now held. Empty when the write was rejected or the backend is down. */
+  stored: string[];
+  /**
+   * True when this restated something already held rather than adding to it.
+   *
+   * Reported rather than hidden because "saved" and "already knew this" are
+   * different answers, and a caller that prints one for the other is lying.
+   */
+  merged: boolean;
+};
+
 export interface SessionMemory {
   readonly backend: MemoryBackendKind;
   /** Where this backend keeps things, for display. */
@@ -95,11 +125,41 @@ export interface SessionMemory {
 
   describe(): Promise<MemoryDescription>;
 
+  /**
+   * Record a fact the user stated outright.
+   *
+   * The write half of the pair with `search`. It obeys the same contract as the
+   * rest of this interface — it never throws into a turn — but a failed write
+   * returns an empty `stored` rather than an error, so the caller has to check.
+   * That is deliberate: a tool that claims a memory was saved when the backend
+   * refused is the failure this whole layer exists to prevent.
+   */
+  remember(entry: MemoryWrite): Promise<MemoryWriteResult>;
+
+  /**
+   * Drop a memory by id. False when no such id was held.
+   *
+   * Corrections need this as much as additions need `remember`: storing the
+   * right answer beside the wrong one leaves both to be recalled, and the wrong
+   * one is the one that sounds authoritative.
+   */
+  forget(id: string): Promise<boolean>;
+
   /** Close a contradiction. False when there was no such id. */
   resolveTension(id: string, resolution: { resolvedBy: string; pattern: string }): Promise<boolean>;
 }
 
 const EMPTY_INJECTION: MemoryInjectionReport = { text: "", entries: [], totalTokens: 0, truncated: false };
+
+/**
+ * Two spellings of one statement, for deciding whether a write is a restatement.
+ *
+ * Case and trailing punctuation only. Anything looser starts folding facts
+ * together that are not the same, and a fold that discards something the user
+ * just said is worse than storing a near-duplicate.
+ */
+const sameStatement = (a: string, b: string): boolean =>
+  a.trim().toLowerCase().replace(/[.!?,;:]+$/, "").trim() === b.trim().toLowerCase().replace(/[.!?,;:]+$/, "").trim();
 
 /** Reduce a self-model to the three numbers a person actually reads. */
 export const selfModelRows = (selfModel: ProprioceptiveSelfModel | undefined) =>
@@ -124,6 +184,14 @@ export const localMemory = (options: {
   restored?: boolean;
   /** Set when a pre-SQLite JSON memory was imported. */
   importedFrom?: string;
+  /**
+   * Persist after a write.
+   *
+   * Optional so a caller that only ever reads does not have to construct one,
+   * and a no-op when omitted — which is the honest outcome, since the engine
+   * would otherwise hold a write that the next `postTurnAsync` never saw.
+   */
+  flush?: () => Promise<void>;
 }): SessionMemory => {
   let failure: string | null = null;
   const note = (error: unknown): void => {
@@ -193,6 +261,57 @@ export const localMemory = (options: {
         domains: selfModelRows(snapshot.l0.selfModel),
         degraded: failure,
       };
+    },
+
+    async remember(entry) {
+      try {
+        const content = entry.content.trim();
+        if (!content) return { stored: [], merged: false };
+        // Fold an exact restatement rather than storing it twice. The engine's
+        // turn-time reconciler does this with a model in the loop; a tool call is
+        // not worth one, and the engine has no non-model path for it. Anything
+        // short of an exact match is treated as a new fact rather than guessed
+        // at — a wrong fold silently discards something the user just said.
+        const same = options.memory.search(content, 5).find(({ item }) => sameStatement(item.content, content));
+        if (same) return { stored: [same.item.id], merged: true };
+
+        const tier = entry.tier ?? "L1";
+        const id = `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const now = Date.now();
+        options.memory.addMemory(
+          {
+            id,
+            content,
+            bookmark: content.slice(0, 80),
+            tier,
+            metadata: {
+              domains: entry.domains ?? [],
+              createdAt: now,
+              lastAccessedAt: now,
+              accessCount: 0,
+            },
+          },
+          tier,
+        );
+        await options.flush?.();
+        return { stored: [id], merged: false };
+      } catch (error) {
+        note(error);
+        return { stored: [], merged: false };
+      }
+    },
+
+    async forget(id) {
+      try {
+        // Nothing to persist when nothing was held, so the flush is not paid for
+        // on the common "that id was already gone" path.
+        if (!options.memory.removeMemory(id)) return false;
+        await options.flush?.();
+        return true;
+      } catch (error) {
+        note(error);
+        return false;
+      }
     },
 
     async resolveTension(id, resolution) {

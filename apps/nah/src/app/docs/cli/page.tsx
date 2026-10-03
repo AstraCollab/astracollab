@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Code, DocHeader, DocSection, DocsShell, Note } from "@/components/docs/DocsShell";
 
 const tuiSample = [
@@ -47,6 +48,8 @@ const replSample = [
 const workSample = [
   "/task                  Show the active plan",
   "/task clear            Clear the plan",
+  "/workflow              List this workspace's workflow files",
+  "/workflow new <what>  Describe a repeatable task and have it built",
   "/branches              List branches, sizes, and which is active",
   "/branch                List branches",
   "/branch <name>         Switch to a branch, or fork one if new",
@@ -84,6 +87,6 @@ export default function CliPage() {
 
     <DocSection id="work-management" title="Plans, sessions, and undo"><p>For substantial multi-step work, the CLI gives the agent a <code>task_ledger</code> tool. It can discover executable checks, save an ordered plan and acceptance commands, record check attempts and exit codes, and track progress across turns. Use <code>/task</code> to inspect the saved plan and <code>/task clear</code> to remove it.</p><p>Conversations are stored as append-only JSONL entries under <code>~/.nah/sessions</code>, one file per session. <code>/session list</code> shows every session for the directory with timestamps, and <code>/session &lt;id&gt;</code> switches to one without leaving the running agent — the transcript is rebuilt from the restored history. Switching clears the current turn&apos;s undo history, which no longer describes the transcript on screen.</p><p>Memory is separate from the transcript: it is stored per working directory and survives into later sessions. <code>/memory</code> shows the tiers and what was injected into each prompt.</p><p>Interactive turns keep recovery information for tool changes. Use <code>/diff</code> to inspect workspace changes and <code>/undo</code> to undo the last turn; <code>/undo &lt;step&gt;</code> targets a particular step from the latest turn.</p><Code>{workSample}</Code><p>Switching or forking a branch restores its transcript into the pane, so the scrollback always matches the conversation being continued. A name that does not exist forks a new branch from the current transcript and says so, rather than appearing to switch to something.</p><p>Branches are siblings rather than a tree: every branch derives from the session&apos;s base transcript, so <code>/branch main</code> always returns you to the original.</p></DocSection>
 
-    <DocSection id="delegation" title="Delegate independent work"><p>The interactive CLI provides a <code>delegate_task</code> tool for bounded, independent subtasks. A child starts from committed <code>HEAD</code> in a temporary detached Git worktree, so it cannot see uncommitted parent changes. The parent receives the child status, metrics, changed paths, and diff, then reviews and integrates any changes itself. Delegation requires approval under the ask permission mode and is limited to three concurrent children.</p><Note title="Choose a self-contained task">Give the child the context and acceptance criteria it needs, and delegate only work that does not depend on the current uncommitted diff or another unfinished child.</Note></DocSection>
+    <DocSection id="delegation" title="Delegate independent work"><p>Outside a sandbox the agent can hand work to sub-agents: <code>delegate_tasks</code> takes a whole plan and runs the independent parts concurrently, and <code>delegate_task</code> handles a single one. Each child starts from committed <code>HEAD</code> in its own temporary detached Git worktree, so it cannot see uncommitted parent changes and cannot collide with a sibling. The parent receives each child&apos;s status, metrics, changed paths, and diff, then reviews and integrates any changes itself. Delegation requires approval under the ask permission mode, and at most three children run at once.</p><Note title="Choose a self-contained task">Give the child the context and acceptance criteria it needs, and delegate only work that does not depend on the current uncommitted diff or another unfinished child. Children share no history, so a task that relies on something said earlier in the conversation has to restate it.</Note><Link href="/docs/delegation" className="text-violet-200 hover:text-white">How delegation and isolation work →</Link></DocSection>
   </DocsShell>;
 }

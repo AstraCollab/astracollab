@@ -1,6 +1,6 @@
 {
   "name": "nah-ai",
-  "version": "0.0.1-beta.2",
+  "version": "0.0.1-beta.3",
   "description": "nah \u2014 not another harness, the CLI. A fast, minimal coding-agent terminal (Pi-style): streaming agent loop, capped tools, JSONL sessions, slash commands.",
   "type": "module",
   "bin": {

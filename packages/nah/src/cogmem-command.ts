@@ -96,6 +96,7 @@ const buildLocal = async (deps: CogmemDeps): Promise<SessionMemory> => {
     memory: prepared.memory,
     location: prepared.path,
     restored: prepared.restored,
+    flush: prepared.flush,
     ...(prepared.importedFrom === undefined ? {} : { importedFrom: prepared.importedFrom }),
   });
 };

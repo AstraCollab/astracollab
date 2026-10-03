@@ -244,6 +244,66 @@ describe("alternate-screen host layout", () => {
   };
 
   /**
+   * Replay every write since the last full clear into a screen buffer.
+   *
+   * The TUI only repaints rows that changed, so one frame's raw text is mostly
+   * cursor moves and says nothing about where content actually sits. Replaying
+   * the whole stream answers the question these layout tests really ask: which
+   * row of the screen does a piece of text occupy?
+   */
+  const screenOf = (terminal: FakeTerminal, rows: number): string[] => {
+    const grid: string[] = Array.from({ length: rows }, () => "");
+    let row = 0;
+    let col = 0;
+    const data = terminal.written;
+    let i = 0;
+    while (i < data.length) {
+      if (data[i] === "\u001b") {
+        const csi = /^\u001b\[([0-9;?]*)([A-Za-z])/.exec(data.slice(i));
+        if (csi) {
+          const [, params, final] = csi;
+          if (final === "H") {
+            const p = params.split(";");
+            row = (p[0] ? Number(p[0]) : 1) - 1;
+            col = (p[1] ? Number(p[1]) : 1) - 1;
+          } else if (final === "J") {
+            if (params === "2") for (let r = 0; r < rows; r++) grid[r] = "";
+            row = 0;
+            col = 0;
+          } else if (final === "K") {
+            if (row >= 0 && row < rows) grid[row] = "";
+            col = 0;
+          }
+          i += csi[0].length;
+          continue;
+        }
+        const osc = /^\u001b\][^\u0007]*(?:\u0007|\u001b\\)/.exec(data.slice(i));
+        if (osc) {
+          i += osc[0].length;
+          continue;
+        }
+      }
+      if (data[i] === "\r") {
+        col = 0;
+        i++;
+        continue;
+      }
+      if (data[i] === "\n") {
+        row++;
+        col = 0;
+        i++;
+        continue;
+      }
+      if (row >= 0 && row < rows) {
+        grid[row] = grid[row]!.slice(0, col) + data[i] + grid[row]!.slice(col + 1);
+      }
+      col++;
+      i++;
+    }
+    return grid;
+  };
+
+  /**
    * Wait for a condition instead of guessing a sleep.
    *
    * These renders are driven by a streamed model response, so a fixed delay is
@@ -320,26 +380,101 @@ describe("alternate-screen host layout", () => {
     await waitFor(() => lastFrame(terminal).includes("actually use TypeScript"));
 
     release();
-    // Wait for a frame satisfying every condition at once. Waiting for them in
+    // Wait for a screen satisfying every condition at once. Waiting for them in
     // sequence could latch onto an intermediate frame that had the summary but
     // not yet repainted the editor, which is what made this flaky.
-    // The claim under test: one frame showing transcript output *and* the
-    // un-submitted editor text. Only those two — the reply itself scrolls out of
-    // a 20-row frame once the finish line lands, so it is asserted over the
-    // whole stream rather than the final frame.
-    const settled = await waitFor(() => {
-      const current = lastFrame(terminal);
-      return current.includes("completed") && current.includes("actually use TypeScript");
-    });
-    expect(settled, "no frame showed transcript output and half-typed input together").toBe(true);
+    // The claim under test: transcript output and the un-submitted editor text
+    // visible together. Asserted on the replayed screen rather than on
+    // `lastFrame`, because `lastFrame` is only the rows the renderer chose to
+    // repaint last. Now that the editor is pinned to the foot of the frame it is
+    // correctly static, so it stops being re-emitted — which says nothing about
+    // whether the user can still see it. The reply itself scrolls out of a
+    // 20-row frame once the finish line lands, so it is asserted over the whole
+    // stream rather than the settled screen.
+    const visibleTogether = (): boolean => {
+      const screen = screenOf(terminal, 20).join("\n");
+      return screen.includes("completed") && screen.includes("actually use TypeScript");
+    };
+    const settled = await waitFor(visibleTogether);
+    expect(settled, "no screen showed transcript output and half-typed input together").toBe(true);
 
-    const frame = lastFrame(terminal);
-    expect(frame).toContain("completed");
-    expect(frame).toContain("actually use TypeScript");
     // Both were rendered at some point during the run.
     const stream = strip(terminal.written);
     expect(stream).toContain("all done");
     expect(stream).toContain("find the bug");
+
+    terminal.onInput?.("\x03");
+    await host;
+  });
+
+  it("keeps the editor's dividers on the last rows before and after a turn", async () => {
+    // The editor was a bare VStack child, so it inherited `grow: 0` and was laid
+    // out directly beneath the transcript rather than at the foot of the frame,
+    // and `shrink` meant a long transcript ate the two border rows first. The
+    // visible symptom was that sending a message removed the separation between
+    // the agent's output and the textbox.
+    const { startTuiHost } = await import("../src/tui/host.js");
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({ stream: textStream("all done here") }),
+    });
+    const ROWS = 20;
+    const terminal = new FakeTerminal(60, ROWS);
+    const state = makeState(model);
+
+    /** A frame whose bottom three rows are border, editor, border. */
+    const dividersIntact = (): boolean => {
+      const rows = screenOf(terminal, ROWS);
+      const last = rows.length - 1;
+      return (
+        rows[last - 2]!.includes("─") &&
+        !rows[last - 1]!.includes("─") &&
+        rows[last]!.includes("─")
+      );
+    };
+
+    const host = startTuiHost({ state, terminal });
+    await waitFor(dividersIntact);
+
+    // Before a turn: the dividers sit at the very bottom of the frame.
+    const before = screenOf(terminal, ROWS);
+    expect(before[ROWS - 3], "no divider above the editor before a turn").toContain("─");
+    expect(before[ROWS - 1], "no divider below the editor before a turn").toContain("─");
+
+    terminal.type("find the bug");
+    terminal.enter();
+    await waitFor(() => strip(terminal.written).includes("all done here"));
+    // Let the turn finish repainting before the final frame is judged.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // After a turn: same rows. The transcript grew upward, not into them.
+    expect(dividersIntact(), "the dividers moved after sending a message").toBe(true);
+
+    terminal.onInput?.("\x03");
+    await host;
+  });
+
+  it("yields transcript rows to the editor when the terminal is short", async () => {
+    const { startTuiHost } = await import("../src/tui/host.js");
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({ stream: textStream("all done here") }),
+    });
+    const ROWS = 8;
+    const terminal = new FakeTerminal(60, ROWS);
+    const state = makeState(model);
+
+    const host = startTuiHost({ state, terminal });
+    await waitFor(() => screenOf(terminal, ROWS).some((row) => row.includes("─")));
+
+    terminal.type("hi");
+    terminal.enter();
+    await waitFor(() => strip(terminal.written).includes("all done here"));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // Even in a cramped frame the editor keeps its three rows and the
+    // transcript takes the hit, rather than the borders being squeezed out.
+    const rows = screenOf(terminal, ROWS);
+    expect(rows[ROWS - 3]).toContain("─");
+    expect(rows[ROWS - 1]).toContain("─");
 
     terminal.onInput?.("\x03");
     await host;

@@ -82,7 +82,7 @@ const logSample = [
 ].join("\n");
 
 const setupSample = [
-  "import { CognitiveMemory, createModelArbiter } from '@astracollab/not-another-harness';",
+  "import { CognitiveMemory, createModelArbiter } from 'not-another-harness';",
   "",
   "const memory = new CognitiveMemory({",
   "  extract: myExtractor,       // omit to use only the built-in patterns",

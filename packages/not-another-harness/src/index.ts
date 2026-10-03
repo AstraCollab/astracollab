@@ -41,6 +41,8 @@ export {
   createGitWorktreeIsolation,
   type OrchestratorOptions,
   type OrchestratorEvent,
+  type OrchestratorWorkflowOptions,
+  type WorkflowStepDelegate,
   type SubtaskSpec,
   type SubtaskResult,
   type SubtaskArtifact,
@@ -48,6 +50,43 @@ export {
   type IsolationHandle,
   type GitWorktreeIsolationOptions,
 } from "./orchestrator.js";
+/*
+ * Workflows: task sequences whose order lives in code rather than in a prompt.
+ *
+ * Exported from the root next to `runAgent` because the two are the same
+ * decision in different shapes — hand the work to a model that works it out, or
+ * state the steps and keep judgement for the ones that need it. A caller that
+ * reaches for a workflow wants the same import path as one that reaches for an
+ * agent, not a second entry point to learn first.
+ */
+export {
+  cloneWorkflow,
+  createStep,
+  createWorkflow,
+  createWorkflowRegistry,
+  formatWorkflowList,
+  isStep,
+  StepSuspend,
+  workflowStepsSummary,
+  type BranchCondition,
+  type Workflow,
+  type WorkflowBuilder,
+  type WorkflowContext,
+  type WorkflowEvent,
+  type WorkflowNode,
+  type WorkflowNodeLike,
+  type WorkflowRegistry,
+  type WorkflowRun,
+  type WorkflowRunOptions,
+  type WorkflowResumeOptions,
+  type WorkflowRunResult,
+  type WorkflowRunStatus,
+  type WorkflowSnapshot,
+  type WorkflowStep,
+  type WorkflowSummary,
+  type StepExecuteArgs,
+  type StepRecord,
+} from "./workflow.js";
 export { detectScriptedMutation, type ScriptedMutation } from "./bash-guard.js";
 export {
   createSearchLedger,

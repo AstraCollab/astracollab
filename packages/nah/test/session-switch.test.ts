@@ -232,6 +232,79 @@ describe("/session <id>", () => {
     await run(state, "/session");
     expect(out.join("")).toContain("Sessions for this directory");
   });
+
+  it("starts a new session instead of reporting `new` as an unknown id", async () => {
+    // `new` used to be checked *after* the id branch, which returned on every
+    // path, so the branch was dead code and `/session new` came back with
+    // `no session "new"`.
+    const state = await seedTwoSessions();
+    const previous = state.sessionBasePath;
+    out = [];
+    await run(state, "/session new");
+
+    const said = out.join("");
+    expect(said).not.toContain("no session");
+    expect(said).toContain("new session →");
+    // A genuinely new, empty transcript rather than a switch back to an old one.
+    expect(state.messages).toEqual([]);
+    expect(state.sessionBasePath).not.toBe(previous);
+  });
+
+  it("keeps /session list, new and off reachable now that bare /session has a picker", async () => {
+    const { findCommand } = await import("../src/commands.js");
+    const session = findCommand("session");
+    expect(session).toBeDefined();
+    // Exclusive, but only for the bare form — see needsTerminalAlone in host.ts.
+    expect(session!.exclusive).toBe(true);
+    for (const arg of ["list", "new", "off"]) {
+      const state = await seedTwoSessions();
+      out = [];
+      await run(state, `/session ${arg}`);
+      expect(out.join(""), `/session ${arg} produced no output`).not.toContain("no session");
+    }
+  });
+});
+
+describe("/session picker rows", () => {
+  let home: string;
+  let realHome: string | undefined;
+  let cwd: string;
+
+  beforeEach(async () => {
+    realHome = process.env.HOME;
+    home = await mkdtemp(nodePath.join(tmpdir(), "nah-pick-"));
+    process.env.HOME = home;
+    cwd = await mkdtemp(nodePath.join(tmpdir(), "nah-pickproj-"));
+  });
+
+  afterEach(async () => {
+    if (realHome === undefined) delete process.env.HOME;
+    else process.env.HOME = realHome;
+    await rm(home, { recursive: true, force: true });
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  it("lists this directory's sessions newest first and marks the active one", async () => {
+    const { defaultSessionFile } = await import("../src/context.js");
+    const { listSessions } = await import("../src/session-picker.js");
+    const first = defaultSessionFile(cwd);
+    const second = `${first.replace(/\.jsonl$/, "-two.jsonl")}`;
+    await createJsonlSessionStore(first).append([{ role: "user", content: "one" }]);
+    await createJsonlSessionStore(second).append([{ role: "user", content: "two" }]);
+
+    const rows = await listSessions(cwd, second);
+    expect(rows.map((row) => row.id)).toEqual([
+      nodePath.basename(second, ".jsonl"),
+      nodePath.basename(first, ".jsonl"),
+    ]);
+    // The session on screen is the one the picker marks, not merely the newest.
+    expect(rows.find((row) => row.active)?.id).toBe(nodePath.basename(second, ".jsonl"));
+  });
+
+  it("treats a directory with no sessions as empty rather than an error", async () => {
+    const { listSessions } = await import("../src/session-picker.js");
+    await expect(listSessions(cwd)).resolves.toEqual([]);
+  });
 });
 
 describe("TurnOutput.reset", () => {

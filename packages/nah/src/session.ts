@@ -41,6 +41,16 @@ export type SessionState = {
   cwd: string;
   tools: Record<string, unknown>;
   workspace: import("not-another-harness").ToolEnvironment;
+  /**
+   * The session's child pool, shared by direct delegation and by workflows.
+   *
+   * On the state rather than inside the tool factory because `/workflow` runs a
+   * workflow from the terminal, and a second orchestrator would mean a second
+   * concurrency pool the session's spend total does not account for.
+   */
+  orchestrator?: import("not-another-harness").Orchestrator;
+  /** The repeatable sequences `/workflow` lists and runs. Absent in a sandbox. */
+  workflows?: import("not-another-harness").WorkflowRegistry;
   activeFileChanges: Array<{ path: string; existed: boolean; content?: string; after: string }> | null;
   activeShellCommands: string[] | null;
   undoHistory: Array<TurnRecovery>;
@@ -212,6 +222,12 @@ export const composeTurnRequest = (
 ): { system: string; prompt: string } => {
   const staticContext = [
     "Task tracking: For substantial multi-step work, call task_ledger discover_checks before editing. Save a plan using exact discovered executable acceptance commands. Update progress as you work, run each check through task_ledger run_check, repair failures and rerun, and mark completed only when all steps are complete and every check has an actual zero exit code. The task_ledger tool result is the latest source of task status during this run.",
+    state.tools.remember
+      ? `Memory: When the user states a fact meant to hold from now on — where something is deployed, a path, a convention, a host, a constraint — or corrects one you were told before, record it with the remember tool, and pass the id it corrects in \`replaces\` so the stale one is retired rather than left beside it. When they tell you to remember something, do it there and then, in the same turn, and say what you stored. If the tool reports it was not stored, say that plainly instead of letting the conversation carry on as though it were. Do not save what only matters to this turn, and do not save what the repository already says.`
+      : "",
+    state.tools.run_workflow
+      ? `Workflows: Some sequences are written down and run the same way every time. Before assembling a multi-step sequence out of tool calls, check list_workflows — if a workflow covers the request, run it by name with run_workflow rather than improvising the same steps. A workflow already delegates its own sub-agents where the work needs judgement, so do not re-delegate the parts it covers. When the user describes a sequence they want repeated from now on, say that /workflow new <description> is how they get one, and offer to build it.`
+      : "",
     state.tools.delegate_task
       ? `Delegation: When you have a plan whose parts are independent of each other, spin up sub-agents for them instead of doing the work one piece at a time. Pass the whole plan to delegate_tasks and it runs the subtasks concurrently, each in its own isolated worktree; use delegate_task for a single independent subtask. Delegate only work that starts from committed HEAD and does not depend on your uncommitted changes or on another subtask's result. Children share no history with you, so each task must restate its own context and acceptance criteria. Every child's diff comes back for you to review and integrate deliberately; nothing is merged automatically. If the parts of a plan depend on each other, do the dependent one yourself rather than delegating it.\n\n${orchestratorPrompt({ concurrency: 3, isolation: "temporary Git worktree" })}`
       : "",

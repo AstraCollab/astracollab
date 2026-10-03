@@ -17,7 +17,7 @@ npm install @mastra/blaxel
 # install only the framework adapter you use
 npm install @mastra/core
 # or use NAH's AI SDK harness
-npm install @astracollab/not-another-harness ai zod
+npm install not-another-harness ai zod
 ```
 
 ## Quick start
@@ -120,7 +120,7 @@ sandbox command runner to NAH's `ToolEnvironment` contract:
 
 ```ts
 import { createNahToolEnvironment } from "@astracollab/agent-sandbox/nah";
-import { createCodingTools } from "@astracollab/not-another-harness";
+import { createCodingTools } from "not-another-harness";
 
 const environment = createNahToolEnvironment({ repoFs, sandbox });
 const tools = createCodingTools(environment);

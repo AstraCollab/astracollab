@@ -3,7 +3,8 @@ import { promises as fs } from "node:fs";
 import { createHash } from "node:crypto";
 import * as nodePath from "node:path";
 
-import type { HarnessEvent } from "not-another-harness";
+import { formatWorkflowList, workflowStepsSummary, type HarnessEvent } from "not-another-harness";
+import { WORKSPACE_WORKFLOW_DIR, loadWorkspaceWorkflows, resolveWorkspaceWorkflow, workspaceWorkflowBrief } from "./workspace-workflows.js";
 
 import { defaultSessionFile, withFileInclusions } from "./context.js";
 import { resolveModel } from "./model.js";
@@ -415,7 +416,15 @@ export const setupProvider = async (
   }
 };
 
-type SlashResult = "handled" | "quit" | "not-a-command";
+/**
+ * What a slash command did.
+ *
+ * The object form is a command that has no output of its own because its work is
+ * the agent's: it hands the turn loop a prompt to run (`/workflow new ...`), so
+ * the command is dispatched and the turn that follows is streamed, steered and
+ * aborted like any other.
+ */
+type SlashResult = "handled" | "quit" | "not-a-command" | { prompt: string };
 
 
 /** One row per branch: the base transcript plus every named sibling. */
@@ -589,6 +598,105 @@ export const handleSlashCommand = async (
       }
       state.turnStepLimit = parsed;
       out.write(c.dim(`(per-turn ceiling: ${parsed} steps — a turn will stop there)\n`));
+      return "handled";
+    }
+    case "workflow": {
+      const registry = state.workflows;
+      if (!registry) {
+        out.write(c.dim("(workflows need a local workspace, and this session is sandboxed)\n"));
+        return "handled";
+      }
+      // What is on disk under the workspace dir, including anything that will not load.
+      // Loading on every command rather than once at startup is what makes a file the
+      // agent wrote seconds ago runnable, and what makes a broken file say so instead of
+      // leaving the user to wonder why their name is missing.
+      const reportWorkspaceWorkflows = async () => {
+        const { loaded, failed } = await loadWorkspaceWorkflows({ cwd, registry });
+        for (const { file, ids } of loaded) {
+          out.write(`${c.green("✓")} ${c.dim(`${WORKSPACE_WORKFLOW_DIR}/${nodePath.basename(file)}`)}  ${ids.join(", ")}\n`);
+        }
+        for (const { file, error } of failed) {
+          out.write(`${c.red("✗")} ${c.red(`${WORKSPACE_WORKFLOW_DIR}/${nodePath.basename(file)}`)}\n  ${error}\n`);
+        }
+        return loaded.length + failed.length;
+      };
+      if (rest[0]?.trim() === "new") {
+        // What follows is a sentence, not a token: the user types what the
+        // workflow should do in their own words, so the quotes a shell needs
+        // are optional here and are dropped rather than carried into the brief.
+        const description = rest
+          .slice(1)
+          .join(" ")
+          .trim()
+          .replace(/^["']|["']$/g, "");
+        if (!description) {
+          out.write(c.red("describe what should happen, every time: /workflow new <description>\n"));
+          return "handled";
+        }
+        return { prompt: workspaceWorkflowBrief(description) };
+      }
+      const available = registry.list();
+      const name = rest[0]?.trim();
+      if (!name) {
+        out.write(c.dim("Repeatable sequences (run one with /workflow <name>):\n"));
+        out.write(`${formatWorkflowList(registry)}\n`);
+        // Then the workspace's own files, and anything wrong with them.
+        // Loading here also registers what was written during this session.
+        if ((await reportWorkspaceWorkflows()) === 0) {
+          out.write(c.dim(`No workspace workflows yet. One file per workflow lives in ${WORKSPACE_WORKFLOW_DIR}/.\n`));
+          out.write(c.dim("Create the first with: /workflow new <what should happen, every time>\n"));
+        }
+        return "handled";
+      }
+      // Resolved from disk as well as from the registry: a file written during this
+      // session is not in the registry yet, and telling a user "no workflow named X"
+      // about a workflow that is sitting on their disk is the worst possible answer.
+      const workflow = registry.get(name);
+      if (!workflow) {
+        out.write(c.red(`no workflow named "${name}"\n`));
+        out.write(`${formatWorkflowList(registry)}\n`);
+        // A workspace file that will not load is the likeliest reason a name the user
+        // believes they just created is missing, and the registry cannot show it.
+        await reportWorkspaceWorkflows();
+        return "handled";
+      }
+      // Anything after the name is the workflow's input: a bare token is the
+      // common case (`/workflow review-changes main`), and JSON is there for the
+      // workflows that need a shape. Guessing wrong is louder than trying both.
+      const rest0 = rest.slice(1).join(" ").trim();
+      let input: unknown = {};
+      if (rest0.startsWith("{")) {
+        try {
+          input = JSON.parse(rest0);
+        } catch (e) {
+          out.write(c.red(`that is not valid JSON: ${e instanceof Error ? e.message : String(e)}\n`));
+          return "handled";
+        }
+      } else if (rest0) {
+        input = { base: rest0 };
+      }
+      if (!state.orchestrator) {
+        out.write(c.dim("(workflows are unavailable in this session)\n"));
+        return "handled";
+      }
+      out.write(c.dim(`running ${name}…\n`));
+      // Step progress, not streaming output: a workflow is a sequence of steps and
+      // the useful thing to watch is which one it is on.
+      const result = await state.orchestrator.runWorkflow(workflow, {
+        inputData: input as never,
+        onEvent: (event) => {
+          if (event.type === "step-start") out.write(c.dim(`  → ${event.stepId}\n`));
+          if (event.type === "step-finish") out.write(c.dim(`  ✓ ${event.stepId}\n`));
+        },
+      });
+      if (result.status === "success") {
+        out.write(`${c.dim(`${workflowStepsSummary(result)}\n`)}`);
+        out.write(`${typeof result.result === "string" ? result.result : JSON.stringify(result.result, null, 2)}\n`);
+      } else if (result.status === "suspended") {
+        out.write(c.yellow(`stopped at ${result.suspended.join(", ")}: ${JSON.stringify(result.suspendPayload)}\n`));
+      } else {
+        out.write(c.red(`failed: ${result.error.message}\n`));
+      }
       return "handled";
     }
     case "task":
@@ -821,6 +929,22 @@ export const handleSlashCommand = async (
         out.write(c.dim("(session persistence off for this process)\n"));
         return "handled";
       }
+      if (arg === "new") {
+        // Must be checked before the id branch below: that branch resolves any
+        // argument as a session id and returns on every path, so a `new` that
+        // reached it was reported as `no session "new"` instead of starting one.
+        const p = `${defaultSessionFile(cwd)}`.replace(/\.jsonl$/, `-${Date.now()}.jsonl`);
+        const { createJsonlSessionStore } = await import("not-another-harness");
+        state.store = createJsonlSessionStore(p);
+        state.sessionBasePath = p;
+        state.messages = [];
+        state.taskLedger = null;
+        state.undoHistory = [];
+        await resetUsage(state);
+        out.write(c.dim(`new session → ${p}\n`));
+        state.onSessionSwitch?.(state.messages);
+        return "handled";
+      }
       {
         // `/session <id|path>` switches without leaving the running agent, using
         // the same resolution as `--session` so both entry points agree.
@@ -864,19 +988,6 @@ export const handleSlashCommand = async (
           ? c.dim("(that session is empty)")
           : c.dim(`${messages.length} message${messages.length === 1 ? "" : "s"} restored`);
         out.write(`${c.green("switched")} → ${nodePath.basename(target)} ${loaded}\n`);
-        state.onSessionSwitch?.(state.messages);
-        return "handled";
-      }
-      if (arg === "new") {
-        const p = `${defaultSessionFile(cwd)}`.replace(/\.jsonl$/, `-${Date.now()}.jsonl`);
-        const { createJsonlSessionStore } = await import("not-another-harness");
-        state.store = createJsonlSessionStore(p);
-        state.sessionBasePath = p;
-        state.messages = [];
-        state.taskLedger = null;
-        state.undoHistory = [];
-        await resetUsage(state);
-        out.write(c.dim(`new session → ${p}\n`));
         state.onSessionSwitch?.(state.messages);
         return "handled";
       }
@@ -1188,7 +1299,7 @@ export const startRepl = async (state: SessionState): Promise<void> => {
       try {
         for await (const line of rl) {
           receivedInput = true;
-          const input = line.trim();
+          let input = line.trim();
           if (!input) {
             // Mid-turn, the background task owns the prompt; re-prompting here
             // would race it and leave two prompts on screen.
@@ -1238,9 +1349,14 @@ export const startRepl = async (state: SessionState): Promise<void> => {
               keepRunning = false;
               break;
             }
-            rl.setPrompt(renderStatusPrompt(state));
-            rl.prompt();
-            continue;
+            if (typeof result === "string") {
+              rl.setPrompt(renderStatusPrompt(state));
+              rl.prompt();
+              continue;
+            }
+            // The command built a prompt for the agent rather than printing
+            // anything, so carry on below and run it as this turn's input.
+            input = result.prompt;
           }
 
           abort = new AbortController();

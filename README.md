@@ -2,7 +2,7 @@
 
 A pnpm monorepo holding the AstraCollab agent stack, client SDKs, and shared tooling.
 
-The centrepiece is a two-package split: **`@astracollab/not-another-harness`** is the agent SDK — a small, inspectable runtime with streaming events, capped coding tools, token budgets and transcript compaction. **`@astracollab/nah`** is the terminal coding agent built on top of it. Use the SDK to embed an agent in your own product; use the CLI to work in a repository.
+The centrepiece is a three-package split: **`@astracollab/not-another-harness`** is the agent SDK — a small, inspectable runtime with streaming events, capped coding tools, token budgets and transcript compaction. **`nah`** is the terminal coding agent built on top of it. **`nah-studio`** is the dashboard those agents report to, installed on demand with `/studio`. Use the SDK to embed an agent in your own product; use the CLI to work in a repository; use the Studio to watch what your agents actually did.
 
 ## Packages
 
@@ -11,9 +11,12 @@ The centrepiece is a two-package split: **`@astracollab/not-another-harness`** i
 | Package | What it is | Published |
 | --- | --- | --- |
 | [`@astracollab/not-another-harness`](packages/not-another-harness) | Agent SDK. One explicit loop: prepare context, stream one model response, run its tool calls, decide whether to continue. Typed event stream, capped tools, step/token budgets, mid-run compaction, steerable runs, JSONL sessions, and an optional cognitive-memory layer. | `0.0.1-beta.0` |
-| [`@astracollab/nah`](packages/nah) | The `nah` terminal agent. Alternate-screen TUI, mid-turn steering, per-run sessions, permission modes, and the `recall` memory tool. Ships as a CLI; also the package that wires the SDK into a real application. | `0.0.1-beta.0` |
+| [`nah`](packages/nah) | The `nah` terminal agent. Alternate-screen TUI, mid-turn steering, per-run sessions, permission modes, and the `recall` memory tool. Ships as a CLI; also the package that wires the SDK into a real application. | `0.0.1-beta.0` |
+| [`nah-studio`](packages/nah-studio) | The dashboard. A local server plus a Vite/React UI that watches every agent on the machine — live traces, per-agent spend, evaluations, and a read-only chat tab. Started by `/studio`, which installs it on first use. | `0.0.1-beta.1` |
 
-`not-another-harness` takes any AI SDK v5 language model and does not pick a provider or own a terminal UI. `nah` supplies credentials, model selection, project instructions, permissions, persistence, and the interface.
+`not-another-harness` takes any AI SDK v5 language model and does not pick a provider or own a terminal UI. `nah` supplies credentials, model selection, project instructions, permissions, persistence, and the interface. `nah-studio` depends on `nah` for exactly one thing — the read-only agent behind its chat tab — so the thing you debug is the thing you use.
+
+Telemetry is opt-in by construction: the Studio publishes itself at `~/.nah/studio.json`, and a session that finds that file reports to it. No Studio, no network traffic.
 
 ### SDKs
 
@@ -91,29 +94,42 @@ See the [SDK guide](packages/not-another-harness/README.md) for steering, budget
 ```sh
 pnpm install
 
-# Build everything publishable
+# Build everything publishable, in dependency order
 pnpm --filter @astracollab/not-another-harness build
-pnpm --filter @astracollab/nah build
+pnpm --filter nah build
+pnpm --filter nah-studio build      # UI into dist/ui, then the server
 
 # Typecheck and test one package
-pnpm --filter @astracollab/nah lint
-pnpm --filter @astracollab/nah test
+pnpm --filter nah lint              # tsc --noEmit
+pnpm --filter nah test
+pnpm --filter nah-studio test
+```
+
+The Studio's UI can be worked on against a Studio that is already running: its dev
+server proxies `/api` to `127.0.0.1:4111`, so there is no mock layer.
+
+```sh
+pnpm --filter nah-studio dev       # :4112, HMR, proxied
 ```
 
 The CLI's live model evaluations are opt-in and need a provider key:
 
 ```sh
 NAH_EVAL_MODEL=openrouter:some-model NAH_EVAL_REPEATS=3 \
-  pnpm --filter @astracollab/nah exec vitest run test/live-evals.test.ts
+  pnpm --filter nah exec vitest run test/live-evals.test.ts
 ```
 
 ## Publishing
 
-Order matters: `nah` depends on `not-another-harness` at a real semver, so publish the runtime first.
+Order matters, and it is the dependency graph: `nah-studio` depends on `nah`, which
+depends on `not-another-harness`.
 
 ```sh
 pnpm --filter @astracollab/not-another-harness publish --access public --tag beta
-pnpm --filter @astracollab/nah publish --access public --tag beta
+pnpm --filter nah publish --access public --tag beta
+pnpm --filter nah-studio publish --access public --tag beta
 ```
 
-Both are currently prereleases. `--tag beta` keeps `latest` free for a stable release; until you publish without it, `npm install -g @astracollab/nah` resolves to the newest version regardless of tag.
+All three are prereleases. `--tag beta` keeps `latest` free for a stable release;
+until you publish without it, `npm install -g nah` resolves to the newest version
+regardless of tag.

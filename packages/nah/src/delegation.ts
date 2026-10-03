@@ -16,13 +16,36 @@ const MAX_CONCURRENT_DELEGATES = 3;
 /** Enough for a plan's worth of independent work; beyond this the wave starts queueing visibly. */
 const MAX_BATCH_DELEGATES = 8;
 
-type DelegateToolOptions = {
+type OrchestratorOptions = {
   cwd: string;
   system: string;
   getModel: () => ResolvedModel["model"];
   approve: (toolName: string, input: unknown) => Promise<boolean>;
   onChildUsage: (usage: HarnessRunResult["usage"]) => void;
 };
+
+/**
+ * The session's one orchestrator, shared by every child.
+ *
+ * Shared on purpose. An orchestrator owns a concurrency pool and a spend counter,
+ * and two of them in one session would mean a workflow fanning out to three
+ * children and a `delegate_task` could run six — twice the child budget the
+ * session told the user it had, and with no way to see the second pool in
+ * `totalUsage`.
+ */
+export const createSessionOrchestrator = (options: OrchestratorOptions): Orchestrator =>
+  new Orchestrator({
+    model: options.getModel,
+    system: options.system,
+    isolation: createGitWorktreeIsolation({ cwd: options.cwd }),
+    createTools: (cwd) => createCodingTools(createNodeEnvironment(cwd), { approveToolCall: options.approve }),
+    maxConcurrency: MAX_CONCURRENT_DELEGATES,
+    maxSteps: 20,
+    maxTokens: 120_000,
+    onUsage: options.onChildUsage,
+  });
+
+type DelegateToolOptions = { orchestrator: Orchestrator; approve: (toolName: string, input: unknown) => Promise<boolean> };
 
 const subtaskSchema = z.object({
   title: z.string().trim().min(3).max(120).describe("Short label for this independent subtask."),
@@ -36,8 +59,7 @@ const WORKTREE_NOTE = "temporary Git worktree";
  *
  * The workflow itself — isolated worktree, fresh child transcript, budgeted run,
  * reviewable diff, cleanup — lives in `not-another-harness` now. What stays here
- * is what is specific to the CLI: the tool schemas, the approval gate, and rolling
- * child spend into the session total.
+ * is what is specific to the CLI: the tool schemas and the approval gate.
  *
  * Two tools on one orchestrator, because the two situations are different. A plan
  * that decomposes into several independent pieces should be handed over in one
@@ -46,16 +68,7 @@ const WORKTREE_NOTE = "temporary Git worktree";
  * `delegate_task`, which stays cheap for the common case.
  */
 export const createDelegationTools = (options: DelegateToolOptions): Record<string, Tool> => {
-  const orchestrator = new Orchestrator({
-    model: options.getModel,
-    system: options.system,
-    isolation: createGitWorktreeIsolation({ cwd: options.cwd }),
-    createTools: (cwd) => createCodingTools(createNodeEnvironment(cwd), { approveToolCall: options.approve }),
-    maxConcurrency: MAX_CONCURRENT_DELEGATES,
-    maxSteps: 20,
-    maxTokens: 120_000,
-    onUsage: options.onChildUsage,
-  });
+  const { orchestrator } = options;
 
   /** One child's block verbatim; several get a count line so the parent can see what it fanned out. */
   const report = (results: Awaited<ReturnType<typeof orchestrator.runAll>>): string =>

@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import type { LanguageModel } from "ai";
 import { runAgent } from "./agent.js";
 import type { HarnessEvent, HarnessRunOptions, HarnessStopReason, HarnessUsage } from "./types.js";
+import type { Workflow, WorkflowContext, WorkflowEvent, WorkflowRun, WorkflowRunOptions, WorkflowRunResult, WorkflowSnapshot } from "./workflow.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -42,6 +43,9 @@ const DEFAULT_MAX_DIFF_CHARS = 30_000;
 
 /** The parent's final report is one tool result; it is bounded like any other. */
 const DEFAULT_MAX_REPORT_CHARS = 4_000;
+
+/** How often a workflow step waiting for a delegation slot checks whether one is free. */
+const DELEGATE_SLOT_POLL_MS = 20;
 
 /** Thrown when a task is submitted while the orchestrator is already at capacity. */
 export class OrchestratorBusyError extends Error {
@@ -142,6 +146,35 @@ export type OrchestratorEvent =
   | { type: "subtask-event"; id: string; title: string; event: HarnessEvent }
   | { type: "subtask-finish"; id: string; title: string; result: SubtaskResult };
 
+/** The one result variant worth keeping around: the run that is waiting on an answer. */
+type SuspendedRunResult = Extract<WorkflowRunResult, { status: "suspended" }>;
+
+/** What a workflow step can reach for, handed to it in `context`. */
+export type WorkflowStepDelegate = {
+  /** Run one subtask as a child agent, on the same terms as any other delegation. */
+  delegate: (spec: SubtaskSpec) => Promise<SubtaskResult>;
+  /** Run subtasks concurrently, up to the orchestrator's cap. */
+  delegateAll: (specs: readonly SubtaskSpec[]) => Promise<SubtaskResult[]>;
+  /** Workflows stopped on an answer only a caller can give. */
+  pendingWorkflows: () => Array<{ runId: string; workflowId: string; suspended: string[]; suspendPayload: unknown; waitingMs: number }>;
+  /**
+   * Answer a suspended workflow, by run id.
+   *
+   * Takes the run id rather than the object, because a step is handed context and
+   * not the run it is executing inside — and a run id is what a caller has once the
+   * run that produced it has returned.
+   */
+  resumeWorkflow: (runId: string, resumeData?: unknown) => Promise<WorkflowRunResult>;
+};
+
+export type OrchestratorWorkflowOptions<TInput = any, TState = any> = Omit<WorkflowRunOptions<TInput>, "signal"> & {
+  signal?: AbortSignal;
+  /** Progress, for a caller rendering a run. */
+  onEvent?: (event: WorkflowEvent<TState>) => void;
+  /** Skips the concurrency cap that applies to direct delegation. */
+  ignoreConcurrency?: boolean;
+};
+
 export type OrchestratorOptions = {
   /** Any AI SDK language model, or a getter for one resolved per child. */
   model: LanguageModel | (() => LanguageModel);
@@ -192,6 +225,8 @@ export class Orchestrator {
   readonly #options: Required<Pick<OrchestratorOptions, "createTools" | "system" | "maxConcurrency">> & OrchestratorOptions;
   #active = 0;
   #total = emptyUsage();
+  /** Runs stopped on a caller's answer, so they can be found and resumed. */
+  readonly #suspended = new Map<string, { workflow: Workflow; run: WorkflowRun; result: SuspendedRunResult; startedAt: number }>();
 
   constructor(options: OrchestratorOptions) {
     this.#options = {
@@ -265,6 +300,125 @@ export class Orchestrator {
       );
     }
     return results;
+  }
+
+  /**
+   * Run a workflow, with delegation available to every step.
+   *
+   * The split this exists for: a step that needs judgement calls `delegate`, and a
+   * step that does not is just code. The order, the fan-out and the retries are
+   * already decided before a model is asked anything, so a model is only consulted
+   * for the part that was never deterministic — and a workflow that delegates is
+   * the one place where "have the agent do it" and "do it the same way every time"
+   * stop being alternatives.
+   *
+   * A suspended run is kept until it is resumed or the orchestrator is dropped.
+   * A run waiting on a human that nobody can find again is not a pause, it is a
+   * hang, so `pendingWorkflows` is part of the contract and not a debug helper.
+   */
+  async runWorkflow<TOutput = any, TInput = any, TState = any>(
+    workflow: Workflow<TOutput, TInput, TState>,
+    options: OrchestratorWorkflowOptions<TInput, TState> = {},
+  ): Promise<WorkflowRunResult<TOutput, TInput, TState>> {
+    const run = workflow.createRun();
+    const result = await run.start({
+      inputData: options.inputData,
+      context: this.#stepContext(options.context, options.signal),
+      signal: options.signal ?? this.#options.signal,
+      onEvent: options.onEvent,
+    });
+    this.#track(workflow, run, result);
+    return result;
+  }
+
+  /** The same run as `runWorkflow`, reporting progress as it goes. */
+  streamWorkflow<TOutput = any, TInput = any, TState = any>(
+    workflow: Workflow<TOutput, TInput, TState>,
+    options: OrchestratorWorkflowOptions<TInput, TState> = {},
+  ): { events: AsyncIterable<WorkflowEvent<TState>>; result: Promise<WorkflowRunResult<TOutput, TInput, TState>>; runId: string } {
+    const run = workflow.createRun();
+    const handle = run.stream({
+      inputData: options.inputData,
+      context: this.#stepContext(options.context, options.signal),
+      signal: options.signal ?? this.#options.signal,
+    });
+    // The iterable is the caller's to drain; a run nobody drains would queue events
+    // forever, so the bookkeeping rides on the result instead of the iteration.
+    void handle.result.then((result) => this.#track(workflow, run, result));
+    return { ...handle, runId: run.runId };
+  }
+
+  /**
+   * Workflows stopped on something only a caller can answer.
+   *
+   * Reports what each is waiting on, so a UI can show the question and a decision
+   * can be routed back to `resumeWorkflow` by run id.
+   */
+  pendingWorkflows(): Array<{ runId: string; workflowId: string; suspended: string[]; suspendPayload: unknown; waitingMs: number }> {
+    return [...this.#suspended.entries()].map(([runId, entry]) => ({
+      runId,
+      workflowId: entry.workflow.id,
+      suspended: entry.result.suspended,
+      suspendPayload: entry.result.suspendPayload,
+      waitingMs: Date.now() - entry.startedAt,
+    }));
+  }
+
+  /**
+   * Continue a suspended workflow with the caller's answer.
+   *
+   * Rejects on an unknown run id rather than starting a new one: a typo in a run id
+   * would otherwise run the whole sequence again from the top, paying for steps
+   * that already succeeded.
+   */
+  async resumeWorkflow(runId: string, resumeData?: unknown, options: { context?: WorkflowContext; signal?: AbortSignal } = {}): Promise<WorkflowRunResult> {
+    const entry = this.#suspended.get(runId);
+    if (!entry) throw new Error(`orchestrator: no suspended workflow with run id "${runId}"`);
+    const result = await entry.run.resume({
+      resumeData,
+      context: this.#stepContext(options.context, options.signal),
+      signal: options.signal ?? this.#options.signal,
+    });
+    this.#track(entry.workflow, entry.run, result);
+    return result;
+  }
+
+  #track(workflow: Workflow, run: WorkflowRun, result: WorkflowRunResult): void {
+    if (result.status === "suspended") this.#suspended.set(run.runId, { workflow, run, result, startedAt: Date.now() });
+    else this.#suspended.delete(run.runId);
+  }
+
+  /**
+   * What a step can reach for: delegation, and the runs still waiting on an answer.
+   *
+   * Built per run so `signal` and any caller context belong to that run, and a
+   * workflow's steps cannot see another run's delegate.
+   */
+  #stepContext(extra: WorkflowContext | undefined, signal: AbortSignal | undefined): WorkflowContext & WorkflowStepDelegate {
+    return {
+      ...extra,
+      delegate: (spec: SubtaskSpec) => this.#delegate(spec, signal),
+      delegateAll: (specs: readonly SubtaskSpec[]) => Promise.all(specs.map((spec) => this.#delegate(spec, signal))),
+      pendingWorkflows: () => this.pendingWorkflows(),
+      resumeWorkflow: (runId: string, resumeData?: unknown) => this.resumeWorkflow(runId, resumeData, { signal }),
+    };
+  }
+
+  /**
+   * Delegation from inside a workflow waits for a slot instead of rejecting.
+   *
+   * `run` rejects at the cap so a caller delegating one task at a time learns the
+   * queue is full. A workflow step has no such freedom: the sequence it belongs to
+   * is already the queue, and failing the run over a full slot would fail it for
+   * something the author of the workflow cannot act on.
+   */
+  async #delegate(spec: SubtaskSpec, signal: AbortSignal | undefined): Promise<SubtaskResult> {
+    const external = spec.signal ?? signal ?? this.#options.signal;
+    while (this.#active >= this.#options.maxConcurrency) {
+      if (external?.aborted) return this.#failed(spec, external.reason instanceof Error ? external.reason : new Error("aborted"));
+      await new Promise((resolve) => setTimeout(resolve, DELEGATE_SLOT_POLL_MS));
+    }
+    return this.run(spec);
   }
 
   async #execute(spec: SubtaskSpec): Promise<SubtaskResult> {

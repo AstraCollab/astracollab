@@ -12,12 +12,15 @@ import { buildNahSystemPrompt } from "./context.js";
 import { resolveModel } from "./model.js";
 import { loadLastModel } from "./model-preferences.js";
 import { selectMemory } from "./memory-select.js";
-import { createRecallTool } from "./memory-tool.js";
+import { createRecallTool, createRememberTool } from "./memory-tool.js";
 import { MemoryInjectionLog } from "./memory-injection.js";
 import { createApprover, type PermissionMode } from "./permissions.js";
 import type { SessionState } from "./session.js";
 import { createTaskLedgerTool } from "./task-ledger.js";
-import { createDelegationTools } from "./delegation.js";
+import { createDelegationTools, createSessionOrchestrator } from "./delegation.js";
+import { createWorkflowTools } from "./workflow-tools.js";
+import { loadWorkspaceWorkflows } from "./workspace-workflows.js";
+import { createNahWorkflows } from "./workflows.js";
 import { connectStudio } from "./telemetry-export.js";
 import { describeWorkspaceBoundary, resolveWorkspaceRoot } from "./workspace.js";
 
@@ -146,17 +149,13 @@ export const makeState = async (opts: {
   model?.setStatusHandler((status) => { state.providerStatus = status; });
   const approve = createApprover(() => state.permissions);
   state.setApprovalPrompt = (prompt) => approve.setPrompt(prompt);
-  state.tools = {
-    ...createCodingTools(envToolSource, {
-    approveToolCall: approve,
-    cwdLabel,
-    onFileWrite: (change) => state.activeFileChanges?.push(change),
-    onShellCommand: (command) => state.activeShellCommands?.push(command),
-    }),
-    recall: createRecallTool(() => state.cognitiveMemory),
-    task_ledger: createTaskLedgerTool(state, approve),
-    ...(!opts.sandbox ? {
-      ...createDelegationTools({
+  // One orchestrator for the whole session, shared by direct delegation and by
+  // workflows: two of them would mean two concurrency pools and two spend counters,
+  // so the children a session actually ran would be twice what it reported. Absent
+  // in a sandbox, where there is no local workspace for a worktree to come from.
+  const orchestrator = opts.sandbox
+    ? undefined
+    : createSessionOrchestrator({
         cwd: opts.cwd,
         system: state.system,
         getModel: () => {
@@ -169,7 +168,26 @@ export const makeState = async (opts: {
           state.totalUsage.outputTokens += usage.outputTokens;
           state.totalUsage.totalTokens += usage.totalTokens;
         },
-      }),
+      });
+  state.orchestrator = orchestrator;
+  state.workflows = orchestrator ? createNahWorkflows({ cwd: opts.cwd }) : undefined;
+  // Loaded here so `/workflow` lists what the workspace has on disk from the
+  // first keystroke, and quietly skipped when one is broken: `/workspace` is
+  // where a file that will not load gets named.
+  if (state.workflows) await loadWorkspaceWorkflows({ cwd: opts.cwd, registry: state.workflows });
+  state.tools = {
+    ...createCodingTools(envToolSource, {
+    approveToolCall: approve,
+    cwdLabel,
+    onFileWrite: (change) => state.activeFileChanges?.push(change),
+    onShellCommand: (command) => state.activeShellCommands?.push(command),
+    }),
+    recall: createRecallTool(() => state.cognitiveMemory),
+    remember: createRememberTool(() => state.cognitiveMemory),
+    task_ledger: createTaskLedgerTool(state, approve),
+    ...(orchestrator ? {
+      ...createDelegationTools({ orchestrator, approve }),
+      ...createWorkflowTools({ orchestrator, registry: state.workflows!, cwd: opts.cwd, approve }),
     } : {}),
   };
   return state;

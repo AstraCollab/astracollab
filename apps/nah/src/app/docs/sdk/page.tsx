@@ -6,8 +6,8 @@ const runSample = [
   "  buildSystemPrompt,",
   "  createCodingTools,",
   "  runAgent,",
-  "} from '@astracollab/not-another-harness';",
-  "import { createNodeEnvironment } from '@astracollab/not-another-harness/node';",
+  "} from 'not-another-harness';",
+  "import { createNodeEnvironment } from 'not-another-harness/node';",
   "import type { LanguageModel } from 'ai';",
   "",
   "declare const model: LanguageModel; // create with an AI SDK v5 provider",
@@ -51,7 +51,7 @@ const steerSample = [
 ].join("\n");
 
 const persistSample = [
-  "import { createJsonlSessionStore } from '@astracollab/not-another-harness';",
+  "import { createJsonlSessionStore } from 'not-another-harness';",
   "",
   "const session = createJsonlSessionStore('.nah/session.jsonl');",
   "const previousMessages = await session.load();",
@@ -63,7 +63,7 @@ const persistSample = [
 
 export default function SdkPage() {
   return <DocsShell current="/docs/sdk"><DocHeader eyebrow="RUNTIME / SDK QUICKSTART" title="Compose your own agent runner." description="The runtime package exports the loop, prompt builder, built-in tools, session store, and memory. You provide an AI SDK v5 LanguageModel and decide how to approve changes and present the run." />
-    <DocSection id="install" title="Install the runtime"><p>Install the runtime, not the CLI. They are separate packages: <code className="font-mono text-[11px] text-zinc-300">@astracollab/nah</code> is the terminal application and re-exports nothing, so importing the loop from it fails. The Node environment adapter is a subpath of the runtime.</p><Code>{"npm install @astracollab/not-another-harness ai @ai-sdk/anthropic zod"}</Code><p>The runtime declares AI SDK and Zod as peer dependencies. Use versions compatible with the installed runtime.</p></DocSection>
+    <DocSection id="install" title="Install the runtime"><p>Install the runtime, not the CLI. They are separate packages: <code className="font-mono text-[11px] text-zinc-300">@astracollab/nah</code> is the terminal application and re-exports nothing, so importing the loop from it fails. The Node environment adapter is a subpath of the runtime.</p><Code>{"npm install not-another-harness ai @ai-sdk/anthropic zod"}</Code><p>The runtime declares AI SDK and Zod as peer dependencies. Use versions compatible with the installed runtime.</p></DocSection>
 
     <DocSection id="run" title="Create a run"><p>Build a model with your chosen AI SDK provider, create tools rooted at your workspace, then call <code className="font-mono text-[11px] text-zinc-300">runAgent</code>. The core loop accepts a complete system prompt and a tool map.</p><Code language="ts">{runSample}</Code><Note title="Approval callback">The SDK allows mutating tool calls when <code>approveToolCall</code> is omitted. Connect this callback to your host application&apos;s approval policy; do not use an unconditional allow callback unless that is the intended trust model.</Note></DocSection>
 

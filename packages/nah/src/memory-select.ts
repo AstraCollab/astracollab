@@ -49,6 +49,7 @@ export const selectMemory = async (options: {
         memory: prepared.memory,
         location: prepared.path,
         restored: prepared.restored,
+        flush: prepared.flush,
         ...(prepared.importedFrom === undefined ? {} : { importedFrom: prepared.importedFrom }),
       }),
       ...(note === undefined ? {} : { note }),

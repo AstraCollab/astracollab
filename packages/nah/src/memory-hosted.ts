@@ -120,6 +120,8 @@ export type HostedMemoryOptions = {
   /** Overridable for tests. Applies to the pre-turn call. */
   contextTimeoutMs?: number;
   debug?: boolean;
+  /** Groups what this session writes, the way `postTurnAsync` does. */
+  sessionId?: string;
 };
 
 export type HostedMemory = SessionMemory & {
@@ -255,6 +257,51 @@ export const hostedMemory = (options: HostedMemoryOptions): HostedMemory => {
           degraded: failure,
         };
         return empty;
+      }
+    },
+
+    async remember(entry) {
+      try {
+        const content = entry.content.trim();
+        if (!content) return { stored: [], merged: false };
+        // The service reconciles server-side: a restatement comes back under
+        // `mergedInto` with no new row, which is why the write is asked for as a
+        // list. `stored` is therefore empty on a fold rather than a failure, and
+        // the two are reported differently on purpose.
+        const result = await warm.memories.create({
+          items: [
+            {
+              content,
+              ...(entry.domains === undefined ? {} : { domains: entry.domains }),
+              ...(entry.tier === undefined ? {} : { tier: entry.tier }),
+            },
+          ],
+          ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+        });
+        failure = null;
+        return {
+          stored: result.stored.map((memory) => memory.id),
+          merged: result.stored.length === 0 && result.mergedInto.length > 0,
+        };
+      } catch (error) {
+        // Most often a key without `memories:write`. Naming the scope is the
+        // difference between a fixable message and a shrug.
+        note("memories.create", error);
+        return { stored: [], merged: false };
+      }
+    },
+
+    async forget(id) {
+      try {
+        const result = await warm.memories.remove(id);
+        failure = null;
+        return result.deleted;
+      } catch (error) {
+        // As with `resolveTension`, a 404 is the caller's answer, not a backend
+        // failure: the id was stale and the service is fine.
+        if (error instanceof CognitiveMemoryError && error.isNotFoundError()) return false;
+        note("memories.remove", error);
+        return false;
       }
     },
 

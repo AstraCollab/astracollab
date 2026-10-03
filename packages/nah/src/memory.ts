@@ -349,6 +349,15 @@ export type PreparedMemory = {
   restored: boolean;
   /** Set when a pre-SQLite JSON memory was imported into the database. */
   importedFrom?: string;
+  /**
+   * Write the current state to disk now.
+   *
+   * The engine persists only as the last step of `postTurnAsync`, so a memory
+   * added outside a turn would sit in the maps until the next turn finished —
+   * and would be gone entirely if this was the last one. A write the user just
+   * asked for has to outlive the session that made it.
+   */
+  flush: () => Promise<void>;
 };
 
 /**
@@ -449,5 +458,17 @@ export const prepareMemory = async (options: MemoryOptions): Promise<PreparedMem
     }
   }
 
-  return { memory, path, restored, ...(importedFrom === undefined ? {} : { importedFrom }) };
+  return {
+    memory,
+    path,
+    restored,
+    // A no-op without a store, so every caller can await it unconditionally
+    // rather than checking whether this session was allowed to persist.
+    flush: async () => {
+      if (!store) return;
+      store.save(memory.getSnapshot());
+      onPersisted?.();
+    },
+    ...(importedFrom === undefined ? {} : { importedFrom }),
+  };
 };

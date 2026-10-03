@@ -21,6 +21,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { getModelOptions } from "../model-catalog.js";
 import { pickModel } from "../model-picker.js";
+import { listSessions, pickSession, type SessionRow } from "../session-picker.js";
 import { resolveModel } from "../model.js";
 import { saveLastModel } from "../model-preferences.js";
 import { runTurn, resolveInjection, type SessionState } from "../session.js";
@@ -43,6 +44,21 @@ import { editorTheme } from "./theme.js";
  * not run mid-turn, and the TUI has to step aside while they do.
  */
 const REBUILT = exclusiveCommands();
+
+/**
+ * Whether this input needs the terminal to itself.
+ *
+ * `/session` is only exclusive when bare: the form that opens a picker needs
+ * the screen, but `/session <id>`, `new` and `off` are ordinary transcript
+ * commands. Without this, typing `/session <id>` mid-turn would be refused
+ * instead of queued like every other non-exclusive command.
+ */
+const needsTerminalAlone = (input: string): boolean => {
+  const name = input.split(" ")[0]!.replace(/^\//, "");
+  if (!REBUILT.has(name)) return false;
+  if (name === "session") return !input.slice(name.length + 1).trim();
+  return true;
+};
 
 export type TuiHostOptions = {
   state: SessionState;
@@ -159,7 +175,18 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
   let sidebarShown = withSidebar(terminal.columns);
 
   const layoutRoot = () => {
-    const main = new VStack([scroll, status, editor]);
+    // The transcript takes every row the editor does not need, and gives them
+    // all back when the terminal is short. Without `grow` on the scroll the
+    // editor sat directly under the transcript rather than at the bottom of
+    // the frame, and `shrink` let the two border rows be squeezed away
+    // entirely, so a full session lost the separation above the textbox.
+    // `shrink: 0` plus a `minSize` of the editor's natural three rows
+    // (border, text, border) makes those dividers unconditional.
+    const main = new VStack([
+      { component: scroll, grow: 1, shrink: 1, minSize: 0 },
+      { component: status, shrink: 0 },
+      { component: editor, shrink: 0, minSize: 3 },
+    ]);
     if (sidebarShown) {
       return new HStack([
         { component: main, grow: 1, minSize: 48 },
@@ -361,6 +388,41 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
       return;
     }
 
+    if (name === "session") {
+      // `/session <id|new|off>` are direct actions that need no picker, so they
+      // go straight to the shared handler and stay in the transcript.
+      if (arg) {
+        output.addLine(c.dim(`  /session ${arg}…`));
+        screen.requestRender(true);
+        await handleSlashCommand(input, state, state.cwd, sink);
+        return;
+      }
+      output.addLine(c.dim("  Loading sessions…"));
+      screen.requestRender(true);
+      let sessions: SessionRow[] = [];
+      try {
+        sessions = await listSessions(state.cwd, state.store?.path);
+      } catch (error) {
+        output.addLine(
+          c.red(`  could not list sessions: ${error instanceof Error ? error.message : String(error)}`),
+        );
+        return;
+      }
+      if (!sessions.length) {
+        output.addLine(c.dim("  (no saved sessions for this directory)"));
+        return;
+      }
+      const selected = await exclusive(() => pickSession(sessions, state.store?.path));
+      if (!selected) {
+        output.addLine(c.dim("  session selection cancelled"));
+        return;
+      }
+      // Hand the chosen id back through the normal `/session <id>` path so both
+      // entry points resolve, load and restore a session identically.
+      await handleSlashCommand(`/session ${selected}`, state, state.cwd, sink);
+      return;
+    }
+
     if (name === "provider") {
       output.addLine(c.dim("  Provider setup…"));
       screen.requestRender(true);
@@ -414,7 +476,7 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
 
   const dispatch = async (input: string): Promise<void> => {
     const name = input.split(" ")[0]!.replace(/^\//, "");
-    if (REBUILT.has(name)) {
+    if (needsTerminalAlone(input)) {
       await runExclusiveCommand(input);
       return;
     }
@@ -422,8 +484,16 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
       for (const line of renderCommandHelp().split("\n")) output.addLine(line);
       return;
     }
-    if (await handleSlashCommand(input, state, state.cwd, sink) === "quit") {
+    const result = await handleSlashCommand(input, state, state.cwd, sink);
+    if (result === "quit") {
       finished?.();
+      return;
+    }
+    if (typeof result === "object") {
+      // The TUI sends turns from the editor, so a command that built a prompt for
+      // the agent (`/workflow new ...`) submits it as the next message instead of
+      // printing it and leaving the user to paste it back.
+      editor.onSubmit?.(result.prompt);
     }
   };
 
@@ -465,7 +535,7 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
     if (run.turn) {
       if (input.startsWith("/")) {
         const name = input.split(" ")[0]!.replace(/^\//, "");
-        if (REBUILT.has(name)) {
+        if (needsTerminalAlone(input)) {
           output.addLine(c.dim(`  /${name} needs the terminal to itself — wait for the turn to finish`));
           screen.requestRender();
           return;

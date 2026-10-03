@@ -41,12 +41,24 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   { name: "steps", description: "Cap a turn's steps (e.g. /steps 100, /steps off)", argumentHint: "[n|off]" },
   { name: "task", description: "Show the saved plan and progress", argless: true },
   { name: "task clear", description: "Clear the active plan", argless: true },
+  {
+    name: "workflow",
+    description: "List or run a repeatable sequence (e.g. /workflow review-changes main), or describe a new one in plain English (/workflow new <what>)",
+    argumentHint: "[new <what>] [name] [base|json]",
+  },
   { name: "diff", description: "Show current workspace changes", argless: true },
   { name: "undo", description: "Undo the last turn's workspace changes", argumentHint: "[step]" },
   { name: "clear", description: "Drop the transcript (start fresh)", argless: true },
   { name: "branches", description: "List session branches", argless: true },
   { name: "branch", description: "Fork or switch to a named branch", argumentHint: "<name>" },
-  { name: "session", description: "List/new/off sessions for this directory", argumentHint: "list|new|off" },
+  {
+    name: "session",
+    description: "Search and switch to a session for this directory",
+    argumentHint: "[list|<id>|new|off]",
+    // Exclusive because a bare `/session` opens the same full-screen picker as
+    // `/model`. `/session <id>`, `new` and `off` stay in the transcript.
+    exclusive: true,
+  },
   { name: "compact", description: "Force transcript compaction (truncate mode)", argless: true },
   { name: "memory", description: "Show Cognitive Memory state (L0-L3 cache, tensions, guardrails)", argless: true },
   {

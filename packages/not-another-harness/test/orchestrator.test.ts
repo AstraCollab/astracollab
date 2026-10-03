@@ -12,7 +12,9 @@ import {
   orchestratorPrompt,
   type IsolationHandle,
   type SubtaskIsolation,
+  type WorkflowStepDelegate,
 } from "../src/orchestrator.js";
+import { createStep, createWorkflow, StepSuspend } from "../src/workflow.js";
 import { finishReason, v4Usage } from "./helpers/ai.js";
 
 const tools = () => ({
@@ -270,5 +272,138 @@ describe("formatSubtaskReport", () => {
 describe("createGitWorktreeIsolation", () => {
   it("names its strategy", () => {
     expect(createGitWorktreeIsolation({ cwd: "." }).description).toBe("temporary Git worktree");
+  });
+});
+
+describe("Orchestrator workflows", () => {
+  const orchestrator = (model = proseModel()) =>
+    new Orchestrator({ model, system: "parent system", createTools: tools, isolation: recordingIsolation([]) });
+
+  it("gives every step a delegate, and keeps the order it was written in", async () => {
+    const log: string[] = [];
+    const parent = orchestrator();
+    const review = createWorkflow({ id: "review", inputSchema: z.object({ paths: z.array(z.string()) }) })
+      .then(
+        createStep({
+          id: "fan-out",
+          execute: async ({ inputData, context }) => {
+            const { delegateAll } = context as unknown as WorkflowStepDelegate;
+            const results = await delegateAll((inputData as { paths: string[] }).paths.map((path) => ({ title: `review ${path}`, task: `Look at ${path}.` })));
+            log.push(`reviewed:${results.length}`);
+            return { findings: results.map((result) => result.text) };
+          },
+        }),
+      )
+      .then(
+        createStep({
+          id: "summarise",
+          execute: ({ inputData, context }) => {
+            log.push("summarised");
+            // The step that needs judgement delegates; the step after it is code.
+            expect(typeof (context as unknown as WorkflowStepDelegate).delegate).toBe("function");
+            return `${(inputData as { findings: string[] }).findings.length} findings`;
+          },
+        }),
+      )
+      .commit();
+
+    const result = await parent.runWorkflow(review, { inputData: { paths: ["a.ts", "b.ts"] } });
+
+    expect(result.status).toBe("success");
+    expect(result.result).toBe("2 findings");
+    expect(log).toEqual(["reviewed:2", "summarised"]);
+    expect(Object.keys(result.steps)).toEqual(["fan-out", "summarise"]);
+    // The children's usage lands on the orchestrator, not on the workflow, so a
+    // caller spending against one ceiling sees both halves.
+    expect(parent.totalUsage.totalTokens).toBeGreaterThan(0);
+  });
+
+  it("reports a child that fails as a failed run rather than a throw", async () => {
+    const parent = new Orchestrator({
+      model: proseModel(),
+      system: "parent system",
+      createTools: tools,
+      isolation: {
+        description: "failing",
+        prepare: async () => {
+          throw new Error("no workspace");
+        },
+      },
+    });
+    const workflow = createWorkflow({ id: "w" })
+      .then(
+        createStep({
+          id: "needs-a-child",
+          execute: async ({ context }) => {
+            await (context as unknown as WorkflowStepDelegate).delegate({ title: "t", task: "do it" });
+            return "unreachable";
+          },
+        }),
+      )
+      .commit();
+
+    const result = await parent.runWorkflow(workflow);
+
+    // The child failing is data the step can branch on, not an exception that
+    // takes the whole sequence down past the step that could have handled it.
+    expect(result.status).toBe("success");
+    expect(result.result).toBe("unreachable");
+  });
+
+  it("keeps a suspended workflow findable and resumable by run id", async () => {
+    const parent = orchestrator();
+    const workflow = createWorkflow({ id: "gated" })
+      .then(createStep({ id: "ask", execute: () => { throw new StepSuspend({ question: "ship it?" }); } }))
+      .then(createStep({ id: "after", execute: () => "shipped" }))
+      .commit();
+
+    const first = await parent.runWorkflow(workflow);
+
+    expect(first.status).toBe("suspended");
+    expect(parent.pendingWorkflows()).toEqual([
+      expect.objectContaining({ workflowId: "gated", suspended: ["ask"], suspendPayload: { question: "ship it?" } }),
+    ]);
+
+    const [pending] = parent.pendingWorkflows();
+    const resumed = await parent.resumeWorkflow(pending!.runId, "yes");
+
+    // The suspended step throws unconditionally in this workflow, so a resume
+    // suspends again — which is the honest outcome, and must not lose the run.
+    expect(resumed.status).toBe("suspended");
+    expect(parent.pendingWorkflows()).toHaveLength(1);
+  });
+
+  it("rejects a resume for a run id it does not hold", async () => {
+    await expect(orchestrator().resumeWorkflow("nope")).rejects.toThrow(/no suspended workflow/);
+  });
+
+  it("streams a run's progress without running it twice", async () => {
+    const parent = orchestrator();
+    const workflow = createWorkflow({ id: "streamed" })
+      .then(createStep({ id: "one", execute: async ({ writer }) => { writer("half "); return "done"; } }))
+      .commit();
+
+    const { events, result } = parent.streamWorkflow(workflow);
+    const seen: string[] = [];
+    for await (const event of events) seen.push(event.type);
+
+    const final = await result;
+    expect(seen).toEqual(["workflow-start", "step-start", "step-delta", "step-finish", "workflow-finish"]);
+    expect(final.status).toBe("success");
+    expect(Object.keys(final.steps)).toEqual(["one"]);
+  });
+
+  it("stops a run whose signal is already aborted", async () => {
+    const parent = orchestrator();
+    const controller = new AbortController();
+    controller.abort();
+    const workflow = createWorkflow({ id: "cancelled" })
+      .then(createStep({ id: "never", execute: () => "ran anyway" }))
+      .commit();
+
+    const result = await parent.runWorkflow(workflow, { signal: controller.signal });
+
+    expect(result.status).toBe("failed");
+    expect(result.status === "failed" && result.error.name).toBe("AbortError");
   });
 });

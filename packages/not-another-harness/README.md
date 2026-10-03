@@ -403,6 +403,97 @@ Three behaviours worth knowing:
 inside a child: it cannot see uncommitted parent work, and its diff is never applied
 for you. Append it to the parent's system prompt.
 
+## Workflows: sub-agent sequences you write once
+
+`Orchestrator` is a *call*: you decide, at the moment you need it, that a piece of
+work is independent and hand it off. A **workflow** is the other thing — the part
+you already know every time. Which steps, in what order, where they fan out, and
+what to do when one of them needs a judgement call.
+
+```ts
+import { createStep, createWorkflow, createWorkflowRegistry } from "not-another-harness";
+import { z } from "zod";
+
+const collect = createStep({
+  id: "collect",
+  inputSchema: z.object({ base: z.string() }),
+  outputSchema: z.object({ files: z.array(z.string()) }),
+  execute: async ({ inputData }) => ({ files: await changedFiles(inputData.base) }),
+});
+
+// Needs judgement, so it is a sub-agent rather than a prompt. `delegate` is
+// injected by the orchestrator that runs the workflow; a bare `createRun()` on
+// a bare workflow has none, and the step has to cope with that.
+const review = createStep({
+  id: "review",
+  execute: async ({ inputData, context }) => {
+    const { delegate } = context as WorkflowStepDelegate;
+    const child = await delegate({
+      title: "review",
+      task: `Review these files for bugs:\n${(inputData as any).files.join("\n")}`,
+    });
+    return child.report;
+  },
+});
+
+const check = createStep({
+  id: "check",
+  execute: async ({ inputData }) => runTypecheck(inputData),
+});
+
+const reviewChanges = createWorkflow({
+  id: "review-changes",
+  description: "Review the diff against a base, then typecheck what the fixes changed.",
+})
+  .then(collect)
+  .parallel([review, check])
+  .commit();
+
+const registry = createWorkflowRegistry({ "review-changes": reviewChanges });
+```
+
+`commit()` is what makes it a workflow rather than a builder — it is where step ids
+are checked for uniqueness, because they key the run's results.
+
+**Composition.** `.then` / `.parallel` / `.branch` / `.map` / `.commit`, where
+`.parallel` runs its branches concurrently and produces the array of their outputs,
+`.branch` takes the first matching condition (`{ otherwise }` for the fallthrough),
+and `.map` fans out over an array in the input. A committed workflow nests as a
+single `.then(...)` argument, so a three-step review is a reusable unit rather than
+three copy-pasted steps.
+
+**Input threading.** When the next step declares an object schema, it is fed the
+matching keys of the previous step's output; when none of those keys exist it gets
+the previous output whole. The first step always receives the workflow's own input.
+
+**Steps that need a person.** Throw `StepSuspend` and the run stops with
+`status: "suspended"` instead of failing. The snapshot is returned, and
+`run.resume(resumeData)` continues from that step with earlier steps' outputs
+reused rather than recomputed — which is the point, since a step that suspended
+usually sat in front of something expensive.
+
+```ts
+const run = reviewChanges.createRun();
+const first = await run.start({ inputData: { base: "main" } });
+if (first.status === "suspended") {
+  const done = await run.resume({ resumeData: await askHuman(run.snapshot()) });
+}
+```
+
+**Watching one run.** `run.start()` resolves at the end; `run.stream()` yields
+`step-start` / `step-delta` / `step-finish` events as they happen, which is what a
+UI wants. Nesting is depth-capped at 64 and fan-out at 64, so a cycle or an
+accidental `.parallel` of a thousand is an error rather than a hang or a thousand
+model calls.
+
+`Orchestrator.runWorkflow(workflow, { inputData, onEvent })` is the seam: it puts
+`delegate`, `delegateAll` and the resume hooks into every step's context, so the
+step above calls a real sub-agent — one that *waits* for a concurrency slot instead
+of throwing, because a sequence's own queue is already the orchestrator's.
+`orchestrator.pendingWorkflows()` is how a caller finds runs stopped on a question
+only it can answer. Workflow steps share the caller's workspace; a sub-agent gets
+its own, which is the real difference between nesting a workflow and delegating one.
+
 ## Cognitive Memory Cache
 
 `not-another-harness` includes an intelligent 4-tier cache layer (`CognitiveMemory`):
@@ -435,7 +526,7 @@ await memory.postTurnAsync({
 
 ## Package exports
 
-- `not-another-harness`: agent loop, orchestrator, tools, prompt builder, caps, compaction, session store, CognitiveMemory, and types.
+- `not-another-harness`: agent loop, orchestrator, workflows, tools, prompt builder, caps, compaction, session store, CognitiveMemory, and types.
 - `not-another-harness/node`: local Node.js workspace environment.
 
 ## Develop in this monorepo

@@ -1,0 +1,55 @@
+{
+  "name": "@astracollab/aclient",
+  "version": "0.0.1-beta.0",
+  "private": true,
+  "description": "The @astracollab/client agent surface, on not-another-harness. Tools, input sanitisers and agent definitions that belong to the product, not to the harness.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "license": "MIT",
+  "author": "AstraCollab",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/astracollab/astracollab.git",
+    "directory": "packages/aclient"
+  },
+  "scripts": {
+    "build": "vite build",
+    "test": "vitest run",
+    "lint": "tsc --noEmit",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "not-another-harness": "workspace:*"
+  },
+  "peerDependencies": {
+    "ai": "^5.0.0 || ^6.0.0 || ^7.0.0",
+    "zod": "^3.25.0 || ^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "ai": "^7.0.127",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vite-plugin-dts": "^4.5.4",
+    "vitest": "^3.0.9",
+    "zod": "^4.3.6"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
