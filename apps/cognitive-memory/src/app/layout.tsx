@@ -26,7 +26,23 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      // Set before first paint by the inline script below.
+      suppressHydrationWarning
     >
+      <head>
+        {/*
+          Motion opt-in, run before paint so nothing flashes.
+          Everything animated on the site is scoped to this attribute, which is
+          what lets `globals.css` show content by default and hide it only when
+          the reader has told us animation is welcome. No JS, no attribute, no
+          hidden content.
+        */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{if(matchMedia("(prefers-reduced-motion: no-preference)").matches)document.documentElement.setAttribute("data-motion","ok")}catch(e){}`
+          }}
+        />
+      </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   )

@@ -23,15 +23,18 @@ export function SiteHeader({ width = "max-w-5xl" }: { width?: string }) {
           <span className="text-[13px] font-medium tracking-tight">Cognitive Memory</span>
         </Link>
 
-        <nav className="hidden items-center gap-7 text-[13px] text-zinc-400 sm:flex">
-          <Link href="/#tiers" className="transition hover:text-zinc-100">
+        <nav className="hidden items-center gap-6 text-[13px] text-zinc-400 lg:flex">
+          <Link href="/how-it-works" className="transition hover:text-zinc-100">
             How it works
+          </Link>
+          <Link href="/tiers" className="transition hover:text-zinc-100">
+            Tiers
+          </Link>
+          <Link href="/use-cases" className="transition hover:text-zinc-100">
+            Use cases
           </Link>
           <Link href="/docs" className="transition hover:text-zinc-100">
             Docs
-          </Link>
-          <Link href="/dashboard" className="transition hover:text-zinc-100">
-            Dashboard
           </Link>
         </nav>
 

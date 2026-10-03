@@ -27,12 +27,21 @@ export function SiteFooter({ width = "max-w-5xl" }: { width?: string }) {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 gap-x-12 gap-y-6 text-[13px] sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-x-12 gap-y-6 text-[13px] sm:grid-cols-4">
           <Column
             title="Product"
             links={[
-              ["How it works", "/#tiers"],
-              ["Documentation", "/docs"],
+              ["Overview", "/"],
+              ["How it works", "/how-it-works"],
+              ["Tiers & cost", "/tiers"],
+              ["Use cases", "/use-cases"]
+            ]}
+          />
+          <Column
+            title="Try it"
+            links={[
+              ["Questions", "/faq"],
+              ["Quickstart", "/docs/quickstart"],
               ["Dashboard", "/dashboard"],
               ["API health", "/api/v1/health"]
             ]}

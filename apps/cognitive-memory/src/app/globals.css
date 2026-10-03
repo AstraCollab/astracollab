@@ -90,3 +90,169 @@ pre,
 .tok-punc {
   color: #6f6d80;
 }
+
+/*
+ * Motion.
+ *
+ * Everything animated on this site hangs off two attributes:
+ *
+ *   [data-reveal]           set by <Reveal> after hydration
+ *   [data-shown="true"]     set when it first intersects the viewport
+ *
+ * The root carries `data-motion="ok"`, set by an inline script in the layout
+ * only when the reader allows reduced-motion-free animation. Every hiding rule is
+ * scoped to that attribute, which means all three of these are true at once and
+ * none of them needs a fallback:
+ *
+ *   - no JavaScript  → no data-reveal, nothing hidden
+ *   - reduced motion → no data-motion, nothing hidden, nothing animates
+ *   - normal          → content fades up as it arrives
+ *
+ * Hiding in CSS and revealing from JavaScript — the usual order — is what makes
+ * a page blank for anyone whose scripts do not run.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  html[data-motion="ok"] [data-reveal] {
+    opacity: 0;
+    transform: translateY(14px);
+    transition:
+      opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+      transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  html[data-motion="ok"] [data-reveal][data-shown="true"] {
+    opacity: 1;
+    transform: none;
+  }
+
+  /*
+   * SVG line drawing.
+   *
+   * `pathLength="1"` on the path normalises its length to 1, so the dash pattern
+   * is `1 1` and the offset animates 1 → 0. No getTotalLength(), no measurement,
+   * and it works identically on a 20px icon and a 1200px diagram — which is the
+   * whole trick. The delay is a CSS custom property so one rule serves every
+   * edge rather than there being one keyframe set per path.
+   */
+  html[data-motion="ok"] [data-draw] {
+    /* With pathLength="1" on the element, "1 1" is one dash the length of the
+       whole line, so offset 1 → 0 draws it. Without the pattern there is
+       nothing to reveal. */
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 1;
+    animation: cm-draw 1.1s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+    animation-delay: var(--draw-delay, 0s);
+  }
+  html[data-motion="ok"] [data-draw][data-shown="true"] {
+    animation-play-state: running;
+  }
+  /* Before the element is shown the line stays hidden; once shown it draws. */
+  html[data-motion="ok"] [data-reveal]:not([data-shown="true"]) [data-draw],
+  html:not([data-motion="ok"]) [data-draw]:not([data-shown="true"]) {
+    animation-play-state: paused;
+  }
+
+  /*
+   * Filled shapes need a different primitive.
+   *
+   * `stroke-dashoffset` only draws a *stroked* path. Every bar and line in these
+   * graphics is a filled `<rect>`, where a dash offset is invisible — the
+   * animation ran to completion and changed nothing, which looked exactly like
+   * "no animation" and cost a while to spot. `clip-path: inset()` wipes any
+   * filled shape and interpolates cleanly, and it reuses the same delay variable
+   * so the two primitives stay in step.
+   */
+  html[data-motion="ok"] [data-wipe] {
+    clip-path: inset(0 100% 0 0);
+    animation: cm-wipe 0.75s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    animation-delay: var(--wipe-delay, var(--draw-delay, 0s));
+  }
+
+  html[data-motion="ok"] [data-reveal]:not([data-shown="true"]) [data-wipe] {
+    animation-play-state: paused;
+  }
+
+  /* Nodes and dots fading up, staggered by tier. */
+  html[data-motion="ok"] [data-pop] {
+    opacity: 0;
+    animation: cm-pop 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    animation-delay: var(--pop-delay, 0s);
+  }
+
+  /* The contradiction edge: a tension that stays lit until it is answered. */
+  html[data-motion="ok"] [data-pulse] {
+    animation: cm-pulse 3.4s ease-in-out infinite;
+  }
+
+  /* A slow drift, for the oversized background bloom. */
+  html[data-motion="ok"] [data-drift] {
+    animation: cm-drift 26s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes cm-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes cm-wipe {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0% 0 0);
+  }
+}
+
+@keyframes cm-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes cm-pulse {
+  0%,
+  100% {
+    opacity: 0.28;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+@keyframes cm-drift {
+  from {
+    transform: translate3d(-2%, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(2%, 2%, 0) scale(1.12);
+  }
+}
+
+/*
+ * Elements animated by keyframes need their own transform origin, because
+ * `transform-box: fill-box` makes `scale()` happen around the shape rather than
+ * the SVG's top-left corner.
+ */
+[data-pop] {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
