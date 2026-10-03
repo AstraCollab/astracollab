@@ -7,7 +7,7 @@
  * is async and none of them can fail loudly on a turn that already has an
  * answer — and a hosted deployment is a real configuration rather than a
  * hypothetical one. So the pipeline now depends on this interface, and there are
- * two implementations: the in-process engine over SQLite, and `@astracollab/cogmem`.
+ * two implementations: the in-process engine over SQLite, and `cogmemory`.
  *
  * Two properties are load-bearing:
  *

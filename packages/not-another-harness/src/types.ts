@@ -77,6 +77,16 @@ export type HarnessStopReason =
    * task — which is the distinction a step counter cannot make.
    */
   | "no-progress"
+  /**
+   * A caller's own rule ended the run.
+   *
+   * Its own reason rather than a reuse of `no-progress` or `max-steps`, because
+   * both of those mean something specific and neither is true here: the caller
+   * usually knows exactly which loop it caught, and a report saying "max-steps"
+   * for a domain rule sends whoever reads the trace looking for a ceiling nobody
+   * set.
+   */
+  | "stopped-by-caller"
   /** A spend ceiling was hit: the dollar rail, or the deprecated token rail. */
   | "max-tokens"
   /**
@@ -322,6 +332,14 @@ export type HarnessRunOptions = {
    */
   prepareStep?: PrepareStep;
   /**
+   * End the run when this returns true.
+   *
+   * Runs after each step, alongside the harness's own guards and before them, so
+   * a caller rule that fires explains the stop rather than being reported as a
+   * generic one.
+   */
+  shouldStop?: ShouldStop;
+  /**
    * Tool choice for every step.
    *
    * Overridden per step by `prepareStep`. Left undefined, the provider default
@@ -432,6 +450,31 @@ export type PrepareStepContext = {
 export type PrepareStep = (
   context: PrepareStepContext,
 ) => StepOverrides | void | Promise<StepOverrides | void>;
+
+/**
+ * Decide whether the run should end, after a step.
+ *
+ * The harness's own guards measure generic things — steps, spend, whether
+ * anything changed. They cannot see what a *particular* agent does when it is
+ * lost: verifying git over and over, calling a tool that does not exist,
+ * restating the same failure, declaring itself finished repeatedly. That
+ * knowledge belongs to the caller, and without a hook the only way to express it
+ * is to give up and run the loop yourself.
+ *
+ * The context is the same shape {@link PrepareStep} receives, deliberately: one
+ * vocabulary for "change this step" and "end this run", so a rule spanning both
+ * is not written twice.
+ *
+ * Returning `undefined` or `false` continues. Throwing ends the run as an error,
+ * so a rule that cannot decide fails loudly rather than quietly not firing.
+ *
+ * Called after each step completes, and never before the first one — a rule that
+ * inspects step history has nothing to inspect on step 1, and firing there would
+ * stop every run.
+ */
+export type ShouldStop = (
+  context: PrepareStepContext,
+) => boolean | void | Promise<boolean | void>;
 
 export type HarnessRun = {
   /** Typed event stream — drive UIs / JSONL logs from this. */

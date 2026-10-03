@@ -55,12 +55,14 @@ export type CapsOverrides = { [K in keyof OutputCaps]?: Partial<OutputCaps[K]> }
  */
 export const resolveCaps = (overrides?: CapsOverrides): OutputCaps => {
   if (!overrides) return DEFAULT_CAPS;
-  const merged = { ...DEFAULT_CAPS } as OutputCaps;
-  for (const [tool, values] of Object.entries(overrides) as Array<[keyof OutputCaps, Record<string, number> | undefined]>) {
-    if (!values) continue;
+  // A separate mutable type: DEFAULT_CAPS is `as const`, so a spread of it is
+  // still readonly and cannot be filled in per tool.
+  const merged = { ...DEFAULT_CAPS } as unknown as Record<string, Record<string, number>>;
+  for (const [tool, values] of Object.entries(overrides) as Array<[string, Record<string, number> | undefined]>) {
+    if (!values || !merged[tool]) continue;
     merged[tool] = { ...merged[tool], ...values };
   }
-  return merged;
+  return merged as unknown as OutputCaps;
 };
 
 /**
@@ -131,14 +133,23 @@ export const capTail = (
  * from `totalLines` alone — a read that started at line 180 covers a different
  * range from one that started at line 1.
  */
+/**
+ * A page of a numbered file.
+ *
+ * `maxLines` is a parameter rather than the module default so a caller's cap
+ * overrides actually apply: clamping here against `DEFAULT_CAPS` meant a run
+ * configured with a tighter read cap still printed the default number of lines,
+ * which looks like the override being ignored rather than like a bug.
+ */
 export const sliceFileLines = (
   text: string,
   offset?: number,
   limit?: number,
+  maxLines: number = DEFAULT_CAPS.read.maxLines,
 ): { body: string; totalLines: number; start: number; end: number } => {
   const lines = toLines(text);
   const start = offset !== undefined && offset > 1 ? Math.floor(offset) : 1;
-  const cappedLimit = Math.min(limit ?? DEFAULT_CAPS.read.maxLines, DEFAULT_CAPS.read.maxLines);
+  const cappedLimit = Math.min(limit ?? maxLines, maxLines);
   const slice = lines.slice(start - 1, start - 1 + cappedLimit);
   return {
     body: slice.map((line, i) => `${start + i}|${line}`).join("\n"),

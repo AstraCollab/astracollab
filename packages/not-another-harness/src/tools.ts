@@ -219,7 +219,7 @@ export const createCodingTools = (
       try {
         const content = await env.readFile(path);
         readPaths.add(normalizeWorkspacePath(path));
-        const { body, totalLines, start, end } = sliceFileLines(content, offset, limit);
+        const { body, totalLines, start, end } = sliceFileLines(content, offset, limit, caps.read.maxLines);
         /**
          * Say exactly what to call next.
          *

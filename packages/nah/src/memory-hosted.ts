@@ -1,5 +1,5 @@
 /**
- * The hosted backend: `@astracollab/cogmem` behind `SessionMemory`.
+ * The hosted backend: `cogmemory` behind `SessionMemory`.
  *
  * The service is the same cognitive layer the CLI runs in-process, moved behind
  * an API — same four tiers, same index/body split, same deterministic recall —
@@ -18,7 +18,7 @@ import {
   type CognitiveMemoryConfig,
   type ContextEntry,
   type Memory as ServiceMemory,
-} from "@astracollab/cogmem";
+} from "cogmemory";
 import type { MemoryInjectionReport, MemoryItem } from "not-another-harness";
 
 import type { MemoryDescription, MemoryTensionView, SessionMemory } from "./memory-backend.js";

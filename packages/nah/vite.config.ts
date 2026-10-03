@@ -31,10 +31,10 @@ export default defineConfig({
       // The workspace packages are external for the mirror-image reason: they are
       // published and versioned on their own, so inlining a copy would let the
       // CLI ship a different build of the engine than the one its tests ran
-      // against. `@astracollab/cogmem` joins them for the hosted memory backend.
+      // against. `cogmemory` joins them for the hosted memory backend.
       external: [
         /^node:/,
-        "@astracollab/cogmem",
+        "cogmemory",
         "not-another-harness",
         "@blaxel/core",
         "@earendil-works/pi-tui",

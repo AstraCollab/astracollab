@@ -835,6 +835,13 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
         const stepOutputLimit = stepOutputAllowance(estimatedInputTokens);
         steps = step;
         dedupe.beginStep();
+        // Reset at the step boundary, not at declaration. These two accumulate
+        // during a step and are read once it finishes, so a declaration outside
+        // the loop made every step's record a cumulative snapshot of the whole run
+        // — `steps[1].toolNames` grew with every call ever made, which quietly
+        // broke any caller rule counting them.
+        stepCallSignatures = [];
+        stepToolNames = [];
 
         // The hook runs before onStepStart so a returned override is in force for
         // this step's request, and so a hook that throws stops the run before any
@@ -1166,6 +1173,31 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
           if (stopFor("max-output")) break;
           continue;
         }
+        /**
+         * The caller's own rules, at the step boundary.
+         *
+         * Before the "did the model answer?" check, not after it, and that is the
+         * whole point. A rule about a coding agent going in circles has to be able
+         * to see a step the model finished on — a repeated "I'm done", a step that
+         * only verified git — and placed after that check the hook would only ever
+         * see steps that made tool calls, which is precisely the subset where such
+         * a rule has nothing to say.
+         *
+         * Skipped on the first step, where there is no history to inspect and a
+         * rule that fired would end every run before it began.
+         */
+        if (options.shouldStop && step > 1) {
+          const callerStop = await options.shouldStop({
+            stepNumber: step,
+            messages: [...messages],
+            steps: toolCallsByStep.map((entry) => ({ step: entry.step, toolNames: [...entry.toolNames] })),
+          });
+          if (callerStop) {
+            if (stopFor("stopped-by-caller")) break;
+            continue;
+          }
+        }
+
         if (!stepHadToolCalls(response.messages)) {
           // The model produced its final answer — but a human may already have
           // queued something while that was streaming. Dropping it here would

@@ -135,14 +135,14 @@ export {
   type TraceContext,
 } from "./telemetry.js";
 /*
- * The cognitive layer lives in `@astracollab/cogmem`, next to the client for
+ * The cognitive layer lives in `cogmemory`, next to the client for
  * the service that runs it, so the two cannot disagree about what a memory is or
  * when a body earns its tokens.
  *
  * Re-exported here because this package is how the CLI reaches it, and
  * `packages/nah` imports `CognitiveMemory` from this package's public API.
  * Dropping the re-export would break a published package for no gain — new code
- * should import from `@astracollab/cogmem` directly.
+ * should import from `cogmemory` directly.
  *
  * The arbiter is a separate entry point there because it is the only part needing
  * `ai` and `zod`. This package already peers on both, so re-exporting it keeps the
@@ -176,12 +176,12 @@ export {
   type ArbiterFn,
   type CognitiveMemoryOptions,
   type CognitiveMemoryStateSnapshot,
-} from "@astracollab/cogmem";
+} from "cogmemory";
 
 export {
   createModelArbiter,
   type CreateModelArbiterOptions
-} from "@astracollab/cogmem/arbiter";
+} from "cogmemory/arbiter";
 export type {
   HarnessEvent,
   HarnessRun,

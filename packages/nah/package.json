@@ -1,6 +1,6 @@
 {
   "name": "nah-ai",
-  "version": "0.0.1-beta.3",
+  "version": "0.0.1-beta.5",
   "description": "nah \u2014 not another harness, the CLI. A fast, minimal coding-agent terminal (Pi-style): streaming agent loop, capped tools, JSONL sessions, slash commands.",
   "type": "module",
   "bin": {
@@ -48,7 +48,7 @@
     "@ai-sdk/anthropic": "^4.0.71",
     "@ai-sdk/openai": "^4.0.83",
     "@ai-sdk/openai-compatible": "^3.0.62",
-    "@astracollab/cogmem": "workspace:*",
+    "cogmemory": "workspace:*",
     "@blaxel/core": "^0.2.95",
     "@earendil-works/pi-tui": "^0.99.2",
     "ai": "^7.0.127",
