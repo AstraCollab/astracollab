@@ -23,7 +23,7 @@ import type {
   MemoryInjectionReport,
   MemoryItem,
   ProprioceptiveSelfModel,
-} from "@astracollab/not-another-harness";
+} from "not-another-harness";
 
 export type MemoryBackendKind = "local" | "hosted";
 
@@ -118,7 +118,7 @@ export const selfModelRows = (selfModel: ProprioceptiveSelfModel | undefined) =>
  * persistence, which `postTurnAsync` already swallows but `describe` would not.
  */
 export const localMemory = (options: {
-  memory: import("@astracollab/not-another-harness").CognitiveMemory;
+  memory: import("not-another-harness").CognitiveMemory;
   location: string;
   /** True when a previous session's memory was restored. */
   restored?: boolean;

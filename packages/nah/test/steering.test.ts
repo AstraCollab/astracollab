@@ -7,8 +7,8 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 
 import { runTurn, type SessionState } from "../src/session.js";
-import { createCodingTools, createJsonlSessionStore } from "@astracollab/not-another-harness";
-import { createNodeEnvironment } from "@astracollab/not-another-harness/node";
+import { createCodingTools, createJsonlSessionStore } from "not-another-harness";
+import { createNodeEnvironment } from "not-another-harness/node";
 import { finishReason, v4Usage } from "./helpers/ai.js";
 
 const USAGE = v4Usage({ input: 100, output: 20 });

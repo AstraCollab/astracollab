@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { memoryFileFor, prepareMemory } from "../src/memory.js";
-import type { MemoryItem } from "@astracollab/not-another-harness";
+import type { MemoryItem } from "not-another-harness";
 
 /**
  * What `prepareMemory` actually hands the engine.

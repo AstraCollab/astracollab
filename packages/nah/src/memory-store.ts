@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync } from "node:
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 
-import type { CognitiveMemoryStateSnapshot } from "@astracollab/not-another-harness"
+import type { CognitiveMemoryStateSnapshot } from "not-another-harness"
 
 export type MemoryDb = DatabaseSync
 

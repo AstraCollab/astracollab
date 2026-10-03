@@ -16,9 +16,11 @@ export default defineConfig({
     lib: {
       entry: {
         cli: resolve(__dirname, "src/cli.ts"),
+        // The read-only agent the Studio runs, so a dashboard debugs the same
+        // agent rather than a second assembly of the same prompt and tools.
+        agent: resolve(__dirname, "src/agent.ts"),
       },
       formats: ["es"],
-      fileName: () => "cli.js",
     },
     rollupOptions: {
       // pi-tui reaches for node:child_process (it can shell out for its
@@ -33,13 +35,21 @@ export default defineConfig({
       external: [
         /^node:/,
         "@astracollab/cogmem",
-        "@astracollab/not-another-harness",
+        "not-another-harness",
         "@blaxel/core",
         "@earendil-works/pi-tui",
       ],
       output: {
-        // Providers are lazy-imported; the banner makes dist/cli.js executable.
-        banner: "#!/usr/bin/env node",
+        // Two entries with fixed names, because `package.json` points at them:
+        // `dist/cli.js` is the bin and `dist/agent.js` is what the Studio imports.
+        // Shared code goes to `chunks/` rather than the dist root, where it would
+        // sit next to the two files the manifest names.
+        entryFileNames: "[name].js",
+        chunkFileNames: "chunks/[name]-[hash].js",
+        // Providers are lazy-imported; the banner makes dist/cli.js executable,
+        // and only the entry gets one — a shebang on a shared chunk is noise, and
+        // a library entry with a shebang is a lie about what it is.
+        banner: (chunk) => (chunk.isEntry && chunk.name === "cli" ? "#!/usr/bin/env node" : ""),
       },
     },
   },

@@ -3,7 +3,7 @@ import * as nodePath from "node:path";
 import { createHash } from "node:crypto";
 import * as os from "node:os";
 
-import { buildSystemPrompt } from "@astracollab/not-another-harness";
+import { buildSystemPrompt } from "not-another-harness";
 
 /** Discover AGENTS.md / CLAUDE.md upward from cwd (Pi/Claude-Code convention). */
 export const loadContextFiles = async (

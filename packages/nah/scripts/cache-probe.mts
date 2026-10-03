@@ -19,7 +19,7 @@
  */
 import { streamText, tool } from "ai";
 import { z } from "zod";
-import { cacheAccountingFor, cacheOptions, supportsCaching } from "@astracollab/not-another-harness";
+import { cacheAccountingFor, cacheOptions, supportsCaching } from "not-another-harness";
 
 import { resolveModel } from "../src/model.js";
 

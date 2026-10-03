@@ -7,9 +7,9 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 
 import { composeTurnRequest, runTurn, type SessionState } from "../src/session.js";
-import type { SessionTaskLedger } from "@astracollab/not-another-harness";
-import { createCodingTools } from "@astracollab/not-another-harness";
-import { createNodeEnvironment } from "@astracollab/not-another-harness/node";
+import type { SessionTaskLedger } from "not-another-harness";
+import { createCodingTools } from "not-another-harness";
+import { createNodeEnvironment } from "not-another-harness/node";
 import { finishReason, v4Usage } from "./helpers/ai.js";
 
 const ledger = (goal: string, status: SessionTaskLedger["status"] = "in_progress"): SessionTaskLedger => ({

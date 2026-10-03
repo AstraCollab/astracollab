@@ -62,7 +62,9 @@ result appears when you press Enter.
 
 `/model` with no argument opens the searchable model list; `/model <provider:model-id>`
 switches directly. These two (and `/provider`) take over the terminal with their own
-full-screen UI, so they are unavailable while a turn is streaming.
+full-screen UI, so they are unavailable while a turn is streaming. `/studio` does
+too — installing the dashboard asks a question — but the dashboard itself runs in
+the background, so the session is back before the next prompt.
 
 ### Interrupting a stuck turn
 
@@ -133,6 +135,8 @@ are both a TTY. Pipes, CI, and dumb terminals keep the line-oriented renderer, a
 | `/memory` | Inspect Cognitive Memory state (L0-L3 cache, pre-staged items, self-model) |
 | `/cogmem` | Connect the hosted Cognitive Memory service, or switch back to the local store |
 | `/tensions` | View unresolved contradictions; `/tensions resolve <id>` marks resolved |
+| `/studio` | Open the dashboard of every agent on this machine; `status`, `stop`, `url` |
+| `/telemetry on\|off` | Report this session's turns to a running studio, or stop |
 | `/clear` | Clear the active transcript |
 | `/help`, `/quit` | Show commands or exit |
 
@@ -156,6 +160,9 @@ nah --no-tui                          # force the line renderer instead of the T
 nah --print "Summarize this project"   # run once and exit
 nah --mode json "Summarize this project" # emit JSONL events
 nah --cwd /path/to/project "Explain this code"
+nah serve                            # the dashboard, from a shell (same as /studio)
+nah serve --port 5000
+nah serve status | stop | url
 ```
 
 Print and JSON modes allow mutating tools by default because they cannot prompt interactively. Pass `--permissions readonly` when a non-interactive run must not make changes.
@@ -189,7 +196,147 @@ survive into later sessions.
 the memory store on its own, and `NAH_MEMORY_DEBUG=1` traces extraction,
 promotion and persistence per turn.
 
-### Hosted memory, with `/cogmem`
+### Studio
+
+`/studio` opens a dashboard of every agent on the machine: which are running, what
+each one did, and what it cost.
+
+```sh
+nah                       # then, inside the session
+/studio                   # installs the studio if needed, starts it, opens a browser
+```
+
+The Studio is a separate package, [`nah-studio`](../nah-studio), installed the
+first time you ask for it and then running in the background. It outlives the
+session that started it, so you can go back to work with the dashboard open — a
+monitoring tool that stops working the moment you type is not one.
+
+```sh
+/studio status            # where it is, whether it is answering, which version
+/studio stop              # stop it
+/studio url               # print the URL, for a machine with no browser
+nah serve                 # the same thing from a shell
+nah serve --port 5000
+nah serve stop
+```
+
+**Telemetry is opt-in by construction.** The Studio publishes itself at
+`~/.nah/studio.json`; a session that finds that file reports to it, and a session
+that does not find it sends nothing anywhere. There is no telemetry switch to
+remember and no traffic when the dashboard is not running. `/telemetry off` opts
+out and remembers it, and `NAH_TELEMETRY=off` opts out for one session.
+
+While the Studio is up, every `nah` session on the machine registers itself and
+pushes its traces: one row per process, with the working directory, the model, the
+version, and what it has run. Two sessions in one repository are two agents,
+because "is anything running right now" is a question a merged row cannot answer.
+
+The Studio can also start agents: give it a directory and a task, and it runs a
+real `nah` process with one prompt, captures its output line by line, and watches
+it the same way it watches everything else. Nothing privileged is involved — the
+agent reports itself, exactly like one you started by hand.
+
+The built-in agent behind the chat tab and evaluations is assembled by `nah`
+itself, from this package's own prompt, tools and memory, with mutating tools
+refused. Debugging a different agent than the one you use would make every trace
+in the dashboard evidence about the wrong program; it is published as the
+`nah/agent` subpath for exactly that reason.
+
+Six views:
+
+| View | What it answers |
+| --- | --- |
+| **Agents** | Who is running, what each one has cost, and its output |
+| **Overview** | Volume, error rate, spend, median latency, runs over time |
+| **Traces** | Every run, filterable by range, status and tag; sortable; a span waterfall and inspector behind each |
+| **Tools** | Per-tool call counts, error rates, p50 and p95 latency |
+| **Evaluations** | Datasets, scorers, run controls with live progress, per-scorer means, score spread, and two experiments side by side |
+| **Chat** | Talk to the read-only agent; the run is traced like any other |
+
+⌘1–⌘6 (or ctrl on other platforms) moves between views, and the agent selector in
+the header scopes every one of them to a single agent.
+
+Updates arrive over `GET /api/stream` as server-sent events, so the list of agents
+is current when a turn finishes rather than up to ten seconds after. The interval
+polling that remains is a floor under a stream that a proxy has blocked, not the
+mechanism.
+
+Every run is a trace: one root span, a span per model step, a child span per tool
+call, and one per compaction. Token counts, prompt size, cache hit rate and spend
+are attributes on those spans, so the questions worth asking — which step was
+slow, what did that tool receive, did this run cost 1 cent or 90 — have an answer
+that is a query rather than a scroll.
+
+The recorder is a consumer of the same event stream the TUI renders, so tracing
+cannot change what the agent does, and `traceRun` works on any `runAgent` result.
+It lives in `not-another-harness` next to the loop.
+
+Two defaults worth knowing:
+
+- **The agent runs read-only.** Mutating tools are refused, because a debugging UI
+  that can be talked into editing your repository through a browser form is not a
+  debugging tool.
+- **Credential-shaped values are redacted before anything is written.** Spans carry
+  prompts and tool arguments, and a pasted key in a prompt is ordinary.
+
+### Evaluations
+
+A dataset of cases, a set of scorers, and a run that executes each case and scores
+it. Rule scorers (`includes`, `calledTool`, `mentionsFile`, `notRefused`) are
+deterministic, so a score that moves means something changed. `judgeScorer` grades
+an answer with a model against a rubric and is required to give a reason; a scorer
+that cannot answer returns *skipped* rather than zero, because a fabricated zero
+reads as a measurement.
+
+```ts
+import { calledToolScorer, includesScorer, judgeScorer, notRefusedScorer } from "nah-studio/evals";
+
+const scorers = [
+  notRefusedScorer(),
+  includesScorer(["ZQ7X4M2K"]),
+  calledToolScorer("read"),
+  judgeScorer({ id: "relevancy", name: "relevancy", rubric: "answers the question asked", model }),
+];
+```
+
+Results carry the trace id, so any row in the results table opens the run that
+produced it. A provider-level failure is retried and reported as `errored` with no
+scores rather than as a failed agent, because the number gets quoted.
+
+### API
+
+The Studio serves its own API; the table below is what an agent needs, and the
+rest lives in [`nah-studio`](../nah-studio).
+
+| Route | Purpose |
+| --- | --- |
+| `POST /api/agents` | Register or heartbeat. One route for both, because a client cannot know whether the Studio it found is one it has already met |
+| `POST /api/traces` | Ingest `{ agent?, trace, spans }`. Idempotent per trace id, and it registers the agent if that was skipped |
+| `GET /api/agents` | Every agent with its own totals, status and last-seen |
+| `POST /api/agents/launch`, `/api/agents/:id/stop`, `/api/agents/:id/logs` | Start an agent, stop one this Studio started, read its output |
+| `GET /api/stream` | Server-sent events: agent appeared, agent moved, trace landed, line printed |
+| `GET /api/traces`, `GET /api/traces/:id` | Trace list (search, status, tag, agent, since/until, sort) and one trace with its spans |
+| `GET /api/overview?buckets=N&agentId=` | Totals plus a bucketed series for the charts |
+| `GET /api/tools?agentId=` | Per-tool call counts, error rates and latency percentiles |
+| `GET /api/info` | What this server is: version, directory, whether it can start agents |
+| `GET/POST /api/messages` | The conversation log |
+| `GET/POST /api/datasets`, `/items` | Eval cases |
+| `GET /api/scorers` | Registered scorers |
+| `POST /api/experiments`, `GET /api/experiments/:id` | Start an experiment (returns immediately; it runs in the background) and read one |
+| `POST /api/chat` | Send a message to the read-only agent |
+
+The store is SQLite at `~/.nah/studio/studio.sqlite` (`node:sqlite`, no native
+build), and a store written by an older build is migrated in place on open.
+
+Set `NAH_STUDIO_TOKEN` before binding `0.0.0.0`: without a token the server
+refuses anything that is not from loopback, because the store holds prompts, file
+paths and tool output. A Studio started by `/studio` is loopback-only by default
+and needs no token, so a first run does not involve one.
+
+An agent can only be stopped by the machine it is running on, and only if the
+Studio started it. A browser button is not consent to kill somebody's terminal.
+
+## Hosted memory, with `/cogmem`
 
 Memory runs in-process by default, against a SQLite file in your home directory.
 `/cogmem setup` points it at the hosted
@@ -255,9 +402,9 @@ export NAH_APP_URL=https://your-host.example
 
 ```sh
 pnpm install
-pnpm --filter @astracollab/not-another-harness build
+pnpm --filter not-another-harness build
 pnpm --filter @astracollab/nah build
 pnpm --filter @astracollab/nah exec nah --help
 ```
 
-The executable package is `@astracollab/nah`; the SDK runtime is documented separately in [`@astracollab/not-another-harness`](../not-another-harness/README.md).
+The executable package is `@astracollab/nah`; the SDK runtime is documented separately in [`not-another-harness`](../not-another-harness/README.md).

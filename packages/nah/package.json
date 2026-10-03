@@ -1,12 +1,13 @@
 {
-  "name": "@astracollab/nah",
-  "version": "0.0.1-beta.1",
+  "name": "nah-ai",
+  "version": "0.0.1-beta.2",
   "description": "nah \u2014 not another harness, the CLI. A fast, minimal coding-agent terminal (Pi-style): streaming agent loop, capped tools, JSONL sessions, slash commands.",
   "type": "module",
   "bin": {
     "nah": "./dist/cli.js"
   },
   "exports": {
+    "./agent": "./dist/agent.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -48,10 +49,10 @@
     "@ai-sdk/openai": "^4.0.83",
     "@ai-sdk/openai-compatible": "^3.0.62",
     "@astracollab/cogmem": "workspace:*",
-    "@astracollab/not-another-harness": "workspace:*",
     "@blaxel/core": "^0.2.95",
     "@earendil-works/pi-tui": "^0.99.2",
     "ai": "^7.0.127",
+    "not-another-harness": "workspace:^",
     "ofetch": "^1.4.1",
     "zod": "^4.3.6"
   },

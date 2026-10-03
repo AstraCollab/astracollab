@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { hostedMemory } from "../src/memory-hosted.js";
 import { localMemory } from "../src/memory-backend.js";
-import { CognitiveMemory } from "@astracollab/not-another-harness";
+import { CognitiveMemory } from "not-another-harness";
 
 /**
  * The hosted backend, over a stubbed transport.

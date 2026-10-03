@@ -3,10 +3,13 @@ import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { Terminal } from "@earendil-works/pi-tui";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { TurnOutput, stripMouseReportText } from "../src/tui/output.js";
 import { localMemory } from "../src/memory-backend.js";
-import { CognitiveMemory } from "@astracollab/not-another-harness";
+import { CognitiveMemory } from "not-another-harness";
 import type { SessionState } from "../src/session.js";
 import { finishReason, v4Usage } from "./helpers/ai.js";
 
@@ -417,7 +420,7 @@ describe("alternate-screen host layout", () => {
 
     terminal.type("/model anthropic:claude-sonnet-4-5");
     terminal.enter();
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await waitFor(() => /API_KEY|Unknown provider/i.test(strip(terminal.written)));
 
     const frame = strip(terminal.written);
     expect(frame).not.toContain("unknown command");
@@ -445,7 +448,10 @@ describe("alternate-screen host layout", () => {
     // command into the transcript as if the user had typed a message.
     terminal.type("/cogmem");
     terminal.enter();
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    // Waiting for the painted frame rather than for a fixed interval: on a loaded
+    // machine 120ms is not long enough, and the failure that produces looks like a
+    // broken command rather than a slow test.
+    await waitFor(() => strip(terminal.written).includes("Cognitive Memory"));
 
     const painted = strip(terminal.written);
     expect(painted).toContain("Cognitive Memory");
@@ -453,6 +459,36 @@ describe("alternate-screen host layout", () => {
     // The prompt is still usable afterwards, which is what "exclusive" has to mean.
     terminal.type("still here");
     expect(state.messages).toHaveLength(0);
+
+    host.then(() => undefined);
+  });
+
+  it("runs /studio through the exclusive path and leaves the prompt usable", async () => {
+    const { startTuiHost } = await import("../src/tui/host.js");
+    const terminal = new FakeTerminal(60, 24);
+    const state = makeState(new MockLanguageModelV4({ doStream: async () => ({ stream: textStream("x") }) }));
+
+    // The command reads `~/.nah/studio.json`, so a developer's own Studio would
+    // otherwise decide what this test asserts.
+    const previousHome = process.env.HOME;
+    process.env.HOME = mkdtempSync(join(tmpdir(), "nah-tui-studio-"));
+    const host = startTuiHost({ state, terminal });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    try {
+      terminal.type("/studio");
+      terminal.enter();
+      await waitFor(() => strip(terminal.written).includes("not installed"));
+
+      // Nothing is running and nothing is installed, so the one thing this must do
+      // is decline politely — and, above all, not leak into the agent as a prompt.
+      expect(strip(terminal.written)).toContain("not installed");
+      terminal.type("still here");
+      expect(state.messages).toHaveLength(0);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
 
     host.then(() => undefined);
   });
@@ -480,7 +516,7 @@ describe("alternate-screen host layout", () => {
 
     terminal.type("/model");
     terminal.enter();
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await waitFor(() => strip(terminal.written).includes("needs the terminal to itself"));
 
     // It must be refused rather than stealing the terminal mid-turn.
     expect(strip(terminal.written)).toContain("needs the terminal to itself");

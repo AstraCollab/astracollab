@@ -12,7 +12,7 @@
  */
 import { streamText, tool } from "ai";
 import { z } from "zod";
-import { cacheOptions, supportsCaching } from "@astracollab/not-another-harness";
+import { cacheOptions, supportsCaching } from "not-another-harness";
 
 import { resolveModel } from "../src/model.js";
 

@@ -1,4 +1,4 @@
-import { DEFAULT_CAPS, type ToolEnvironment } from "@astracollab/not-another-harness";
+import { DEFAULT_CAPS, type ToolEnvironment } from "not-another-harness";
 import { posix as posixPath } from "node:path";
 
 /**

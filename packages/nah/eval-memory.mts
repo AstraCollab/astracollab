@@ -8,8 +8,8 @@
  * history** and asks about them again. With an empty transcript, anything the
  * model can still answer came out of memory.
  */
-import { createNodeEnvironment } from "@astracollab/not-another-harness/node";
-import { createCodingTools } from "@astracollab/not-another-harness";
+import { createNodeEnvironment } from "not-another-harness/node";
+import { createCodingTools } from "not-another-harness";
 import { resolveModel } from "./src/model.js";
 import { resolveInjection, runTurn, type SessionState } from "./src/session.js";
 import { createTurnExtractor, prepareMemory, memoryFileFor, setMemoryPersistedHook } from "./src/memory.js";

@@ -56,6 +56,20 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     exclusive: true,
   },
   { name: "tensions", description: "Show unresolved contradictions", argumentHint: "[resolve <id>]" },
+  {
+    name: "studio",
+    description: "Open the dashboard: every agent on this machine, its traces, evaluations and chat",
+    argumentHint: "[status|stop|open|url]",
+    // Exclusive because installing one asks a question, and a question needs the
+    // terminal the way `/provider` needs it. It still leaves the session running:
+    // the Studio it starts is a background process.
+    exclusive: true,
+  },
+  {
+    name: "telemetry",
+    description: "Report this session's turns to a running studio",
+    argumentHint: "[on|off|status]",
+  },
   { name: "quit", description: "Exit and show how to resume", argless: true },
 ] as const;
 

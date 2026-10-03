@@ -9,7 +9,7 @@ import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { allocateSessionFile, defaultSessionFile, latestSessionFile, resolveSessionFile } from "../src/context.js";
 import { TurnOutput } from "../src/tui/output.js";
 import type { SessionState } from "../src/session.js";
-import { createJsonlSessionStore } from "@astracollab/not-another-harness";
+import { createJsonlSessionStore } from "not-another-harness";
 
 const strip = (s: string) =>
   s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "");

@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { createCodingTools, runAgent } from "@astracollab/not-another-harness";
-import { createNodeEnvironment } from "@astracollab/not-another-harness/node";
+import { createCodingTools, runAgent } from "not-another-harness";
+import { createNodeEnvironment } from "not-another-harness/node";
 import { resolveModel } from "../src/model.js";
 
 const selectedModel = process.env.NAH_EVAL_MODEL;

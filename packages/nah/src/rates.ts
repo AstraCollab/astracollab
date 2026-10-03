@@ -1,4 +1,4 @@
-import type { ModelRates } from "@astracollab/not-another-harness";
+import type { ModelRates } from "not-another-harness";
 
 /**
  * Per-million-token prices used to turn usage into the `maxSpendUsd` figure.

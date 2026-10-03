@@ -13,7 +13,7 @@
  * parser would mangle shell output that happens to contain `-` or `*`.
  */
 import { Text, type Component } from "@earendil-works/pi-tui";
-import type { HarnessEvent } from "@astracollab/not-another-harness";
+import type { HarnessEvent } from "not-another-harness";
 
 import {
   bashCommand,

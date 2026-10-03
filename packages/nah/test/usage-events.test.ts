@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { applyUsageEvent } from "../src/repl.js";
 import type { SessionState } from "../src/session.js";
-import type { HarnessEvent } from "@astracollab/not-another-harness";
+import type { HarnessEvent } from "not-another-harness";
 
 /**
  * Only the fields `applyUsageEvent` writes. Building a whole `SessionState` here

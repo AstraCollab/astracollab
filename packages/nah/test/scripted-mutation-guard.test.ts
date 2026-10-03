@@ -4,8 +4,8 @@ import * as nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApprover } from "../src/permissions.js";
-import { createCodingTools } from "@astracollab/not-another-harness";
-import { createNodeEnvironment } from "@astracollab/not-another-harness/node";
+import { createCodingTools } from "not-another-harness";
+import { createNodeEnvironment } from "not-another-harness/node";
 
 type ToolMap = Record<string, { execute: (input: never, ctx: unknown) => Promise<string> }>;
 

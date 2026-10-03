@@ -13,8 +13,8 @@
  */
 import * as nodePath from "node:path";
 import { generateText, type LanguageModel } from "ai";
-import { CognitiveMemory, extractDeterministic } from "@astracollab/not-another-harness";
-import type { MemoryReconciliation } from "@astracollab/not-another-harness";
+import { CognitiveMemory, extractDeterministic } from "not-another-harness";
+import type { MemoryReconciliation } from "not-another-harness";
 
 import { MemoryStore, legacyMemoryJsonPath, memoryDbPath } from "./memory-store.js";
 

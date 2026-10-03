@@ -1,6 +1,6 @@
 import { tool, type Tool } from "ai";
 import { z } from "zod";
-import type { SessionTaskLedger } from "@astracollab/not-another-harness";
+import type { SessionTaskLedger } from "not-another-harness";
 import type { SessionState } from "./session.js";
 
 const taskInput = z.discriminatedUnion("action", [

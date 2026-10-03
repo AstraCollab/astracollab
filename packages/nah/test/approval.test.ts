@@ -152,8 +152,8 @@ describe("TUI approval does not wedge the run", () => {
 
     const approve = createApprover(() => "ask");
     const terminal = new FakeTerminal();
-    const { createCodingTools } = await import("@astracollab/not-another-harness");
-    const { createNodeEnvironment } = await import("@astracollab/not-another-harness/node");
+    const { createCodingTools } = await import("not-another-harness");
+    const { createNodeEnvironment } = await import("not-another-harness/node");
     const workspace = await mkdtemp(nodePath.join(tmpdir(), "nah-approval-"));
     const env = createNodeEnvironment(workspace);
     const tools = createCodingTools(env, { approveToolCall: approve });

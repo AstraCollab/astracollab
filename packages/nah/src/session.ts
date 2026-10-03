@@ -5,18 +5,21 @@ import { detectMemoryTriggers } from "./memory-injection.js";
 import {
   createCodingTools,
   createJsonlSessionStore,
+  orchestratorPrompt,
   runAgent,
+  sessionUpdate,
   type HarnessEvent,
   type HarnessRunResult,
   type JsonlSessionStore,
   type MemoryInjectionReport,
   type SessionTaskLedger,
   type WorkspaceSnapshot,
-} from "@astracollab/not-another-harness";
-import { createNodeEnvironment } from "@astracollab/not-another-harness/node";
+} from "not-another-harness";
+import { createNodeEnvironment } from "not-another-harness/node";
 
 import type { ResolvedModel } from "./model.js";
 import type { PermissionMode } from "./permissions.js";
+import { traceTurn } from "./telemetry-export.js";
 import { formatTaskLedger } from "./task-ledger.js";
 import { ratesFor } from "./rates.js";
 import { resolveTurnSpendUsd } from "./budget.js";
@@ -37,7 +40,7 @@ export type SessionState = {
   system: string;
   cwd: string;
   tools: Record<string, unknown>;
-  workspace: import("@astracollab/not-another-harness").ToolEnvironment;
+  workspace: import("not-another-harness").ToolEnvironment;
   activeFileChanges: Array<{ path: string; existed: boolean; content?: string; after: string }> | null;
   activeShellCommands: string[] | null;
   undoHistory: Array<TurnRecovery>;
@@ -131,6 +134,15 @@ export type SessionState = {
    * survive a restart.
    */
   memoryNote?: string;
+  /**
+   * The Studio this session reports to, if one is running.
+   *
+   * Resolved once, when the session is built, because that is when "is there a
+   * dashboard listening" is worth asking — per turn it would be a file read per
+   * turn for a session that outlives most Studios. Null means telemetry is off,
+   * and a turn then behaves exactly as it did before any of this existed.
+   */
+  studio?: import("./telemetry-export.js").StudioTelemetry | null;
 };
 
 export type StepRecovery = {
@@ -201,7 +213,7 @@ export const composeTurnRequest = (
   const staticContext = [
     "Task tracking: For substantial multi-step work, call task_ledger discover_checks before editing. Save a plan using exact discovered executable acceptance commands. Update progress as you work, run each check through task_ledger run_check, repair failures and rerun, and mark completed only when all steps are complete and every check has an actual zero exit code. The task_ledger tool result is the latest source of task status during this run.",
     state.tools.delegate_task
-      ? "Delegation: Use delegate_task only for independent, bounded subtasks that can start from committed HEAD and do not depend on uncommitted parent changes. The child runs in a temporary isolated worktree; inspect its returned diff and integrate changes deliberately. Delegated changes are not merged automatically. Do not delegate subtasks that depend on each other."
+      ? `Delegation: When you have a plan whose parts are independent of each other, spin up sub-agents for them instead of doing the work one piece at a time. Pass the whole plan to delegate_tasks and it runs the subtasks concurrently, each in its own isolated worktree; use delegate_task for a single independent subtask. Delegate only work that starts from committed HEAD and does not depend on your uncommitted changes or on another subtask's result. Children share no history with you, so each task must restate its own context and acceptance criteria. Every child's diff comes back for you to review and integrate deliberately; nothing is merged automatically. If the parts of a plan depend on each other, do the dependent one yourself rather than delegating it.\n\n${orchestratorPrompt({ concurrency: 3, isolation: "temporary Git worktree" })}`
       : "",
   ]
     .filter(Boolean)
@@ -426,11 +438,11 @@ export const runTurn = (
     state.messages = [...result.messages];
     foldTurnIntoState(state, result);
     if (state.store) {
-      if (result.compactions > 0 || result.messages.length < before) {
-        await state.store.replace(result.messages);
-      } else {
-        await state.store.append(result.messages.slice(before));
-      }
+      // The harness owns the append-vs-replace decision, because getting it wrong
+      // loses the middle of a conversation without throwing. See `sessionUpdate`.
+      const update = sessionUpdate(before, result);
+      if (update.mode === "replace") await state.store.replace(update.messages);
+      else await state.store.append(update.messages);
     }
     // Written after the transcript so a crash between the two leaves counters
     // that are behind the messages, never ahead of them.
@@ -491,7 +503,20 @@ export const runTurn = (
       yield event;
     }
   })();
-  return { events, done, steer: run.steer, followUp: run.followUp, pending: run.pending };
+
+  // Traced on the way out, from the same events the transcript is being rendered
+  // from. Attached here rather than by the TUI and the REPL separately because
+  // there are three ways to run a turn and forgetting one produces a session that
+  // mysteriously does not appear in the dashboard.
+  return {
+    events: state.studio
+      ? traceTurn(state.studio, events, { prompt, ...(state.model?.spec ? { model: state.model.spec } : {}) })
+      : events,
+    done,
+    steer: run.steer,
+    followUp: run.followUp,
+    pending: run.pending,
+  };
 };
 
 /**

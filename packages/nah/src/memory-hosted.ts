@@ -19,7 +19,7 @@ import {
   type ContextEntry,
   type Memory as ServiceMemory,
 } from "@astracollab/cogmem";
-import type { MemoryInjectionReport, MemoryItem } from "@astracollab/not-another-harness";
+import type { MemoryInjectionReport, MemoryItem } from "not-another-harness";
 
 import type { MemoryDescription, MemoryTensionView, SessionMemory } from "./memory-backend.js";
 

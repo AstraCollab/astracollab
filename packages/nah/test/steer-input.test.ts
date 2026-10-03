@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type * as readline from "node:readline/promises";
 
 import { protectTypedInput, renderTurn } from "../src/repl.js";
-import type { HarnessEvent } from "@astracollab/not-another-harness";
+import type { HarnessEvent } from "not-another-harness";
 
 /** Minimal stand-in for the parts of a readline interface we consult. */
 const fakeRl = (line: string): readline.Interface => ({ line }) as readline.Interface;

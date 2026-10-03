@@ -23,6 +23,12 @@ export type CliArgs = {
   showVersion: boolean;
   /** Force the line-oriented renderer instead of the alternate-screen TUI. */
   noTui: boolean;
+  /** `nah serve`: start the dashboard. An alias for `/studio`. */
+  serve: boolean;
+  /** What `nah serve` should do: start (default), status, stop, url, open. */
+  serveAction?: string;
+  /** Port for the dashboard. */
+  servePort?: number;
 };
 
 const HELP = `nah — not another harness, the CLI. A fast, minimal coding-agent terminal.
@@ -30,6 +36,7 @@ const HELP = `nah — not another harness, the CLI. A fast, minimal coding-agent
 Usage:
   nah                       Start the interactive session
   nah "fix the flaky test"  Start with an initial prompt
+  nah serve [action]        The dashboard: start (default), status, stop, url
   nah -p "msg"              Print mode: run once, print the answer, exit
   nah --mode json "msg"     Print JSONL events to stdout, then exit
   nah @src/a.ts "explain"   Include file contents in the first prompt
@@ -47,11 +54,12 @@ Options:
   --permissions <mode>  ask | yolo | readonly (default: ask interactive, yolo in print/json)
   --sandbox [name]      Run in a Blaxel cloud sandbox (needs BL_API_KEY + BL_WORKSPACE)
   --cwd <dir>           Working directory (default: cwd)
+  --port <n>            Port for the dashboard (nah serve)
   -h, --help            Show this help
   -v, --version         Show version
 
 Slash commands (interactive):
-  /help /model /stats /task /compact /clear /session /quit
+  /help /model /stats /task /compact /clear /session /studio /telemetry /quit
 `;
 
 export const parseCliArgs = (
@@ -68,6 +76,7 @@ export const parseCliArgs = (
     cwd: process.cwd(),
     showHelp: false,
     showVersion: false,
+    serve: false,
   };
   const positional: string[] = [];
 
@@ -143,13 +152,27 @@ export const parseCliArgs = (
       case "--cwd":
         args.cwd = argv[++i] ?? args.cwd;
         break;
+      case "serve":
+        // A bare subcommand, not a flag: `nah serve` reads better than
+        // `nah --studio`, and it is not something to combine with a prompt.
+        args.serve = true;
+        break;
+      case "--port":
+        args.servePort = Number.parseInt(argv[++i] ?? "", 10);
+        break;
       default:
         positional.push(a);
     }
   }
 
   if (positional.length > 0) {
-    args.prompt = positional.join(" ");
+    // `nah serve status` is `/studio status`: a dashboard has to be stoppable from
+    // a script, and a shell is the only place that is true.
+    if (args.serve) {
+      args.serveAction = positional.join(" ");
+    } else {
+      args.prompt = positional.join(" ");
+    }
   }
   // Pi behavior: non-TTY stdin/stdout without an explicit mode → print mode.
   if (args.mode === "interactive" && (!process.stdin.isTTY || !process.stdout.isTTY)) {

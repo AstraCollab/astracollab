@@ -16,7 +16,7 @@ import type { ModelMessage } from "ai";
 import {
   extractIdentifiers,
   type MemoryInjectionReport,
-} from "@astracollab/not-another-harness";
+} from "not-another-harness";
 
 import type { SessionMemory } from "./memory-backend.js";
 

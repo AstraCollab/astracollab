@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { openEphemeralStore } from "../src/memory-store.js";
 import { legacyMemoryJsonPath, MemoryStore } from "../src/memory-store.js";
-import type { CognitiveMemoryStateSnapshot } from "@astracollab/not-another-harness";
+import type { CognitiveMemoryStateSnapshot } from "not-another-harness";
 
 /**
  * The SQLite store.

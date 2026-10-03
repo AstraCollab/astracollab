@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { createJsonlSessionStore } from "@astracollab/not-another-harness";
+import { createJsonlSessionStore } from "not-another-harness";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTaskLedgerTool } from "../src/task-ledger.js";
 import type { SessionState } from "../src/session.js";

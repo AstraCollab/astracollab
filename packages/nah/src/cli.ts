@@ -6,8 +6,10 @@ import {
   withFileInclusions,
 } from "./context.js";
 import { parsePermissionMode, type PermissionMode } from "./permissions.js";
-import { makeState, renderTurn, startRepl } from "./repl.js";
-import { runTurn, resumeSession } from "./session.js";
+import { renderTurn, startRepl } from "./repl.js";
+import { makeState } from "./state.js";
+import { resolveInjection, runTurn, resumeSession } from "./session.js";
+import { confirmOnStdout, currentNahBin, runStudioCommand } from "./studio-command.js";
 import { startTuiHost } from "./tui/host.js";
 import { ProcessTerminal } from "@earendil-works/pi-tui";
 
@@ -43,6 +45,22 @@ const main = async (): Promise<number> => {
   }
   if (args.showVersion) {
     process.stdout.write(`${pkg.version}\n`);
+    return 0;
+  }
+
+  // `nah serve` is `/studio` from a shell: same command, same package, same
+  // background process. It used to serve a bundled copy of the dashboard out of
+  // this binary, which meant shipping a browser app inside a terminal agent and
+  // making every dashboard change a CLI release.
+  if (args.serve) {
+    const env = { ...process.env, ...(args.servePort === undefined ? {} : { NAH_STUDIO_PORT: String(args.servePort) }) };
+    await runStudioCommand(`/studio ${args.serveAction ?? ""}`, {
+      cwd: args.cwd,
+      out: process.stdout,
+      confirm: confirmOnStdout,
+      env,
+      ...(currentNahBin() === undefined ? {} : { nahBin: currentNahBin() }),
+    });
     return 0;
   }
 
@@ -98,7 +116,10 @@ const main = async (): Promise<number> => {
         }
       }
       if (prompt) {
-        const turn = runTurn(state, prompt);
+        // Memory is resolved before the request is composed, not inside runTurn,
+        // which is synchronous. Without this the first turn of a session runs
+        // with an empty memory block.
+        const turn = runTurn(state, prompt, {}, await resolveInjection(state, prompt));
         await renderTurn(turn.events);
         await turn.done;
         process.stdout.write("\n");
@@ -133,7 +154,7 @@ const main = async (): Promise<number> => {
       await resumeSession(state);
     }
 
-    const turn = runTurn(state, prompt);
+    const turn = runTurn(state, prompt, {}, await resolveInjection(state, prompt));
     if (args.mode === "json") {
       for await (const event of turn.events) {
         process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -147,6 +168,10 @@ const main = async (): Promise<number> => {
       process.stdout.write("\n");
     }
     const result = await turn.done;
+    // This process exits in a moment, and a request cancelled by the exit would
+    // lose the only trace it will ever produce. An interactive session does not
+    // need this — nothing is waiting on it to exit.
+    await state.studio?.settled();
     return result.reason === "error" ? 1 : 0;
   } finally {
     await state.destroySandbox?.().catch(() => undefined);

@@ -6,7 +6,7 @@ import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { Terminal } from "@earendil-works/pi-tui";
-import { createJsonlSessionStore } from "@astracollab/not-another-harness";
+import { createJsonlSessionStore } from "not-another-harness";
 
 import { handleSlashCommand } from "../src/repl.js";
 import { TurnOutput } from "../src/tui/output.js";

@@ -35,7 +35,7 @@
  * Spend, and the cache hit rate it depends on. Both are diagnostics, and neither
  * can end a run: a display that only shows what has happened is not a ceiling.
  */
-import type { ModelRates } from "@astracollab/not-another-harness";
+import type { ModelRates } from "not-another-harness";
 
 /**
  * The ceiling for a turn, or 0 for none.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CognitiveMemory } from "@astracollab/not-another-harness";
+import { CognitiveMemory } from "not-another-harness";
 import { createRecallTool } from "../src/memory-tool.js";
 
 let seq = 0;
@@ -80,7 +80,7 @@ describe("recall tool", () => {
 
   it("is not approval-gated (it only reads)", () => {
     // `recall` is absent from the mutation gate set.
-    const { APPROVAL_GATED_TOOLS } = require("@astracollab/not-another-harness") as {
+    const { APPROVAL_GATED_TOOLS } = require("not-another-harness") as {
       APPROVAL_GATED_TOOLS: Set<string>;
     };
     expect(APPROVAL_GATED_TOOLS.has("recall")).toBe(false);

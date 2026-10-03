@@ -338,6 +338,9 @@ importers:
 
   packages/ai:
     dependencies:
+      '@ai-sdk/provider':
+        specifier: ^1.0.0 || ^2.0.0
+        version: 2.0.5
       ofetch:
         specifier: ^1.4.0
         version: 1.5.1
@@ -507,18 +510,27 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.19.9)(jsdom@28.0.0(@noble/hashes@2.4.0))(less@4.4.1)(lightningcss@1.32.0)(sass@1.77.4)(terser@5.43.1)
 
-  packages/nah-studio-ui:
+  packages/nah-studio:
     dependencies:
-      react:
-        specifier: ^19.2.8
-        version: 19.2.8
-      react-dom:
-        specifier: ^19.2.8
-        version: 19.2.8(react@19.2.8)
+      '@astracollab/not-another-harness':
+        specifier: workspace:*
+        version: link:../not-another-harness
+      ai:
+        specifier: ^7.0.127
+        version: 7.0.127(zod@4.6.5)
+      nah:
+        specifier: workspace:*
+        version: link:../nah
     devDependencies:
+      '@ai-sdk/provider':
+        specifier: ^4.0.0
+        version: 4.0.21
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@5.4.21(@types/node@22.19.9)(less@4.4.1)(lightningcss@1.32.0)(sass@1.77.4)(terser@5.43.1))
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.19.9
       '@types/react':
         specifier: ^19
         version: 19.2.9
@@ -537,6 +549,12 @@ importers:
       vite:
         specifier: ^5.4.19
         version: 5.4.21(@types/node@22.19.9)(less@4.4.1)(lightningcss@1.32.0)(sass@1.77.4)(terser@5.43.1)
+      vite-plugin-dts:
+        specifier: ^4.3.0
+        version: 4.5.4(@types/node@22.19.9)(rollup@4.49.0)(typescript@5.9.2)(vite@5.4.21(@types/node@22.19.9)(less@4.4.1)(lightningcss@1.32.0)(sass@1.77.4)(terser@5.43.1))
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.19.9)(jsdom@28.0.0(@noble/hashes@2.4.0))(less@4.4.1)(lightningcss@1.32.0)(sass@1.77.4)(terser@5.43.1)
 
   packages/nextjs:
     dependencies:

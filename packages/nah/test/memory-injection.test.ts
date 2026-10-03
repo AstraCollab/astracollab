@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ModelMessage } from "ai";
 
-import { CognitiveMemory, extractIdentifiers } from "@astracollab/not-another-harness";
+import { CognitiveMemory, extractIdentifiers } from "not-another-harness";
 import { detectMemoryTriggers, MemoryInjectionLog } from "../src/memory-injection.js";
 import { localMemory } from "../src/memory-backend.js";
 

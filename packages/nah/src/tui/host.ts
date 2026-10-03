@@ -26,6 +26,8 @@ import { saveLastModel } from "../model-preferences.js";
 import { runTurn, resolveInjection, type SessionState } from "../session.js";
 import { applyUsageEvent, handleSlashCommand, setActiveModel, setupProvider } from "../repl.js";
 import { handleCogmemCommand } from "../cogmem-command.js";
+import { confirmOnStdout, runStudioCommand } from "../studio-command.js";
+import { attachStudio } from "../telemetry-export.js";
 import { defaultSessionFile, withFileInclusions } from "../context.js";
 import { c } from "../render.js";
 import { exclusiveCommands, renderCommandHelp, SLASH_COMMANDS } from "../commands.js";
@@ -365,6 +367,30 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
       await exclusive(async () => {
         await setupProvider(state, arg, { write: (chunk: string) => sink.write(chunk) } as never);
       });
+      return;
+    }
+
+    if (name === "studio") {
+      // Exclusive for the same reason `/provider` is: the first run installs a
+      // package, and that question needs the terminal. The Studio it starts does
+      // not — that runs in the background, so this is back in the transcript
+      // before the next prompt is drawn.
+      output.addLine(c.dim("  Studio…"));
+      screen.requestRender(true);
+      await exclusive(async () => {
+        await runStudioCommand(input, {
+          cwd: state.cwd,
+          out: { write: (chunk: string) => sink.write(chunk) } as never,
+          confirm: confirmOnStdout,
+        });
+      });
+      // Report from the next turn rather than the one after a restart: someone who
+      // typed /studio is watching the dashboard for their own session in it.
+      const attached = await attachStudio(state);
+      if (attached) {
+        output.addLine(c.dim(`  this session is reporting to ${attached.endpoint.url} as ${attached.agent.name}`));
+      }
+      screen.requestRender(true);
       return;
     }
 

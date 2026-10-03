@@ -132,6 +132,14 @@ export const toolLabel = (toolName: string, input: unknown): string => {
       return `$ ${typeof args.command === "string" ? clip(args.command) : ""}`;
     case "delegate_task":
       return `delegate in isolated worktree: ${typeof args.title === "string" ? clip(args.title) : "task"}`;
+    case "delegate_tasks": {
+      const tasks = Array.isArray(args.tasks) ? (args.tasks as Array<Record<string, unknown>>) : [];
+      // The count is the whole point of the batch call, so it leads; the titles
+      // follow because a fan-out of six is worth reading in the transcript.
+      return `delegate ${tasks.length} subtasks in isolated worktrees: ${tasks
+        .map(({ title }) => (typeof title === "string" ? clip(title, 24) : "task"))
+        .join(", ")}`;
+    }
     // Bookkeeping, not exploration: show the verb so the transcript reads as
     // intent ("find checks", "save plan") instead of a bare tool name repeated.
     case "task_ledger": {
