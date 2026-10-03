@@ -2,9 +2,9 @@ import { createBuilder } from "@rocicorp/zero";
 import { schema as generatedSchema } from "./generated/zero/schema";
 
 export const schema = {
-  ...generatedSchema,
-  enableLegacyMutators: false,
-  enableLegacyQueries: false,
+	...generatedSchema,
+	enableLegacyMutators: false,
+	enableLegacyQueries: false,
 };
 
 export const builder = createBuilder(schema);
