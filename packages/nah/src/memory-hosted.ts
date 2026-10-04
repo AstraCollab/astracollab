@@ -110,6 +110,19 @@ const TURN_FIELD_LIMIT = 200000;
 const clipTurnField = (text: string): string =>
   text.length > TURN_FIELD_LIMIT ? `${text.slice(0, TURN_FIELD_LIMIT)}…` : text;
 
+/**
+ * A call whose failure is a value rather than a throw.
+ *
+ * For the two requests that carry *different* scopes. Settling them separately
+ * is what lets one 403 cost the caller the single thing it was not allowed to
+ * see, rather than the whole answer.
+ */
+const settled = <T>(call: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: unknown }> =>
+  call().then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error })
+  );
+
 /** A short, specific line: what failed, and what to do about it. */
 const describeFailure = (error: unknown): string => {
   if (error instanceof CognitiveMemoryError) {
@@ -229,35 +242,18 @@ export const hostedMemory = (options: HostedMemoryOptions): HostedMemory => {
     },
 
     async describe() {
-      try {
-        const [stats, selfModel] = await Promise.all([warm.stats.get(), warm.selfModel.get()]);
-        failure = null;
-        return {
-          backend: "hosted",
-          location: options.baseUrl,
-          // The service counts the project, not this process, so a per-run number
-          // would be a lie. See MemoryDescription.
-          turnsProcessed: null,
-            counts: {
-              L1: stats.memories.byTier.L1 ?? 0,
-              L2: stats.memories.byTier.L2 ?? 0,
-              L3: stats.memories.byTier.L3 ?? 0,
-            },
-            // `stats` already carries the recent list, so reading what is held
-            // costs no extra round trip. It is recent rather than complete, and
-            // the label says so rather than implying the cache is this short.
-            held: stats.recent.map((memory) => ({ content: memory.content, domains: memory.domains })),
-            heldNote: "most recent, as the service reports them",
-          activeTensions: stats.activeTensions.map(toTension),
-          domains: Object.entries(selfModel.domains).map(([domain, capability]) => ({
-            domain,
-            reliability: capability.reliabilityScore,
-            samples: capability.sampleCount,
-          })),
-          degraded: null,
-        };
-      } catch (error) {
-        note("stats.get", error);
+      // Two calls, two different scopes: `/stats` needs the opt-in `stats:read`,
+      // `/self-model` needs only `memories:read`. A key without `stats:read` is
+      // a working connection that cannot see the counters, so it must not cost
+      // the self-model too — failing both would report one 403 as a dead
+      // service, which is exactly the wrong thing to tell someone debugging.
+      const [stats, selfModel] = await Promise.all([
+        settled(() => warm.stats.get()),
+        settled(() => warm.selfModel.get()),
+      ]);
+
+      if (!stats.ok && !selfModel.ok) {
+        note("stats.get", stats.error);
         const empty: MemoryDescription = {
           backend: "hosted",
           location: options.baseUrl,
@@ -271,6 +267,48 @@ export const hostedMemory = (options: HostedMemoryOptions): HostedMemory => {
         };
         return empty;
       }
+
+      failure = null;
+      const denied = !stats.ok ? stats.error : !selfModel.ok ? selfModel.error : null;
+
+      const base: MemoryDescription = {
+        backend: "hosted",
+        location: options.baseUrl,
+        // The service counts the project, not this process, so a per-run number
+        // would be a lie. See MemoryDescription.
+        turnsProcessed: null,
+        counts: { L1: 0, L2: 0, L3: 0 },
+        held: [],
+        heldNote: "not reported by the service",
+        activeTensions: [],
+        domains: selfModel.ok
+          ? Object.entries(selfModel.value.domains).map(([domain, capability]) => ({
+              domain,
+              reliability: capability.reliabilityScore,
+              samples: capability.sampleCount,
+            }))
+          : [],
+        // A denied scope is not a sick backend, but it is the one thing standing
+        // between this user and the numbers, so it is named rather than hidden.
+        degraded: denied === null ? null : describeFailure(denied),
+      };
+
+      if (!stats.ok) return base;
+
+      return {
+        ...base,
+        counts: {
+          L1: stats.value.memories.byTier.L1 ?? 0,
+          L2: stats.value.memories.byTier.L2 ?? 0,
+          L3: stats.value.memories.byTier.L3 ?? 0,
+        },
+        // `stats` already carries the recent list, so reading what is held
+        // costs no extra round trip. It is recent rather than complete, and
+        // the label says so rather than implying the cache is this short.
+        held: stats.value.recent.map((memory) => ({ content: memory.content, domains: memory.domains })),
+        heldNote: "most recent, as the service reports them",
+        activeTensions: stats.value.activeTensions.map(toTension),
+      };
     },
 
     async remember(entry) {

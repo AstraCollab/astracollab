@@ -212,6 +212,30 @@ describe("an explore child hands back a bounded answer", () => {
     expect(String(quick)).toContain("FOUND-IT");
   });
 
+  it("caps at Anthropic's documented distilled return rather than a tighter guess of ours", async () => {
+    const t = tools([]);
+    const quick = await t.delegate_explore!.execute!({ title: "a", question: "q", depth: "quick" }, {} as never);
+    const thorough = await t.delegate_explore!.execute!({ title: "a", question: "q", depth: "thorough" }, {} as never);
+    // "often 1,000-2,000 tokens" of condensed summary, at ~4 chars/token. The
+    // first cut of this was 1_200/2_500 — a token figure read as a character
+    // figure, which ran ~3x tighter than the guidance and clipped answers the
+    // guidance describes as normal. These exact values are the regression guard.
+    expect(answers(String(quick))[0]!.length).toBe(4_000);
+    expect(answers(String(thorough))[0]!.length).toBe(8_000);
+  });
+
+  it("tells the parent that declining is a correct outcome, not a failure to use the tool", () => {
+    const t = tools([]);
+    const description = String(t.delegate_explore!.description);
+    // The description otherwise only ever argues FOR delegating. Measured on the
+    // live eval that pushed the delegation rate from 52% to 100% — but that
+    // fixture is a read-only sweep where delegating is always right, so 100%
+    // there cannot distinguish good judgement from having removed the model's
+    // exit. Without this the tool can only say yes.
+    expect(description).toMatch(/declin/i);
+    expect(description).toMatch(/scale/i);
+  });
+
   it("caps each child in a fan-out at its own depth, not at the batch's widest", async () => {
     const t = tools([]);
     const mixed = String(
@@ -244,10 +268,12 @@ describe("an explore child hands back a bounded answer", () => {
     );
     // Six children each wrote a 9k-char report; the parent should see six capped
     // answers, not six transcripts. The child pays for the searching either way.
+    // The ceiling is Anthropic's documented 1,000-2,000 token distilled return
+    // (~4k/~8k chars), not a tighter guess of ours — see EXPLORE_REPORT_CHARS.
     const perChild = answers(six);
     expect(perChild).toHaveLength(6);
-    for (const answer of perChild) expect(answer.length).toBeLessThanOrEqual(2_500);
-    expect(answers(one)[0]!.length).toBe(2_500);
-    expect(perChild.reduce((n, a) => n + a.length, 0)).toBe(6 * 2_500);
+    for (const answer of perChild) expect(answer.length).toBeLessThanOrEqual(8_000);
+    expect(answers(one)[0]!.length).toBe(8_000);
+    expect(perChild.reduce((n, a) => n + a.length, 0)).toBe(6 * 8_000);
   });
 });

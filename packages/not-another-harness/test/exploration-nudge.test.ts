@@ -207,9 +207,13 @@ describe("the exploration nudge", () => {
 	it("counts from the last mutation, not from the start of the turn", async () => {
 		// The nudge used to key on the absolute step, so an edit on step 1 silenced it
 		// for the rest of the turn even if the run then read eight files without
-		// changing anything. It now measures consecutive non-mutating steps, which is
-		// the same signal the no-progress stop uses — so a run that edits and then
-		// goes quiet is still caught, and a run that keeps editing never is.
+		// changing anything. It now measures consecutive non-mutating steps, so a
+		// run that edits and then goes quiet still hears about it, and a run that
+		// keeps editing never does.
+		//
+		// That signal is now advisory only. It used to double as the no-progress
+		// *stop*; it no longer is, because a long read-only stretch is productive
+		// work here rather than a stall.
 		const { seen } = await runAndCapture([
 			() => editStep(),
 			() => grepStep("a"),

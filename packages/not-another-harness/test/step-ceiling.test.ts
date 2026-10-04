@@ -20,6 +20,22 @@ const readTool = () => ({
 	}),
 });
 
+/** A read-only tool that returns the same bytes for every call. */
+const fixedOutputTool = () => ({
+	read: tool({
+		inputSchema: z.object({ path: z.string() }),
+		execute: async () => "contents",
+	}),
+});
+
+/** A read-only tool that returns something the run has not seen for each path. */
+const novelOutputTool = () => ({
+	read: tool({
+		inputSchema: z.object({ path: z.string() }),
+		execute: async ({ path }) => `contents of ${path}`,
+	}),
+});
+
 /** A tool the harness counts as progress. */
 const editTool = () => ({
 	edit: tool({
@@ -187,9 +203,74 @@ describe("the no-progress guard replaces the ceiling", () => {
 		expect(result.reason).toBe("no-progress");
 	});
 
-	// The run here is long by design — it must outlast NO_PROGRESS_STEPS to prove the
-	// guard does not fire — so the default 5s budget is what is wrong, not the test.
-	// Under load it was the first thing in the suite to time out.
+	it("does not stop a long run of read-only steps that are each doing new work", { timeout: 30_000 }, async () => {
+		// The regression this guards. Forty reads of forty *different* files is a
+		// healthy investigation, not a stall — and it is precisely the shape a
+		// `delegate_explore` child always has, since those are read-only by
+		// construction. Counting non-mutating steps ended these at a fixed depth,
+		// which is a length limit dressed as a progress check.
+		//
+		// The contrast with the test above is the point: that one gets the same bytes
+		// back every step and this one does not, and the only thing that should
+		// separate them is whether the run is still learning anything.
+		const steps: Array<() => ReturnType<typeof textStep>> = [];
+		for (let i = 0; i < 40; i += 1) {
+			steps.push(() => toolStep("read", { path: `file-${i}.ts` }, `c${Math.random()}`));
+		}
+		steps.push(textStep);
+
+		const run = runAgent({
+			model: scripted(steps),
+			system: "s",
+			prompt: "go",
+			// Each read returns text the run has not seen, which is what makes this
+			// a sweep rather than a spin.
+			tools: novelOutputTool(),
+		});
+		await drain(run.events);
+		const result = await run.result;
+
+		// "completed", not "no-progress": it was allowed to finish on its own terms.
+		expect(result.reason).toBe("completed");
+		expect(result.steps).toBeGreaterThan(15);
+	});
+
+	it("stops a run that varies its calls but keeps getting the same result back", { timeout: 30_000 }, async () => {
+		// The case the call-comparison detectors cannot see, and the one the removed
+		// read-only step count caught only by accident. Every step calls a
+		// *different* path, so no two calls are identical and the doom-loop
+		// detector stays quiet; every call comes back with the same bytes, so the
+		// run has learned nothing for as long as it has been going.
+		//
+		// `git log -3`, `git log -5`, `git log -10` against a history that is not
+		// changing is this shape in the wild.
+		const steps: Array<() => ReturnType<typeof textStep>> = [];
+		for (let i = 0; i < 40; i += 1) {
+			steps.push(() => toolStep("read", { path: `probe-${i}.ts` }, `c${Math.random()}`));
+		}
+		steps.push(textStep);
+
+		const run = runAgent({
+			model: scripted(steps),
+			system: "s",
+			prompt: "go",
+			tools: fixedOutputTool(),
+		});
+		await drain(run.events);
+		const result = await run.result;
+
+		expect(result.reason).toBe("no-progress");
+		// Warned before stopped: the run is told what it is doing and given room
+		// to change approach, which is the whole value of the gap between the two.
+		expect(
+			result.messages.some((m) => typeof m.content === "string" && m.content.includes("adds nothing to what you know")),
+		).toBe(true);
+	});
+
+	// The run here is long by design — it must outlast every bound the harness has,
+	// including the "you have learned nothing" stop — so the default 5s budget is
+	// what is wrong, not the test. Under load it was the first thing in the suite
+	// to time out.
 	it("does not fire on a run that keeps editing, however long it runs", { timeout: 30_000 }, async () => {
 		// The distinction a step counter cannot make. Same number of steps, opposite
 		// outcomes, and the only difference is whether anything is being changed.

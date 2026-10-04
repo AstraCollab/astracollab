@@ -499,6 +499,97 @@ Three details that are not guessable, each of which fails silently:
 status unset, so a trace distinguishes *waiting on a person* from *crashed* and from
 *still running*.
 
+## Asking the user mid-run: `ask_user` and `submit_plan`
+
+```ts
+import { createAskUserTool, createSubmitPlanTool, suspensionResumeMessage } from "not-another-harness";
+
+const { events, result } = runAgent({
+  ...,
+  tools: { ask_user: createAskUserTool(), submit_plan: createSubmitPlanTool() },
+});
+
+// A tool that needs something only a person has:
+for await (const event of run.events) {
+  if (event.type === "tool-suspended") {
+    // { toolCallId, toolName, payload } — render the question, collect an answer
+  }
+}
+```
+
+A tool that cannot finish without a person calls `suspend(payload)` from its
+execution context. The run stops with `reason: "suspended"` and the calls listed on
+`result.pendingSuspensions`. Resume by handing the transcript back:
+
+```ts
+const { messages, pendingSuspensions } = result;
+const answers = { [pendingSuspensions[0].toolCallId]: "staging" };
+
+const resumed = runAgent({
+  ...,
+  messages: [...messages, suspensionResumeMessage(pendingSuspensions, answers)],
+  toolResumeData: answers,   // keyed by toolCallId
+  prompt: "",                // the transcript already has the task
+});
+```
+
+### Why the run has to stop
+
+A parked call has no result, so the next request would carry a `tool-call` with nothing
+after it and be rejected. Same constraint as a held approval, and for the same reason.
+
+Distinct from `awaiting-approval` because the two are answered differently: approval is
+a boolean permission question and the tool has not run; a suspension carries an
+**open-ended typed value** the tool defines, and the tool *has* run — far enough to
+decide it needed something. Answering one with the other leaves a tool holding a
+boolean where it expected text.
+
+### Why `suspend` throws, and the tool re-runs
+
+`suspend()` throws rather than returning a sentinel, because a tool that carries on
+past it has already answered a question nobody was asked. On resume the tool is
+**re-run from the top**, statelessly: it checks `resumeData` first, returns it, and
+suspends again otherwise. There is no coroutine and no parked stack frame.
+
+**So a suspended tool must do no work before suspending — that work runs twice.**
+
+### The transport, since the SDK has no such primitive
+
+The AI SDK has no suspension at all. Two SDK rules decide the shape, and both were
+found by trying the obvious thing:
+
+- **A `tool-result` marks the call finished**, so a synthetic result means the tool is
+  never re-executed and the resume silently does nothing. It looks successful.
+- **A `tool-approval-response` releases the call.** So the harness records a parked
+  call as a `tool-approval-request` with a derived id (`suspension-<toolCallId>`), and
+  `suspensionResumeMessage` answers it with the matching response.
+
+Two consequences worth knowing:
+
+- The id is **derived**, not generated, so a caller resuming from a persisted
+  transcript does not have to have saved it — and a resume assembled twice still
+  matches.
+- `toolResumeData` and the resume message **must agree**: the message makes the SDK
+  re-execute, the option puts the value in the tool's hands. `suspensionResumeMessage`
+  exists so a caller cannot build one without the other.
+
+Resumed results are written into the transcript by the harness. The SDK sends them to
+the model but omits them from `response.messages`, so without that the persisted history
+would show a question with no answer — and the next turn's model, seeing no reply,
+would ask again.
+
+### Only two of Mastra's six built-ins
+
+Mastra injects six (`ask_user`, `submit_plan`, `task_write`, `task_update`,
+`task_complete`, `task_check`). Only the two that are the agent's own conversation with
+a person are reproduced; the other four are a todo-list mechanism belonging to a
+different product. Enabling them is a caller's decision — `createInteractiveTools()`
+returns both as a plain tool set, the same shape Mastra's `disableBuiltinTools` takes.
+
+`submit_plan` takes the plan's **path**, never its body, and the host reads the file.
+That is deliberate rather than a simplification: several plans can exist over a
+session, and a body inside a tool call is what makes them ambiguous.
+
 ## Warm sessions: `createSessionManager`
 
 The runtime half of what Mastra's `Harness` gave `@astracollab/client`: a keyed

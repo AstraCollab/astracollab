@@ -2,6 +2,7 @@ import { getErrorMessage, type SharedV2ProviderOptions } from "@ai-sdk/provider"
 import {
 	type ModelMessage,
 	type ToolChoice,
+	type ToolResultPart,
 	type ToolSet,
 	stepCountIs,
 	streamText,
@@ -15,6 +16,7 @@ import {
 	withCachedToolSchemas,
 } from "./cache.js";
 import { compactMessages } from "./compaction.js";
+import { createToolSuspend, isSuspension } from "./suspend.js";
 import { createStepDedupe } from "./dedupe.js";
 import { estimateMessageTokens, estimateRequestTokens } from "./estimate.js";
 import { pruneOldToolResults } from "./prune.js";
@@ -29,6 +31,7 @@ import type {
 	HarnessStopReason,
 	HarnessUsage,
 	PendingApproval,
+	PendingSuspension,
 	StepOverrides,
 } from "./types.js";
 
@@ -61,8 +64,8 @@ import type {
  * An interactive run ends when the task is done, the context window is full, or
  * a human interrupts.
  *
- * What replaces it is not a bigger number: see `NO_PROGRESS_STEPS`, which bounds
- * the one failure a cap was ever for.
+ * What replaces it is not a bigger number: the doom-loop detector below, which
+ * compares each call to the last three rather than counting steps.
  */
 const DEFAULT_MAX_STEPS = Number.POSITIVE_INFINITY;
 /**
@@ -92,6 +95,17 @@ const DEFAULT_KEEP_RECENT = 6;
 /** Headroom kept aside so a compaction summary can still be paid for. */
 const COMPACTION_RESERVE_TOKENS = 16_000;
 /**
+ * Where in the window compaction fires, as a fraction of `maxContextTokens`.
+ *
+ * 0.8 is Claude Code's figure, recovered from its installed binary: it
+ * auto-compacts once the request reaches 80% of the window and holds the
+ * remainder back as a summary buffer. Every mature harness places the trigger
+ * near the wall rather than near the middle, because context rot is a gradient
+ * and lossy summarization does the most damage while there is still room to
+ * think.
+ */
+const COMPACT_AT_WINDOW_FRACTION = 0.8;
+/**
  * Headroom kept aside on the dollar rail before compaction is worth its own
  * cost. A compaction is itself a model call, so triggering it at the last
  * moment spends budget the run cannot spare.
@@ -102,30 +116,6 @@ const COMPACTION_RESERVE_MULTIPLIER = 2;
  * tokens count against the window too, so this is not as generous as it looks.
  */
 const OUTPUT_HEADROOM_TOKENS = 8_000;
-
-/**
- * Consecutive non-mutating steps before the run is declared stuck.
- *
- * This is what a step cap was actually for, so it is what replaced one. Every
- * mature harness bounds the same thing and none of them count steps:
- *
- * - Claude Code's goal mode stops "if Claude keeps answering the evaluator
- *   without making progress (no tool use for several turns in a row)".
- * - opencode does not stop at all; it guards the loop itself, asking permission
- *   when the same tool gets the same input three times running.
- *
- * A step counter cannot tell those apart, which is why it kept cutting working
- * runs: step 32 of a merge resolution looks exactly like step 32 of a loop.
- * "Has it changed anything lately" can tell them apart, because a stuck run stops
- * mutating and a working one does not.
- *
- * 15 rather than 3 because the signal is coarse — several read-only steps are
- * normal inside a real task (check the output of the last edit, read a file
- * before editing it) — so this wants a margin, not a hair trigger. The nudge
- * below fires far earlier on the same signal, which means a run heading for this
- * has already been told.
- */
-const NO_PROGRESS_STEPS = 15;
 
 /**
  * Why a run is being wound up, in the model's own terms.
@@ -248,8 +238,9 @@ const REPEAT_CALL_THRESHOLD = 3;
  *
  * This is load-bearing rather than advisory, which is why the threshold is not
  * "never". `bash` counts as progress because the harness cannot see whether a
- * command changed anything, so a shell-driven loop never trips
- * `NO_PROGRESS_STEPS` no matter how long it runs. If the detector only warned,
+ * command changed anything, so a shell-driven loop is caught here and nowhere
+ * else. If the detector only warned, this class of loop would be the one failure
+ * nothing bounds.
  * this class of loop would be the one failure nothing bounded.
  */
 const REPEAT_STRIKE_LIMIT = 3;
@@ -257,6 +248,76 @@ const REPEAT_STRIKE_LIMIT = 3;
 const REPEAT_CALL_WARNING = (toolName: string): string =>
 	`You have made the identical \`${toolName}\` call three steps running and nothing has come of it. The same call returns the same result, so it is not telling you anything you do not already have.\nChange the approach rather than repeating it: read a different file, widen the search, or say plainly what you are stuck on and what you would need to get past it. If the work is genuinely done, say so and stop.`;
 
+/**
+ * Consecutive steps in a row where every tool result was one this run has
+ * already read.
+ *
+ * This is the signal the removed read-only step count was reaching for. That
+ * count asked "has this run changed anything lately", which cannot separate a
+ * healthy investigation from a stall — a sweep across twenty files is
+ * fifteen-plus read-only steps of pure progress, and a `delegate_explore` child
+ * is nothing *but* that, so the count killed the exact work the harness exists
+ * to delegate.
+ *
+ * This asks the question the count should have asked: **did the last step tell
+ * the run anything it did not already know?** A step whose results are all
+ * familiar taught nothing, however many distinct calls it made. Breadth resets
+ * the counter — a sweep reads something new on every step and never reaches it —
+ * so it cannot fire on length, which is what made the old guard wrong.
+ *
+ * The stop lives here rather than being left entirely to the doom-loop detector
+ * above: that one compares calls, so it is blind to the spin this catches, which
+ * varies the argument every pass (`git log -3`, `git log -5`, `git log -10`
+ * against a history that is not changing) and gets back the same lines each
+ * time.
+ */
+const UNPRODUCTIVE_WARN_AT = 8;
+/**
+ * Where the run actually stops, given room to change approach after the warning.
+ *
+ * Eight to warn and twelve to stop: the gap is what makes the warning worth
+ * having. Every mature harness bounds this same failure by asking the user, and
+ * the one that does not — opencode — asks before it acts; a run told plainly what
+ * it is doing has the cheapest opportunity to stop itself of any bound here.
+ */
+const UNPRODUCTIVE_STOP_AT = 12;
+/**
+ * Result fingerprints kept before the oldest are dropped.
+ *
+ * A spin repeats *recently*, so the useful window is short and a run's full
+ * history is not needed. Bounded because the fingerprint set is otherwise the
+ * only structure in this loop that grows without limit, and a long run's worth
+ * of hashes is memory spent on a signal that only ever looks backwards a few
+ * steps.
+ */
+const SEEN_RESULT_LIMIT = 512;
+
+const UNPRODUCTIVE_WARNING =
+	`Your last few steps have returned results this run already has — different calls, the same information. Each one costs a request and adds nothing to what you know.\n\nStop re-asking the same question. Either the answer you need is not in what you have already read, in which case name what you would need to find it, or it is there, in which case use it. If the work is genuinely done, say so and stop.`;
+
+/**
+ * Fingerprint a tool result so the run can recognise the same bytes again
+ * without keeping them.
+ *
+ * Two hashes rather than one, plus the length and tool name: a collision here
+ * marks a step as having learned nothing, so a weak fingerprint would stop real
+ * work, and both accumulators would have to collide together on the same result
+ * for that to happen. Reading the output to hash it does not touch the
+ * transcript, so it costs nothing against the prompt cache — the reason
+ * `prune.ts` refuses to elide tool results is that rewriting bytes behind the
+ * cache breakpoint collapsed the hit rate by 85%.
+ */
+const resultFingerprint = (toolName: string, output: unknown): string => {
+	const text = typeof output === "string" ? output : JSON.stringify(output ?? "");
+	let a = 0x811c9dc5;
+	let b = 5381;
+	for (let i = 0; i < text.length; i += 1) {
+		const code = text.charCodeAt(i);
+		a = Math.imul(a ^ code, 0x01000193);
+		b = (Math.imul(b, 33) + code) | 0;
+	}
+	return `${toolName}:${text.length}:${(a >>> 0).toString(36)}${(b >>> 0).toString(36)}`;
+};
 /**
  * Does this transcript end in a decision the SDK is waiting on?
  *
@@ -272,6 +333,50 @@ const endsWithApprovalResponse = (messages: ModelMessage[]): boolean => {
 	return last.content.some(
 		(part) => (part as { type?: string }).type === "tool-approval-response",
 	);
+};
+
+/**
+ * The approval id a parked call is answered by.
+ *
+ * Derived from the `toolCallId` rather than generated, so a caller resuming from a
+ * persisted transcript does not have to have saved an id — and so assembling the same
+ * resume twice still matches. The `suspension-` prefix keeps it clear of an approval
+ * id in a transcript that holds both.
+ */
+const suspensionApprovalId = (toolCallId: string): string => `suspension-${toolCallId}`;
+
+/**
+ * Attach a `tool-approval-request` to the assistant message that made the call.
+ *
+ * Mutates the message the SDK just produced rather than rebuilding it, because the SDK
+ * owns that shape and a hand-built copy would drift from it. The part is appended to
+ * the tool call's own assistant message, which is where the SDK looks for it when a
+ * response arrives.
+ *
+ * The `inputSchemaInput` field carries the tool's real input, so the SDK — and any
+ * host rendering from the part — sees the call the question belongs to.
+ */
+const markSuspended = (
+	messagesFromStep: ModelMessage[],
+	suspension: { toolCallId: string; toolName: string; input?: unknown },
+): void => {
+	const target = messagesFromStep.find(
+		(message) =>
+			message.role === "assistant" &&
+			Array.isArray(message.content) &&
+			message.content.some(
+				(part) =>
+					(part as { type?: string; toolCallId?: string }).type === "tool-call" &&
+					(part as { toolCallId?: string }).toolCallId === suspension.toolCallId,
+			),
+	);
+	if (!target || !Array.isArray(target.content)) return;
+	(target.content as unknown[]).push({
+		type: "tool-approval-request",
+		approvalId: suspensionApprovalId(suspension.toolCallId),
+		toolCallId: suspension.toolCallId,
+		...(suspension.input === undefined ? {} : { inputSchemaInput: suspension.input }),
+	} as unknown as ModelMessage["content"][number]);
 };
 
 const emptyUsage = (): HarnessUsage => ({
@@ -530,7 +635,29 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 		);
 		const compactAt = Math.max(
 			10_000,
-			Math.floor(options.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS),
+			Math.floor(
+				options.compactAtTokens ??
+					/**
+					 * One knob for one fact.
+					 *
+					 * The window and the trigger describe the same boundary, so a
+					 * caller who states one should not also have to state the other —
+					 * and getting the pair wrong fails silently. Leave `compactAtTokens`
+					 * alone on a 1M window and every run summarizes at 120k, discarding
+					 * context the model could still think with; set both on a 128k
+					 * window and the trigger lands past the wall.
+					 *
+					 * The reserve comes off first, because a compaction is itself a
+					 * request and has to fit in what is left.
+					 *
+					 * With no window stated there is nothing to derive from, so the
+					 * absolute default stands: it is the conservative choice when the
+					 * real ceiling is unknown.
+					 */
+					(maxContextTokens > 0
+						? maxContextTokens * COMPACT_AT_WINDOW_FRACTION - COMPACTION_RESERVE_TOKENS
+						: DEFAULT_COMPACT_AT_TOKENS),
+			),
 		);
 		const compactionMode = options.compaction ?? "model";
 		const keepRecent = Math.max(
@@ -574,6 +701,23 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 		 * empty list for a run that was waiting on a person.
 		 */
 		const pendingApprovals: PendingApproval[] = [];
+		/**
+		 * Calls parked by a tool mid-execution.
+		 *
+		 * Hoisted out here for the same reason `pendingApprovals` is: the result is
+		 * returned from outside the `try`, so a declaration inside it would be
+		 * invisible to the abort path — and an abort can land after a tool has already
+		 * parked, which is exactly when the caller most needs to be told.
+		 */
+		const pendingSuspensions: PendingSuspension[] = [];
+		/**
+		 * Parked calls already annotated with an approval request.
+		 *
+		 * Without it, a call that stays parked across steps — and one does, because the
+		 * run stops — would be annotated again on every step it survives, stacking
+		 * duplicate requests in the message and making the resume ambiguous.
+		 */
+		const stepSuspensionsSeen = new Set<string>();
 		/**
 		 * Every approval this run has seen, by id.
 		 *
@@ -662,6 +806,67 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 		// thinking-block signatures.
 		// Coverage sits outside the memo and inside the cache marking, so the model
 		// sees the wrapped tools and the breakpoints still land on the real schemas.
+		/**
+		 * Give every tool the per-call suspension scope.
+		 *
+		 * A wrapper rather than a new option on the SDK, because the SDK has no
+		 * suspension concept at all — so this is the only place a tool's `execute` can
+		 * be reached. It only adds keys to the context it forwards, and it never
+		 * inspects or alters the tool, so a tool that knows nothing about suspension
+		 * is unaffected: the same argument object, plus three properties.
+		 *
+		 * `suspend` is installed unconditionally rather than behind an option. A tool
+		 * that never calls it costs one property on a context object it already
+		 * receives, and a flag would have to be threaded through the tool set, the
+		 * wrappers, and every call site — to save a property.
+		 */
+		const withSuspensionScope = (
+			tools: Record<string, unknown>,
+		): Record<string, unknown> => {
+			const wrapped: Record<string, unknown> = {};
+			for (const [name, tool] of Object.entries(tools)) {
+				if (
+					typeof tool !== "object" ||
+					tool === null ||
+					typeof (tool as { execute?: unknown }).execute !== "function"
+				) {
+					wrapped[name] = tool;
+					continue;
+				}
+				const execute = (
+						tool as { execute: (input: unknown, ctx: unknown) => Promise<unknown> }
+					).execute;
+				wrapped[name] = {
+					...tool,
+					execute: async (input: unknown, ctx: unknown) => {
+						const toolCallId = String(
+							(ctx as { toolCallId?: unknown } | undefined)?.toolCallId ?? "",
+						);
+						/**
+						 * Resume data for this call, if the caller supplied any.
+						 *
+						 * Matched by `toolCallId` and never by tool name, so two calls to
+						 * the same tool stay independent — which is what makes a model
+						 * asking two questions in one step workable at all.
+						 *
+						 * Absent keys are simply not set, rather than set to `undefined`.
+						 * The distinction matters: a tool asks "was I resumed" and needs to
+						 * tell that from "resumed with nothing", and `resumeData !== undefined`
+						 * is the only honest test for a resume that carried no value.
+						 */
+						const resumeData = options.toolResumeData?.[toolCallId];
+						return execute(input, {
+							...(ctx && typeof ctx === "object" ? ctx : {}),
+							toolCallId,
+							suspend: createToolSuspend({ toolCallId, toolName: name, input }),
+							...(resumeData === undefined ? {} : { resumeData }),
+						});
+					},
+				};
+			}
+			return wrapped;
+		};
+
 		const cachedTools = withCachedToolSchemas(
 			coverage.tools,
 			options.cacheProvider,
@@ -852,6 +1057,20 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 			 * anywhere — and so neither of them is a step counter wearing a costume.
 			 */
 			let stepsSinceMutation = 0;
+/**
+			 * Steps in a row that taught the run nothing it did not already know.
+			 *
+			 * Reset by a mutation and by any step that returns a result the run has
+			 * not seen, so it stays at zero for the whole of a wide read-only
+			 * investigation and only climbs inside a genuine spin.
+			 */
+			let unproductiveSteps = 0;
+			/** Whether this spell of spinning has been warned about, so it warns once. */
+			let unproductiveWarned = false;
+			/** Fingerprints of results this run has already read, oldest dropped first. */
+			const seenResults = new Set<string>();
+			/** Fingerprints of the results returned by the step being assembled. */
+			let stepResultPrints: string[] = [];
 			let nudged = false;
 			/** Tool-call signatures made during the step being assembled. */
 			let stepCallSignatures: string[] = [];
@@ -875,9 +1094,8 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 			 *
 			 * The warning alone is not a bound. `bash` counts as progress because the
 			 * harness cannot tell whether a command changed anything, so a shell-driven
-			 * loop mutates its way past `NO_PROGRESS_STEPS` forever — every step looks
-			 * like work. This is the only signal that catches it, so it has to end the
-			 * run rather than merely observe it.
+			 * loop looks like work forever — every step mutates. This is the only signal
+			 * that catches it, so it has to end the run rather than merely observe it.
 			 */
 			let repeatStrikes = 0;
 			/**
@@ -1077,7 +1295,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 					model: overrides.model ?? options.model,
 					system: options.system,
 					messages: cachedRequestMessages,
-					tools: cachedTools as ToolSet,
+					tools: withSuspensionScope(cachedTools) as ToolSet,
 					// Left unset rather than defaulted. streamText resolves an unset
 					// toolChoice to "auto" itself today, so passing "auto" would be
 					// equivalent — and pinning it here would freeze a default the SDK is
@@ -1166,7 +1384,28 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 					return new Error(`provider stream error: ${payload}`);
 				};
 
+				/**
+				 * Results for calls resumed at the start of this step.
+				 *
+				 * The SDK executes those during prompt conversion and sends them to the
+				 * provider, but it does **not** put them in `response.messages` — so a
+				 * caller persisting the transcript loses every answer a suspended tool
+				 * produced, and the next turn's history shows the question with no reply.
+				 * Appended here from the stream, which is the only place they exist.
+				 */
+				/** Tool-result parts for calls resumed at the start of this step. */
+				const resumedResults: ToolResultPart[] = [];
+				/**
+				 * Whether this step's own model call has started.
+				 *
+				 * The boundary matters because the SDK runs resumed calls *before* the
+				 * first `start-step`: everything ahead of it belongs to the previous run's
+				 * unfinished business, and everything after it belongs to this step.
+				 */
+				let stepStarted = false;
+
 				for await (const part of stepResult.fullStream) {
+					if (part.type === "start-step") stepStarted = true;
 					if (part.type === "text-delta") {
 						streamedText += part.text;
 						events.push({ type: "text-delta", step, text: part.text });
@@ -1264,6 +1503,18 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 						});
 					} else if (part.type === "tool-result") {
 						const output = part.output;
+						// Before the step has started, a result cannot have come from this
+						// step's own calls — the SDK resolves resumed calls while converting
+						// the prompt, ahead of everything. Recorded separately so it can be
+						// written to the transcript.
+						if (!stepStarted) {
+							resumedResults.push({
+								type: "tool-result",
+								toolCallId: part.toolCallId,
+								toolName: part.toolName,
+								output: { type: "text", value: typeof output === "string" ? output : JSON.stringify(output ?? "") },
+							} as ToolResultPart);
+						}
 						reportedResults.add(part.toolCallId);
 						events.push({
 							type: "tool-result",
@@ -1279,6 +1530,38 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 								(part as { error?: unknown }).error != null,
 						});
 					} else if (part.type === "tool-error") {
+						/**
+						 * A parked call, not a failure.
+						 *
+						 * The SDK reports everything thrown from `execute` as a
+						 * `tool-error`, so a suspension rides that part and is told apart
+						 * by its marker rather than by its type. Getting this backwards is
+						 * not cosmetic: a suspended call reported as an error tells the model
+						 * it failed, and a run that continued would ask the question again
+						 * on the next step — so the user is asked twice and the tool never
+						 * proceeds.
+						 */
+						if (isSuspension(part.error)) {
+							const parked: PendingSuspension = {
+								toolCallId: part.error.toolCallId || part.toolCallId,
+								toolName: part.error.toolName || part.toolName,
+								payload: part.error.payload,
+								input: part.error.input,
+								...options.suspensionScope,
+							};
+							pendingSuspensions.push(parked);
+							events.push({
+								type: "tool-suspended",
+								step,
+								toolCallId: parked.toolCallId,
+								toolName: parked.toolName,
+								payload: parked.payload,
+								...((parked.input === undefined ? {} : { input: parked.input }) as {
+									input?: unknown;
+								}),
+							});
+							continue;
+						}
 						/**
 						 * A tool that threw, which used to be invisible.
 						 *
@@ -1321,7 +1604,54 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 						// yield nothing on every run.
 						stepResult.providerMetadata,
 					]);
-				messages.push(...response.messages);
+				const messagesFromStep = response.messages;
+				messages.push(...messagesFromStep);
+				/**
+				 * Write resumed results into the transcript, and say they were resumed.
+				 *
+				 * Needed because the SDK sends them to the model but omits them from
+				 * `response.messages`. Without this the persisted history shows a
+				 * question with no answer — and since the answer is the entire point of
+				 * asking, the next turn would have the model ask again.
+				 *
+				 * `tool-resumed` is emitted here rather than at the result part because
+				 * the result may be a failure or an empty value; the resume itself
+				 * happened, and that is the fact a UI needs.
+				 */
+				if (resumedResults.length > 0) {
+					messages.push({ role: "tool", content: resumedResults });
+					for (const resumed of resumedResults) {
+						events.push({
+							type: "tool-resumed",
+							step,
+							toolCallId: resumed.toolCallId,
+							toolName: resumed.toolName,
+						});
+					}
+				}
+				/**
+				 * Record parked calls as approval requests, so the SDK's own resume
+				 * machinery works for them.
+				 *
+				 * A suspension has no representation the SDK understands — there is no
+				 * such primitive — so on resume a parked call has nothing to answer and is
+				 * never re-executed: a synthetic `tool-result` does not work either,
+				 * because any result marks the call done. Writing a
+				 * `tool-approval-request` onto the assistant message gives it something
+				 * to answer, so a `tool-approval-response` naming that id releases the
+				 * call, the SDK runs the tool again, and `toolResumeData` puts the value in
+				 * its hands.
+				 *
+				 * The id is derived from the `toolCallId` — `suspension-<toolCallId>` — so a
+				 * caller resuming from a persisted transcript need not have saved it, and a
+				 * resume assembled twice still matches. Deliberately distinct from an
+				 * approval id, so a transcript holding both can never confuse them.
+				 */
+				for (const suspension of pendingSuspensions) {
+					if (stepSuspensionsSeen.has(suspension.toolCallId)) continue;
+					stepSuspensionsSeen.add(suspension.toolCallId);
+					markSuspended(messagesFromStep, suspension);
+				}
 				await options.onStepFinish?.(step, [...messages]);
 				const inputTokens = stepUsage.inputTokens ?? 0;
 				const outputTokens = stepUsage.outputTokens ?? 0;
@@ -1473,6 +1803,64 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 					repeatStrikes = 0;
 				} else {
 					stepsSinceMutation += 1;
+				}
+
+				/**
+				 * Did the step that just finished teach the run anything, and what
+				 * follows from a stretch of steps that did not.
+				 *
+				 * Read from `response.messages` rather than the stream. `fullStream`
+				 * reports the call and lets this loop raise its UI event, but the result
+				 * itself arrives on the `tool`-role messages the SDK built for this step —
+				 * the same shape `endsWithApprovalResponse` reads a few hundred lines up.
+				 * A fingerprint taken from the stream would have been taken from nothing:
+				 * an empty list, every step, forever.
+				 *
+				 * Read only. Nothing here goes back into the transcript, so the cached
+				 * prefix this loop works to protect is untouched.
+				 *
+				 * A step with no results is the model answering rather than working, and
+				 * is judged above; scoring it here would call a finished run a stall.
+				 */
+				stepResultPrints = [];
+				for (const message of response.messages) {
+					if (message.role !== "tool") continue;
+					const content = message.content;
+					if (!Array.isArray(content)) continue;
+					for (const part of content as Array<Record<string, unknown>>) {
+						if (part.type !== "tool-result") continue;
+						const name = typeof part.toolName === "string" ? part.toolName : "";
+						stepResultPrints.push(resultFingerprint(name, part.output));
+					}
+				}
+
+				if (mutatedThisStep) {
+					unproductiveSteps = 0;
+					unproductiveWarned = false;
+					seenResults.clear();
+				} else if (stepResultPrints.length > 0) {
+					const learned = stepResultPrints.some((print) => !seenResults.has(print));
+					if (learned) {
+						unproductiveSteps = 0;
+						unproductiveWarned = false;
+					} else {
+						unproductiveSteps += 1;
+					}
+					for (const print of stepResultPrints) seenResults.add(print);
+					// Insertion-ordered, so the first key is the oldest and dropping it
+					// bounds the set without a second structure to age it.
+					while (seenResults.size > SEEN_RESULT_LIMIT) {
+						for (const oldest of seenResults.keys()) {
+							seenResults.delete(oldest);
+							break;
+						}
+					}
+					// Warned once per spell of it, not once per step: a run told the same
+					// thing eight more times has stopped reading the messages.
+					if (!unproductiveWarned && unproductiveSteps >= UNPRODUCTIVE_WARN_AT) {
+						unproductiveWarned = true;
+						messages.push({ role: "user", content: UNPRODUCTIVE_WARNING });
+					}
 				}
 				mutatedThisStep = false;
 
@@ -1639,6 +2027,22 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 						break;
 					}
 
+					/**
+					 * A tool is parked, so the run stops — for the same hard reason as
+					 * approval: the call has no result, and the next request would carry a
+					 * `tool-call` with nothing after it.
+					 *
+					 * Checked *after* approval, and the order is deliberate. A step can
+					 * produce both — a model that asks a person a question and calls a gated
+					 * tool in the same breath — and approval is the one that must be
+					 * reported first, because a permission question with no answer is a
+					 * different conversation from a question waiting on the user.
+					 */
+					if (pendingSuspensions.length > 0) {
+						reason = "suspended";
+						break;
+					}
+
 				if (!stepHadToolCalls(response.messages)) {
 					// The model produced its final answer — but a human may already have
 					// queued something while that was streaming. Dropping it here would
@@ -1655,28 +2059,42 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 					reason = "completed";
 					break;
 				}
+
 				/**
 				 * The only two ways a run stops for its own reasons.
 				 *
 				 * `max-steps` only fires when the caller asked for a ceiling, so by
-				 * default it never does. What replaced it is the guard that measures the
-				 * thing the ceiling was guessing at: a run that has stopped changing
-				 * anything. Fifteen non-mutating steps in a row, having just declined to
-				 * finish, is not a long task — it is a loop or a stall, and spending the
-				 * rest of the session on it produces nothing.
+				 * default it never does. What replaced it is the guard that compares each
+				 * call to the last three rather than counting steps, because a count cannot
+				 * tell a long task from a loop — step 32 of a merge resolution looks exactly
+				 * like step 32 of a spin.
 				 *
-				 * It sits after the "did the model answer?" check on purpose, so a run
-				 * that decides it is finished is never overridden by a stale progress
-				 * count from earlier in the turn.
+				 * A read-only step is deliberately NOT grounds for ending a run. It used to
+				 * be, at fifteen non-mutating steps in a row, and that was a length limit
+				 * wearing a progress costume: in this harness read-only work *is* the work.
+				 * A `delegate_explore` child is nothing but reads and greps by construction,
+				 * so the guard ended long, healthy investigations at a fixed depth whether
+				 * or not they were still learning. Length is not stagnation. What bounds a
+				 * loop is comparing what came back, which is what the last clause does.
+				 *
+				 * The honest trade, now much smaller than it was: a run that spins on
+				 * *different* calls is caught by `UNPRODUCTIVE_STOP_AT` only when those
+				 * calls keep returning the same bytes. A spin that varies its output as
+				 * well is no longer provably a loop, and is bounded by the context window
+				 * and the spend rails instead.
+				 *
+				 * It sits after the "did the model answer?" check on purpose, so a run that
+				 * decides it is finished is never overridden by a stale progress count from
+				 * earlier in the turn.
 				 */
 				if (step >= stepLimit) {
 					if (stopFor("max-steps")) break;
 					continue;
 				}
 				if (
-					stepsSinceMutation >= NO_PROGRESS_STEPS ||
 					looping ||
-					repeatStrikes >= REPEAT_STRIKE_LIMIT
+					repeatStrikes >= REPEAT_STRIKE_LIMIT ||
+					unproductiveSteps >= UNPRODUCTIVE_STOP_AT
 				) {
 					if (stopFor("no-progress")) break;
 					continue;
@@ -1716,6 +2134,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 					messages,
 					compactions,
 					wrappedUp,
+					pendingSuspensions: [...pendingSuspensions],
 					// An abort can land mid-step, after a request part already asked for
 					// approval, so this is not necessarily empty here. Reporting it keeps
 					// "the user pressed Escape" and "a tool is still unapproved" from being
@@ -1750,6 +2169,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 			compactions,
 			wrappedUp,
 			pendingApprovals: [...pendingApprovals],
+			pendingSuspensions: [...pendingSuspensions],
 		};
 	})();
 

@@ -115,6 +115,20 @@ export type HarnessStopReason =
 	 * policy choice.
 	 */
 	| "awaiting-approval"
+	/**
+	 * A tool called {@link toolSuspend} and is waiting for a value.
+	 *
+	 * Distinct from `awaiting-approval` because the two are answered differently and
+	 * fail differently. Approval has a boolean answer and is a permission question —
+	 * the tool has not run and may never. Suspension carries an **open-ended typed
+	 * value** the tool defines, and the tool *has* run: it got far enough to decide it
+	 * needed something. A caller that treats them alike answers a question with
+	 * `approved: true` and the tool gets a boolean where it expected text.
+	 *
+	 * Same necessity as `awaiting-approval`: a suspended tool produced no result, so
+	 * continuing would send the next request with a `tool-call` and no matching result.
+	 */
+	| "suspended"
 	| "aborted"
 	| "error";
 
@@ -226,6 +240,40 @@ export type HarnessEvent =
 			 * `tool-approval-response` is what makes an audit trail readable.
 			 */
 			isAutomatic: boolean;
+	  }
+	| {
+			/**
+			 * A tool parked itself and is waiting for a value.
+			 *
+			 * The tool *ran*, and got far enough to decide it needed something — which
+			 * is what separates this from `tool-approval-request`, where the tool has
+			 * not run at all. A UI shows a question rather than a confirm button.
+			 *
+			 * There is no result for this call, exactly as for a held approval, so the
+			 * run stops rather than continuing into a request the provider would
+			 * reject.
+			 */
+			type: "tool-suspended";
+			step: number;
+			toolCallId: string;
+			toolName: string;
+			/** What the tool needs. Its shape is the tool's, not the harness's. */
+			payload: unknown;
+			input?: unknown;
+	  }
+	| {
+			/**
+			 * A parked call was answered and its tool re-ran.
+			 *
+			 * The explicit "answered" signal. Deliberately **not** inferred from the
+			 * shape of the tool's output: under a delegating tool the output is the
+			 * delegate's result, not the answer, so a heuristic reads as a resumed run
+			 * that never resumed.
+			 */
+			type: "tool-resumed";
+			step: number;
+			toolCallId: string;
+			toolName: string;
 	  }
 	| {
 			/**
@@ -406,12 +454,15 @@ export type HarnessRunOptions = {
 	/**
 	 * Trigger compaction when the *next request* would carry roughly this many
 	 * input tokens. Measured from the last step's reported input count, so
-	 * repeated re-sending of the transcript does not inflate the trigger. Default
-	 * 120_000.
+	 * repeated re-sending of the transcript does not inflate the trigger.
 	 *
-	 * Set high relative to the model's window on purpose: compaction is lossy, and
-	 * the research on constraint decay is unambiguous that a single compaction can
-	 * drop invariants the agent was relying on. Compact late, and keep cheap
+	 * Defaults to 80% of `maxContextTokens` less a summary reserve, or 120_000
+	 * when no window is stated — so setting the window alone is enough to get a
+	 * trigger that fits the model.
+	 *
+	 * The high trigger is deliberate: compaction is lossy, and the research on
+	 * constraint decay is unambiguous that a single compaction can drop
+	 * invariants the agent was relying on. Compact late, and keep cheap
 	 * tool-output elision underneath it.
 	 */
 	compactAtTokens?: number;
@@ -525,6 +576,97 @@ export type HarnessRunOptions = {
 	 * @see ToolApprovalAnswers
 	 */
 	toolApproval?: unknown;
+	/**
+	 * Resume values for parked tool calls, keyed by `toolCallId`.
+	 *
+	 * Paired with a transcript that ends in a `tool` message holding the same keys,
+	 * because the SDK reads tool-message content to decide what to execute. This
+	 * option exists so a caller can pass the answer *and* the transcript from one
+	 * place, rather than hand-assembling the message part and hoping the two agree —
+	 * a mismatch is silent, and the tool simply waits forever.
+	 *
+	 * A `toolCallId` that is not parked is ignored, and a parked call with no entry
+	 * re-suspends. Both are ordinary: a stale resume is a UI double-click, not a bug.
+	 */
+	toolResumeData?: Record<string, unknown>;
+	/** Pinned onto every {@link PendingSuspension}, for cross-thread resume safety. */
+	suspensionScope?: { threadId?: string; resourceId?: string };
+};
+
+/**
+ * A tool call parked by {@link toolSuspend}, waiting for a value.
+ *
+ * Carries the `toolCallId` because that is how a resume is routed — the answer is
+ * delivered by tool call, not by tool name, so two suspended calls to the same tool
+ * stay independent. The `payload` is whatever the tool suspended with: the shape is
+ * the tool's business, not the harness's, so it is carried as `unknown` and rendered
+ * by whoever knows what it means.
+ */
+export type PendingSuspension = {
+	toolCallId: string;
+	toolName: string;
+	/** What the tool needs, verbatim. */
+	payload: unknown;
+	/** The tool's input, so a UI can describe the call the question belongs to. */
+	input?: unknown;
+	/**
+	 * `threadId`/`resourceId` are pinned here rather than read at resume time.
+	 *
+	 * A session can switch threads while a call is parked, so a resume that looks up
+	 * "the current thread" can answer a question into a different conversation. Both
+	 * are what the caller passed to the run that parked this; a caller resuming a
+	 * suspended call should check them against the run it is about to resume.
+	 */
+	threadId?: string;
+	resourceId?: string;
+};
+
+/**
+ * Park the current tool call until it is given `resumeData`.
+ *
+ * The AI SDK has no equivalent — there is no suspension primitive in it at all — so
+ * this is the harness's own. It follows Mastra's semantics, which are the ones a
+ * client already knows:
+ *
+ * - **It throws.** Not returns, not returns a sentinel: a tool that continues past a
+ *   suspend has already answered, and the alternative is a flag every caller must
+ *   remember to check.
+ * - **The tool is re-run from the top on resume, statelessly.** There is no coroutine
+ *   and no parked stack frame. A suspended tool checks for resume data first and
+ *   returns it, and suspends again otherwise. That is the entire round trip, and it
+ *   is why a tool built this way must not do work before suspending: the work happens
+ *   twice.
+ * - **Not re-entering the approval gate on resume.** The resume schema of an askable
+ *   tool is rarely able to carry an `{ approved }` field, so re-checking approval
+ *   would reject the answer.
+ *
+ * @param payload anything the tool needs to render its request and to interpret the
+ * answer. Validated by nobody: the shape belongs to the tool.
+ */
+export type ToolSuspend = (payload: unknown) => never;
+
+/**
+ * The per-call half of a tool's execution context.
+ *
+ * Passed alongside whatever the caller's own tool context carries, so a tool
+ * written for `toolsContext` and a tool written for suspension can coexist in one
+ * tool set without either knowing about the other.
+ */
+export type ToolCallScope = {
+	/** Park this call. Only present while an `askable` tool set is installed. */
+	suspend?: ToolSuspend;
+	/**
+	 * The value supplied for this call, if it is being resumed.
+	 *
+	 * `undefined` on a first run **and** on a resume where the caller supplied
+   * nothing, which are different situations. A tool that can suspend must therefore
+   * decide on something else — which is what `suspendPayload` is for.
+	 */
+	resumeData?: unknown;
+	/** Why this call was parked, on a resume. Lets the tool re-suspend identically. */
+	suspendPayload?: unknown;
+	/** This call's id, for routing a resume. */
+	toolCallId: string;
 };
 
 export type HarnessRunResult = {
@@ -562,6 +704,15 @@ export type HarnessRunResult = {
 	 * Filter by what the transcript has not already decided.
 	 */
 	pendingApprovals: PendingApproval[];
+	/**
+	 * Calls parked by {@link toolSuspend}, empty unless `reason` is `suspended`.
+	 *
+	 * The resume-side counterpart to `pendingApprovals`, and it answers a different
+	 * question: not "was anything asked" but "what is still unanswered". A caller
+	 * resuming from a persisted transcript has no event stream to replay, so this is
+	 * how it learns what is outstanding.
+	 */
+	pendingSuspensions: PendingSuspension[];
 };
 
 /**

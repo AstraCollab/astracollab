@@ -1,6 +1,6 @@
 {
 	"name": "@astracollab/agents",
-	"version": "0.0.1-beta.0",
+	"version": "0.0.1-beta.1",
 	"description": "AstraCollab's agent configurations on not-another-harness: tool-input sanitisers, per-agent definitions, and the domain stop rules the harness cannot know.",
 	"type": "module",
 	"main": "./dist/index.cjs",

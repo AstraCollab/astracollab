@@ -653,7 +653,11 @@ describe("budget triage", () => {
 			tools: {
 				probe: tool({
 					inputSchema: z.object({ step: z.number() }),
-					execute: async () => "ok",
+					// Echoes its argument, so each step's result differs from the last. A
+					// constant "ok" would be a spin by the harness's reckoning — and it
+					// would rightly be stopped as one — but what this fixture is about is
+					// budget pressure, so its results had better keep being new.
+					execute: async ({ step }) => `ok ${step}`,
 				}),
 			},
 			// Not enough to replay an ever-growing transcript, but enough once it is

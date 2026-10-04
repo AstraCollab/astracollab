@@ -296,6 +296,29 @@ describe("hosted describe", () => {
     expect(description.turnsProcessed).toBeNull();
   });
 
+  it("keeps the self-model when the key may not read stats", async () => {
+    routes.set("GET /api/v1/stats", () =>
+      respond({ error: "Forbidden", message: "nope", requiredScope: "stats:read" }, 403),
+    );
+    routes.set("GET /api/v1/self-model", () => ({
+      calibrationFactor: 1,
+      activeDomains: ["naming"],
+      domains: { naming: { reliabilityScore: 0.62, sampleCount: 4, knownFailurePatterns: [], recommendedStrategies: [] } },
+      weakDomains: ["naming"],
+    }));
+    const memory = hostedMemory({ apiKey: "key-123", baseUrl: BASE });
+
+    const description = await memory.describe();
+
+    // The two endpoints carry different scopes: a key without the opt-in
+    // `stats:read` still has `memories:read`. Losing the self-model to that one
+    // 403 would report a working connection as a broken one.
+    expect(description.domains).toEqual([{ domain: "naming", reliability: 0.62, samples: 4 }]);
+    expect(description.counts).toEqual({ L1: 0, L2: 0, L3: 0 });
+    // And it says which scope is missing, rather than just going quiet.
+    expect(description.degraded).toMatch(/stats:read/);
+  });
+
   it("reports itself unreachable rather than reporting an empty cache", async () => {
     routes.set("GET /api/v1/stats", () => new Error("fetch failed"));
     routes.set("GET /api/v1/self-model", () => new Error("fetch failed"));

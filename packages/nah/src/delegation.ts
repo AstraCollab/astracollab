@@ -76,15 +76,26 @@ const EXPLORE_STEPS = { quick: 8, thorough: 20 } as const;
  * Scaled to the depth knob rather than fixed, because the two depths owe the
  * reader very different amounts: a `quick` child was told to stop at the first
  * place the answer shows up, so a long report from one means it padded, not
- * that it found more. Truncating here is cheap — the child's own window already
- * paid for the searching, and a cut-off tail costs the parent a re-read rather
- * than the parent paying to read the whole thing.
+ * that it found more.
+ *
+ * The bounds are Anthropic's, not ours. Their context-engineering post puts the
+ * size of a distilled subagent return at "often 1,000-2,000 tokens"; at roughly
+ * four characters per token that is ~4,000 and ~8,000 characters. The first cut
+ * of these numbers was 1,200 and 2,500 — characters, not tokens — which put
+ * `quick` at roughly 300 tokens, three times tighter than the low end of the
+ * documented range. Tightening past that does not buy parent context, it just
+ * clips the answer: the live eval on this repo moved `parentTokens` by -2.6%,
+ * which is noise, so the cap was never the lever it was written to be.
+ *
+ * Read this as a fidelity guard rather than a token optimisation. Its job is to
+ * stop a runaway child from handing back a transcript; the thing that actually
+ * protects the parent's window is that the child's *reads* never enter it at all.
  *
  * This only ever applies to the read-only tools. A `delegate_task` child changed
  * files, so its diff *is* the work product, and the harness default leaves those
  * intact.
  */
-const EXPLORE_REPORT_CHARS = { quick: 1_200, thorough: 2_500 } as const;
+const EXPLORE_REPORT_CHARS = { quick: 4_000, thorough: 8_000 } as const;
 
 type ExploreDepth = keyof typeof EXPLORE_STEPS;
 
@@ -295,6 +306,7 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 			"Take the answer as the result. If you find yourself re-reading the files it names to confirm what it said, the search was cheaper to do yourself — the whole point is that its findings land in your context and its reads do not.",
 			"It has no edit or write tool, so it has no way to change a file on purpose. It does have a shell — it can run tests, scripts, and git to check its own answer — and that shell goes through the same approval prompt as yours, so you see every command before it runs.",
 			"Pass depth `quick` when one search would answer it and `thorough` when the answer is spread across files and you want it verified. That is the one knob worth thinking about: a quick child that answers immediately is much cheaper than a thorough one that keeps going.",
+			"Do not delegate a question you can answer from what is already in your context, or one a single read settles — the child costs several times what the read costs. Scale the effort to the question: one quick child for a lookup, several only when the answer is genuinely spread out. Declining to delegate is a correct outcome, not a failure to use the tool.",
 			"Prefer this over `delegate_task` whenever the work is finding something out. Reach for `delegate_task` only when the child must actually change files.",
 		].join(" "),
 		inputSchema: exploreSchema,

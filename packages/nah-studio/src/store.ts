@@ -167,7 +167,12 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
   started_at   INTEGER NOT NULL,
   finished_at  INTEGER,
   model        TEXT,
-  metadata     TEXT NOT NULL DEFAULT '{}'
+  metadata     TEXT NOT NULL DEFAULT '{}',
+  -- Set only while a run is suspended: what it is waiting on, and which steps.
+  -- Null for every other status, so "suspended but nothing recorded" is visible
+  -- rather than reading as a finished run.
+  suspend_payload TEXT,
+  suspended      TEXT
 );
 CREATE INDEX IF NOT EXISTS workflow_runs_started_idx ON workflow_runs (started_at DESC);
 CREATE INDEX IF NOT EXISTS workflow_runs_workflow_idx ON workflow_runs (workflow_id, started_at DESC);
@@ -328,6 +333,12 @@ const toWorkflowRun = (row: Record<string, unknown>): WorkflowRunSummary => ({
 		? {}
 		: { output: parseJson<unknown>(row.output, null) }),
 	...(row.error === null ? {} : { error: String(row.error) }),
+	...(row.suspend_payload === null || row.suspend_payload === undefined
+		? {}
+		: { suspendPayload: parseJson<unknown>(row.suspend_payload, null) }),
+	...(row.suspended === null || row.suspended === undefined
+		? {}
+		: { suspended: parseJson<string[]>(row.suspended, []) }),
 	startedAt: Number(row.started_at),
 	finishedAt: row.finished_at === null ? null : Number(row.finished_at),
 	model: row.model === null ? null : String(row.model),
@@ -345,6 +356,8 @@ const MIGRATIONS: Array<{ table: string; column: string; definition: string }> =
 	[
 		{ table: "traces", column: "agent_id", definition: "TEXT" },
 		{ table: "messages", column: "agent_id", definition: "TEXT" },
+		{ table: "workflow_runs", column: "suspend_payload", definition: "TEXT" },
+		{ table: "workflow_runs", column: "suspended", definition: "TEXT" },
 	];
 
 export class StudioStore {
@@ -1748,11 +1761,23 @@ export class StudioStore {
 
 	finishWorkflowRun(
 		runId: string,
-		outcome: { status: WorkflowRunStatus; output?: unknown; error?: string },
+		outcome: {
+			status: WorkflowRunStatus;
+			output?: unknown;
+			error?: string;
+			/**
+			 * What a suspended run is waiting on, and which steps.
+			 *
+			 * Written unconditionally, so any other status clears them: a run that
+			 * was resumed and then finished must not still read as suspended.
+			 */
+			suspendPayload?: unknown;
+			suspended?: string[];
+		},
 	): void {
 		this.db
 			.prepare(
-				"UPDATE workflow_runs SET status = ?, output = ?, error = ?, finished_at = ? WHERE id = ?",
+				"UPDATE workflow_runs SET status = ?, output = ?, error = ?, finished_at = ?, suspend_payload = ?, suspended = ? WHERE id = ?",
 			)
 			.run(
 				outcome.status,
@@ -1761,6 +1786,12 @@ export class StudioStore {
 					: JSON.stringify(outcome.output ?? null),
 				outcome.error ?? null,
 				now(),
+				outcome.suspendPayload === undefined
+					? null
+					: JSON.stringify(outcome.suspendPayload ?? null),
+				outcome.suspended === undefined
+					? null
+					: JSON.stringify(outcome.suspended),
 				runId,
 			);
 	}

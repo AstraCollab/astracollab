@@ -8,12 +8,32 @@ four-tier memory for agents, served as a credentialed storage layer.
 ## Install
 
 ```sh
-npm i cogmemory ofetch
+npm i cogmemory ofetch     # talking to the service
+npm i cogmemory            # in-process engine only — no ofetch needed
 ```
 
 `ofetch` is a peer dependency on purpose — it is ~5kB, works in Node, Deno,
 Workers and the browser, and bundling a second copy inside every consumer that
 already has one helps nobody.
+
+### Entry points
+
+| Import | Needs | What it is |
+|---|---|---|
+| `cogmemory` | `ofetch` | Everything, including the HTTP `Cogmem` client |
+| `cogmemory/engine` | nothing | The deterministic engine and its helpers |
+| `cogmemory/arbiter` | `ai`, `zod` | The model-backed arbiter |
+
+**Prefer `cogmemory/engine` if you are not calling the service.** The root entry
+carries a top-level `import { ofetch }`, and a top-level import of a module you
+never call still throws: `ERR_MODULE_NOT_FOUND` in any pnpm workspace, where an
+undeclared peer does not resolve and npm's automatic peer installation does not
+apply. The engine makes zero network calls, so requiring an HTTP library to use
+it is pure cost. It is now an **optional** peer, so nothing warns about it either.
+
+```ts
+import { CognitiveMemory, extractDeterministic } from "cogmemory/engine"
+```
 
 ## Use
 

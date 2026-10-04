@@ -48,6 +48,29 @@ export {
   type ReconstructedStep,
   type ShouldStopOptions,
 } from "./anti-loop.js";
+export {
+  createMemoryCircuitBreaker,
+  loadMemory,
+  saveMemory,
+  type MemoryLoad,
+  type MemorySave,
+  type MemorySource,
+} from "./memory.js";
+export {
+  createFallbackMemory,
+  createInMemoryMemory,
+  createWindowedMemory,
+  type FallbackMemoryOptions,
+  type ReadOnlyThreadStore,
+} from "./memory-stores.js";
+export {
+  buildMemoryContext,
+  learnFromTurn,
+  runWithMemory,
+  withMemoryContext,
+  type CognitiveMemoryLike,
+  type CognitiveMemoryOptions,
+} from "./memory-cognitive.js";
 export { withExtraTools } from "./tools.js";
 export {
   logImplementTurn,

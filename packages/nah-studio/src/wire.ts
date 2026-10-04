@@ -365,6 +365,16 @@ export type WorkflowRunSummary = {
 	input: unknown;
 	output?: unknown;
 	error?: string;
+	/**
+	 * What a suspended run is waiting on, and the steps holding it up.
+	 *
+	 * Both present only while `status` is `suspended`. A run that merely recorded
+	 * the status without these is one this process can no longer resume, and the
+	 * Studio needs to be able to say so rather than offer a button that cannot
+	 * work.
+	 */
+	suspendPayload?: unknown;
+	suspended?: string[];
 	startedAt: number;
 	finishedAt: number | null;
 	model: string | null;

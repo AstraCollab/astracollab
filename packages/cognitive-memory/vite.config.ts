@@ -20,11 +20,20 @@ export default defineConfig({
     sourcemap: true,
     minify: "esbuild",
     lib: {
-      // Two entries, so the arbiter — the only thing that needs `ai` and `zod` —
-      // is a separate artifact. Bundling them into the main entry would force
-      // those peers on every consumer, and `ai` is not a small dependency.
+      // Three entries, each with a different peer-dependency profile:
+      //
+      //  - `index`    — everything, including the HTTP client, so it needs `ofetch`.
+      //  - `engine`   — the deterministic core only. No `ofetch`, so a consumer that
+      //                 never makes a network call is not made to install one. This is
+      //                 a *fix*, not a nicety: a top-level `import { ofetch }` in the
+      //                 main entry threw ERR_MODULE_NOT_FOUND in pnpm workspaces,
+      //                 where npm's automatic peer installation does not apply.
+      //  - `arbiter`  — the only thing that needs `ai` and `zod`. Bundling it into the
+      //                 main entry would force those peers on every consumer, and
+      //                 `ai` is not a small dependency.
       entry: {
         index: resolve(__dirname, "src/index.ts"),
+        engine: resolve(__dirname, "src/engine.ts"),
         arbiter: resolve(__dirname, "src/arbiter.ts")
       },
       name: "CognitiveMemory",

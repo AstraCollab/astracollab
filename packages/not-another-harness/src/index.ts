@@ -1,6 +1,20 @@
 export { runAgent } from "./agent.js";
 export { appendApprovalResponses, sessionUpdate } from "./types.js";
 export {
+	createInteractiveTools,
+	createAskUserTool,
+	createSubmitPlanTool,
+	suspensionResumeMessage,
+	type AskUserAnswer,
+	type AskUserInput,
+	type AskUserOption,
+	type AskUserSelectionMode,
+	type SubmitPlanInput,
+	type SubmitPlanResult,
+	type SubmitPlanResumeData,
+} from "./interactive-tools.js";
+export { isSuspension } from "./suspend.js";
+export {
 	createSessionManager,
 	type Session,
 	type SessionManager,
@@ -223,6 +237,9 @@ export type {
 	SessionUpdate,
 	StepOverrides,
 	StepToolChoice,
+	ToolCallScope,
+	ToolSuspend,
+	PendingSuspension,
 	HarnessSteerDelivery,
 	HarnessStopReason,
 	HarnessUsage,

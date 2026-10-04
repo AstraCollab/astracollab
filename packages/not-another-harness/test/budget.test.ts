@@ -406,6 +406,43 @@ describe("compaction trigger uses the whole request", () => {
 		expect(events.some((e) => e.type === "compacted")).toBe(true);
 	});
 
+	it("derives the trigger from the window when the caller states only that", async () => {
+		// One fact, one knob. A caller who tells the harness the window should not
+		// also have to tell it where to compact, and the failure is silent when they
+		// are left to pair them: leave `compactAtTokens` unset on a 1M window and
+		// every run summarizes at 120k, discarding context the model could still
+		// think with — which is where compaction costs the most, per the constraint
+		// -decay work.
+		const model = new MockLanguageModelV4({
+			doStream: async () => ({
+				stream: toolCallStream("c", v4Usage({ input: 130_000, output: 500 })),
+			}),
+		});
+		const seeded: ModelMessage[] = Array.from({ length: 30 }, (_, i) => ({
+			role: i % 2 === 0 ? ("user" as const) : ("assistant" as const),
+			content: `seed-${i} ${"y".repeat(500)}`,
+		}));
+		const run = runAgent({
+			model,
+			system: "s",
+			prompt: "go",
+			messages: seeded,
+			tools: probeTool(),
+			maxSteps: 4,
+			maxContextTokens: 1_000_000,
+			compactKeepRecent: 2,
+			compaction: "truncate",
+			wrapUpOnLimit: false,
+		});
+		const eventsPromise = drain(run);
+		const result = await run.result;
+		await eventsPromise;
+
+		// 130k of a 1M window is nowhere near the wall, so the old fixed 120k
+		// default would have summarized here and now should not.
+		expect(result.compactions).toBe(0);
+	});
+
 	it("reports the prompt once, never adding the cached portion on top", async () => {
 		// The failure this guards against is arithmetic, not convention: a 10,000
 		// token prompt of which 9,900 came from cache must be reported as 10,000. An

@@ -31,7 +31,7 @@ import {
 } from "not-another-harness";
 
 import type { StudioStore } from "./store.js";
-import type { WorkflowRunStatus, WorkflowSummary } from "./wire.js";
+import type { WorkflowSummary } from "./wire.js";
 
 /** Extensions the loader accepts, so the editor cannot save to a name nothing reads. */
 const WORKFLOW_EXTENSIONS = [".mjs", ".js"];
@@ -271,18 +271,40 @@ export class WorkflowRuns {
 		// Background, like an experiment: the caller polls the run it was just given.
 		void (async () => {
 			try {
-				const result = await this.#catalog.orchestrator?.runWorkflow(workflow, {
+				// `canRun` was checked above and is exactly when this is non-null,
+				// but the compiler cannot know that. Left as `?.`, the rest of this
+				// block reads a status off `undefined`, and a null orchestrator
+				// falls into the catch below and records a run that never started
+				// as one the user stopped.
+				const orchestrator = this.#catalog.orchestrator;
+				if (!orchestrator) {
+					this.#store.finishWorkflowRun(run.runId, {
+						status: "stopped",
+						error: "no agent is configured",
+					});
+					return;
+				}
+				const result = await orchestrator.runWorkflow(workflow, {
 					inputData: input as never,
 					signal: controller.signal,
 					onEvent: (event) => this.#record(run.runId, event),
 				});
 				const stopped = this.#stopped.has(run.runId);
 				this.#store.finishWorkflowRun(run.runId, {
-					status: stopped ? "stopped" : (result.status as WorkflowRunStatus),
+					status: stopped ? "stopped" : result.status,
 					...(result.status === "success" ? { output: result.result } : {}),
 					...(result.status === "failed"
 						? { error: result.error.message }
 						: {}),
+					// Only while it really is suspended. A run the user stopped can
+					// come back reporting a suspension, and recording the payload
+					// then would leave a stopped run looking resumable.
+					...(stopped || result.status !== "suspended"
+						? {}
+						: {
+								suspendPayload: result.suspendPayload,
+								suspended: result.suspended,
+							}),
 				});
 			} catch (error) {
 				// A run that throws rather than settling — an aborted signal surfacing at
@@ -313,6 +335,67 @@ export class WorkflowRuns {
 		if (!controller) return { ok: false, reason: "no such run in this Studio" };
 		this.#stopped.add(runId);
 		controller.abort(new Error("stopped from the Studio"));
+		return { ok: true };
+	}
+
+	/**
+	 * Answer a suspended run and let it carry on.
+	 *
+	 * Immediate, like `launch`: the answer only gets the workflow past the step
+	 * that asked, and the rest of the sequence is model calls that can run for
+	 * minutes. The result is recorded by the same background writer `launch` uses,
+	 * and the run's steps keep being recorded because the orchestrator holds the
+	 * original `onEvent` with the suspended run.
+	 *
+	 * Refuses a run id this process does not have suspended, the same way `stop`
+	 * refuses a run it did not start. The orchestrator holds suspended runs in
+	 * memory, so a run id left over from a previous process cannot be answered at
+	 * all — and a Studio restarted since it suspended is the common case, not the
+	 * rare one. Reporting success for a run that never moved would be worse than
+	 * the button not working.
+	 */
+	resume(
+		runId: string,
+		resumeData: unknown,
+	): { ok: boolean; reason?: string } {
+		const orchestrator = this.#catalog.orchestrator;
+		if (!orchestrator) {
+			return { ok: false, reason: "no model is configured, so nothing can run" };
+		}
+		const pending = orchestrator.pendingWorkflows();
+		const waiting = pending.find((entry) => entry.runId === runId);
+		if (!waiting) {
+			return {
+				ok: false,
+				reason: pending.some((entry) => entry.runId === runId)
+					? "that run is already being resumed"
+					: "no suspended run with that id in this Studio",
+			};
+		}
+		void (async () => {
+			try {
+				const result = await orchestrator.resumeWorkflow(runId, resumeData);
+				const stopped = this.#stopped.has(runId);
+				this.#store.finishWorkflowRun(runId, {
+					status: stopped ? "stopped" : result.status,
+					...(result.status === "success" ? { output: result.result } : {}),
+					...(result.status === "failed"
+						? { error: result.error.message }
+						: {}),
+					...(stopped || result.status !== "suspended"
+						? {}
+						: {
+								suspendPayload: result.suspendPayload,
+								suspended: result.suspended,
+							}),
+				});
+			} catch (error) {
+				this.#store.finishWorkflowRun(runId, {
+					status: "failed",
+					error: message(error),
+				});
+			}
+		})();
 		return { ok: true };
 	}
 
