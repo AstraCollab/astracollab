@@ -319,6 +319,64 @@ const resultFingerprint = (toolName: string, output: unknown): string => {
 	return `${toolName}:${text.length}:${(a >>> 0).toString(36)}${(b >>> 0).toString(36)}`;
 };
 /**
+ * The `toolCallId`s of parked calls this transcript is still waiting on.
+ *
+ * Read from the `tool-approval-request` markers the suspension path writes, minus the
+ * ones already answered — so a call the user has already decided about is not offered
+ * again, which is the failure a naive "any marker present" check would produce on the
+ * second follow-up message.
+ */
+export const parkedSuspensionIds = (messages: ModelMessage[]): string[] => {
+	const parked = new Map<string, string>();
+	for (const message of messages) {
+		if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+		for (const part of message.content as Array<Record<string, unknown>>) {
+			const approvalId = part.approvalId;
+			if (
+				part.type === "tool-approval-request" &&
+				typeof approvalId === "string" &&
+				approvalId.startsWith("suspension-")
+			) {
+				parked.set(approvalId.slice("suspension-".length), approvalId);
+			}
+		}
+	}
+	for (const message of messages) {
+		if (message.role !== "tool" || !Array.isArray(message.content)) continue;
+		for (const part of message.content as Array<Record<string, unknown>>) {
+			if (part.type !== "tool-approval-response") continue;
+			const approvalId = part.approvalId;
+			if (typeof approvalId === "string" && approvalId.startsWith("suspension-")) {
+				parked.delete(approvalId.slice("suspension-".length));
+			}
+		}
+	}
+	return [...parked.values()].length > 0 ? [...parked.keys()] : [];
+};
+
+/**
+ * The `tool` message answering every parked call with `answer`.
+ *
+ * One message covering all of them, because the SDK reads answers from the final
+ * message only. Answering each in its own message would leave all but the last
+ * unanswered, and the run would re-suspend on the rest.
+ */
+const suspensionResumeMessages = (
+	toolCallIds: readonly string[],
+	answer: string,
+): ModelMessage[] => [
+	{
+		role: "tool",
+		content: toolCallIds.map((toolCallId) => ({
+			type: "tool-approval-response",
+			approvalId: `suspension-${toolCallId}`,
+			approved: true,
+			reason: answer,
+		})),
+	},
+];
+
+/**
  * Does this transcript end in a decision the SDK is waiting on?
  *
  * The SDK matches an answer to its request by `approvalId` and reads answers from
@@ -683,7 +741,80 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 		 * meaning of a transcript that already ends in a decision. A caller resuming
 		 * passes `prompt: ""`, which is documented on the option.
 		 */
-		const resumesApproval = endsWithApprovalResponse(messages);
+		/**
+		 * Let the user's next message answer a parked call.
+		 *
+		 * Without this, `ask_user` is a form: the user must click something, and the
+		 * run waits for a click. With it, the conversation itself resumes — someone who
+		 * reads "Which environment?" and types "staging" has answered the question, and
+		 * the harness should treat it as the answer rather than ask again.
+		 *
+		 * Deliberately not a model call. The alternative — asking a model to decide
+		 * whether the new message answers the question, and to extract it — is what
+		 * Mastra's `autoResumeSuspendedTools` does, and it is a model that can refuse,
+		 * hedge, or return nothing, for a question a human has already answered plainly.
+		 * The message *is* the answer, which is the whole premise of the tool.
+		 *
+		 * Off by default, and the default matters: a wrong auto-resume silently
+		 * continues a run on a value nobody chose. A caller opting in is asserting that
+		 * an unrecognised reply should proceed rather than re-ask.
+		 */
+		/**
+		 * A transcript with a parked call is **invalid** without an answer, whatever the
+		 * option says: the SDK requires every `tool-call` to be followed by a result, so
+		 * appending a new user message to one throws `MissingToolResultsError` and the
+		 * turn dies on a request the user believed was just a chat message.
+		 *
+		 * That is why the two settings are not really a choice:
+		 *
+		 *  - with `autoResumeSuspensions`, the message *is* the answer, and the call is
+		 *    released;
+		 *  - without it, the call stays parked and the prompt is **refused**, because the
+		 *    only alternative is running a tool against a value nobody chose.
+		 *
+		 * Refusing is the right failure. It costs the user a retry and it reports the
+		 * problem; auto-releasing would silently delete a file or spend money.
+		 */
+		const parkedHere = options.prompt.trim()
+			? parkedSuspensionIds(messages)
+			: [];
+		let autoResumed = false;
+		if (parkedHere.length > 0) {
+			if (!options.autoResumeSuspensions) {
+				/**
+				 * Reported through the normal failure path rather than a bare throw, because
+				 * a bare throw inside the result promise leaves the event stream open: a
+				 * caller draining `run.events` waits forever, and the run never finishes.
+				 * An error event plus a `finish` means the refusal is visible and the stream
+				 * ends, which is what a caller can actually handle.
+				 */
+				const refusal = new Error(
+					"This transcript is waiting on an answer to a suspended tool call, and this run carries no answer for it. " +
+						"Resume it with the answer — `suspensionResumeMessage` builds the message — or set " +
+						"`autoResumeSuspensions` to treat the next user message as the answer. " +
+						"Refused rather than resumed by default: a tool released against a message nobody " +
+						"offered as an answer is worse than a failed request.",
+				);
+				events.push({ type: "error", error: refusal });
+				events.push({
+					type: "finish",
+					reason: "error",
+					text: "",
+					usage: emptyUsage(),
+				});
+				events.close();
+				settled = true;
+				throw refusal;
+			}
+			const answer = options.prompt.trim();
+			messages.push(...suspensionResumeMessages(parkedHere, answer));
+			options.toolResumeData = { ...options.toolResumeData };
+			for (const toolCallId of parkedHere) {
+				options.toolResumeData[toolCallId] = answer;
+			}
+			autoResumed = true;
+		}
+		const resumesApproval = endsWithApprovalResponse(messages) || autoResumed;
 		if (!resumesApproval) messages.push({ role: "user", content: options.prompt });
 
 		const usage = emptyUsage();
@@ -1463,16 +1594,35 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 							...approval,
 							isAutomatic: part.isAutomatic === true,
 						});
-					} else if (part.type === "tool-approval-response") {
-						const held = approvalCalls.get(part.approvalId);
-						events.push({
-							type: "tool-approval-response",
-							step,
-							approvalId: part.approvalId,
-							toolCallId: held?.toolCallId ?? "",
-							approved: part.approved,
-							...(part.reason === undefined ? {} : { reason: part.reason }),
-						});
+				} else if (part.type === "tool-approval-response") {
+					const held = approvalCalls.get(part.approvalId);
+					// A resumed approval must still execute — the transcript says what the model
+					// asked, the approval says what the user allowed, and the tool runs with that
+					// value. Without this replay the harness synthesises a result event but never
+					// calls execute, so destructive actions complete without side effects.
+					if (held && part.approved === true && held.toolName) {
+						const wrapped = (cachedTools as Record<string, unknown>)[held.toolName];
+						if (wrapped && typeof (wrapped as { execute?: unknown }).execute === "function") {
+							const resumeData = options.toolResumeData?.[held.toolCallId];
+							try {
+								await (wrapped as { execute: (input: unknown, ctx: unknown) => Promise<unknown> }).execute(held.input, {
+									toolCallId: held.toolCallId,
+									...(resumeData === undefined ? {} : { resumeData }),
+								});
+							} catch (e) {
+								// A failed execution is visible on the event stream below; swallow here
+								// so replay never crashes the run.
+							}
+						}
+					}
+					events.push({
+						type: "tool-approval-response",
+						step,
+						approvalId: part.approvalId,
+						toolCallId: held?.toolCallId ?? "",
+						approved: part.approved,
+						...(part.reason === undefined ? {} : { reason: part.reason }),
+					});
 					} else if (part.type === "tool-output-denied") {
 						/**
 						 * A denied call, as a result event.

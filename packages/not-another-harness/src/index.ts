@@ -14,6 +14,7 @@ export {
 	type SubmitPlanResumeData,
 } from "./interactive-tools.js";
 export { isSuspension } from "./suspend.js";
+export { parkedSuspensionIds } from "./agent.js";
 export {
 	createSessionManager,
 	type Session,

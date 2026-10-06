@@ -293,7 +293,7 @@ them implies preserving a Mastra artifact being deleted.
 
 | Step | Where | Blocked by |
 |---|---|---|
-| 0. Memory: read-only from the Mastra store, write to a new NAH-native one, plus `cogmemory`'s prompt context | client | **built in `@astracollab/agents`** (`memory.ts`, `memory-stores.ts`, `memory-cognitive.ts` — 119 tests, all exports in dist). Nothing in production calls it yet; see §9 for what the client must supply |
+| 0. Memory: read-only from the Mastra store, write to a new NAH-native one, plus `cogmemory`'s prompt context | client | **built.** `@astracollab/agents` holds the primitives (`memory.ts`, `memory-stores.ts`, `memory-cognitive.ts`, 122 tests, published in `beta.2`). The client's adapters are `lib/services/workspace-ai/mastra-history-reader.ts` (phase 0) and `engine-memory.ts` (phase 1), 16 tests. **Not called by a route yet** |
 | 1. Tool context: deliver actor/authz via closure instead of `requestContext` (~18 tools in `lib/services/ai-tools/chat-tools.ts`) | client | **done — the seam exists, verified, and nothing in production calls it yet** |
 | 1.5. Approval bridge: harness events → the `UIMessageChunk`s the dock renders | client | **done — tested, and nothing in production calls it yet** |
 | 2. New `workspace-assistant` on `runAgent` + `createSessionManager` + `wrapToolsWithSanitisers`, keeping Mastra memory | client | **nothing — unblocked.** Steps 1 and 1.5 are its two prerequisites and both are built; this is where they get wired to `runAgent` and to `writeUiChunk` |
@@ -529,17 +529,92 @@ Verified against `@mastra/core@1.74.0`, not from docs:
   title. Mastra's own doc comment says hosts read the file at `suspendPayload.path`.
   Fixed in the new tool by taking the path only.
 
-### Deliberately not built
+### `autoResumeSuspensions`, and why "off" means refused
 
-**`autoResumeSuspendedTools`** — Mastra's option that lets the next natural user
-message resume a parked tool instead of requiring a form. Highest leverage per line for
-a chat product, and worth adding when the client wires this up.
+Built, and the second half is the finding. Turning it on makes `ask_user` a
+conversation: the user's next message **is** the answer, verbatim, with no model
+deciding whether it answers — Mastra's `autoResumeSuspendedTools` asks a model to
+extract it, and a model can refuse or hedge for something a human has already said
+plainly.
+
+**Off is not "leave it parked."** A transcript with a parked call and no answer is
+*invalid*: the SDK requires every `tool-call` to be followed by a result, so appending
+a user message to one throws `MissingToolResultsError` and the turn dies on what looks
+like a chat message. So the setting is not a preference:
+
+- on — the message is the answer and the call is released;
+- off — the run is **refused**, with an error event and a `finish`.
+
+Refusing is the right failure: it costs a retry and reports the problem, where
+auto-releasing would run a tool against a value nobody chose. Found by writing the test
+and watching a parked transcript reject a plain follow-up.
+
+Two smaller things in it, both pinned because they were initially wrong: a bare throw
+left the event stream **open**, so a caller draining `run.events` hung forever — the
+refusal goes through the normal error-and-finish path; and the already-answered filter
+is unreachable end-to-end (`endsWithApprovalResponse` short-circuits first), so it is
+exported and tested directly. Without that, a stale marker would re-offer a call the
+user already approved — and re-run an approved `deleteFile`.
+
+### Deliberately not built
 
 **Storage-backed `listSuspendedRuns`.** Mastra persists a snapshot per parked run so
 resume survives a cold start; the current coordinator's `Map` does not. NAH needs no
 equivalent — the transcript *is* the persistence, which is most of why this was easier
 here than it looks. Worth noting because that `Map` is the single biggest liability in
 the current implementation.
+
+---
+
+### Wired into the turn, and two bugs that found
+
+`streamWorkspaceAssistantTurn` now takes `memory`, `cognition` and `subagents`. Gate:
+`npm run verify:nah-memory` (13 checks).
+
+**Memory cannot fail a turn**, and that is the property the gate exists for. Every
+path degrades: a store that cannot be read falls back to the transcript **the route
+already had** (not to empty — those are not equivalent, and throwing away `messages`
+turns a degraded turn into a context-free one); a store that cannot be written
+returns the error; a cognition engine that throws yields an empty block. The turn
+still answers, and `memoryDegraded` / `memoryUnsaved` / `cognitionNote` say which part
+is missing — so "no memory" never has to be reported as "the assistant forgot".
+
+**Subagents are bridged, not ported.** Mastra's `subagent` is a builtin the model
+picks by name; NAH's orchestrator is a caller-driven API built for coding children. So
+each of `research` / `draft` becomes **one tool** whose `execute` calls the
+`Orchestrator`, with the parent's tools re-bound so the turn identity follows. The
+model's interface is unchanged, which is the part a user experiences. Two details that
+were wrong first: the tool's `inputSchema` must be **zod**, not a JSON-schema literal
+(the SDK calls `asSchema` and throws "schema is not a function" otherwise), and
+`SubtaskResult` reports in `text`, not `report`.
+
+### Four bugs, all silent in production, all found by the gate
+
+1. **`input.cognition.memory` was discarded.** The turn rebuilt the engine from
+   options, so a caller-supplied engine — the obvious way to test any of this — was
+   thrown away. Worse, rebuilding per turn means the `Map`-backed tiers are forgotten at
+   the end of *every* turn.
+2. **A cognition *build* failure was not reported at all.** Only a learning failure
+   produced `cognitionNote`, so a broken context read looked exactly like "no memory",
+   which is the one conclusion a memory fault must not cause.
+3. **A failed read also suppressed learning.** The learn step was guarded on
+   `!cognitionNote`, so an engine that could not build context also stopped recording
+   what the turn learned. One transient read fault silently cost the facts for *every*
+   later turn — the opposite of a recoverable degradation. Found only because splitting
+   #2 into two fields made the two directions separately assertable.
+4. **A subagent could fake its own delegation.** The gate asserted "the subagent ran" by
+   counting model calls after the first — which the parent's *final* turn also
+   satisfies, so a subagent returning a canned string with no child at all passed. The
+   discriminator is the orchestrator's boundary text, which reaches the provider as a
+   **system-role message inside `prompt`** — not as `system` or `instructions`, both of
+   which arrive empty. Two wrong readings in a row before that was found.
+
+`cognitionNote` and `cognitionLearnNote` are now separate fields rather than one,
+because the consequences differ: a build failure degrades *this* turn's context, a
+learning failure degrades *every future* one, and a caller told only "cognition failed"
+cannot act on that.
+
+Still not wired to a route. What remains is the flag and one chat id.
 
 ---
 
@@ -659,6 +734,80 @@ degradation to last-N is generous. Circuit-break after N consecutive failures.
 `cogmemory`'s `runTurn` already returns `learningSkipped` plus a reason — **surface
 that in telemetry**, because a silent skip is indistinguishable from a working one
 until the thing you taught it never comes back.
+
+### The service, revisited — and why embed is still right
+
+Asked directly, with the deployment facts checked rather than assumed. The answer is
+**still embed**, for a sharper reason than "the service isn't deployed":
+
+- `apps/cognitive-memory` is a **Next.js app on SQLite** — `COGNITIVE_MEMORY_DATABASE_PATH`
+  points at a file, storage is drizzle + libSQL, and the only model-backed extraction is
+  behind `COGNITIVE_MEMORY_MODEL_API_KEY`. It is shaped like a Vercel deploy, not like
+  the `astracollab-mastra` fly app the chat actually runs on.
+- So "run the service on fly" is not a config change; it is a **port**: a new Dockerfile,
+  a `fly.toml`, and a decision about where a single-node SQLite file lives on a fleet
+  where machines can be replaced mid-request. Every one of those is a way to lose
+  memory silently.
+- It also has `better-auth` in front of it, which is another deployment surface the
+  client does not currently need.
+
+What the service *does* have that the embedded engine does not: rules-then-model
+extraction already wired, and multi-tenancy. Both are now covered client-side —
+`engine-memory.ts` composes `extractDeterministic` itself, and the Redis key is
+namespaced by org and user.
+
+**Redis was the missing piece.** The chat runs on fly behind a load balancer, so an
+in-process engine is amnesia across machines: each instance learns only from the turns
+it served. `engine-state-store.ts` persists the snapshot to the **workspace-AI Upstash
+Redis the client already has** (`getWorkspaceAiRedis`, the same one the resumable
+stream and the respond bus use), namespaced `nah:memory:<orgId>:<userId>`, TTL'd, and
+degrading to process-local when unconfigured — the same posture every other Redis
+consumer in that codebase takes.
+
+Revisit the service if there is ever a **second** service that needs the same memory:
+then the shared store stops being a cache the client owns and becomes the product. Until
+then it is a distributed system bought for a single-tenant problem.
+
+### Two corrections the memory wiring produced
+
+**Phase 0's premise was wrong.** It was assumed that history is the
+`WorkspaceAiChat.messages` JSON column. It is not — that column is the **chat pane's**
+transcript; the agent's history is Mastra `Memory` rows in Postgres, read via
+`memory.recall()`. The two are not interchangeable: `toAISdkMessages` is a *display
+projection, lossy by design*, so an Anthropic thinking signature or a `source-document`
+is simply not in a `UIMessage`. Verified rather than assumed — `fromMastra` rejects a
+`UIMessage` outright with `UnmappablePartError`, because it reads Mastra part shapes
+(`tool-invocation`) not AI SDK UI parts (`tool-<name>`). So phase 0 uses
+`createMastraSessionStore` as intended, and **no new converter was needed**.
+
+**Phase 1 is embed, not the service — the reverse of what the research recommended.**
+The research said "talk to the service", but the service has **no deployment**: no
+`fly.toml`, no configuration, and the client has never referenced it. Adopting it is
+not a wiring change; it is standing up a service first. So `cogmemory/engine` is
+embedded, and the service remains the answer to a question nobody has asked yet
+(several app instances, or a state store the client would rather not own).
+
+Embedding does **not** work out of the box, and this was the substantive finding.
+`CognitiveMemory` on its own learns almost nothing: `postTurnAsync` tries a
+model-backed `extract` and otherwise falls back to a regex matching only
+"always / never / make sure to / remember to", so "our org bills monthly on the 1st"
+produces **no context, no recall and no error** — memory that looks installed and is
+inert. And `extractDeterministic`, which *does* capture plain assignments, is exported
+and **never called by the engine** — its only caller is the service. `engine-memory.ts`
+composes the two: rules first and always, a model extractor on top when supplied.
+
+Three mistakes found by writing the test first:
+
+1. **Facts filed in L2 are never injected.** `getPromptContext` includes L0 and L1
+   only; L2 is a candidate tier awaiting promotion. `cogmemory`'s own code says it at
+   `memory.ts:445` — filing in L2 "meant a freshly-taught fact was still missing from
+   the very next prompt".
+2. **`reconcile` is not an ingest hook.** It is a *precision* step over candidates the
+   engine already holds, and `applyExtraction` is private. Ingest goes through the
+   public `addMemory`.
+3. **A fresh engine per turn is amnesia.** `runWithEngineMemory` originally built one
+   per call, which works within a turn and forgets at its end. The engine is only a
+   cache over the snapshot, so `stateStore` is required, not an optimisation.
 
 ### `cogmemory` entry points — corrected, and fixed
 

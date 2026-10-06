@@ -578,6 +578,35 @@ the model but omits them from `response.messages`, so without that the persisted
 would show a question with no answer — and the next turn's model, seeing no reply,
 would ask again.
 
+### `autoResumeSuspensions`: the conversational version
+
+```ts
+runAgent({ ..., autoResumeSuspensions: true });
+```
+
+Off by default, and the default is the point. With it on, the user's next message
+**is** the answer — someone who reads "Which environment?" and replies "staging"
+continues the run instead of filling in a form.
+
+**Off does not mean "leave it parked."** A transcript with a parked call and no answer
+is *invalid* — the SDK requires every `tool-call` to be followed by a result — so
+appending a user message to one throws `MissingToolResultsError`. So the setting is
+not really a choice:
+
+- **on** — the message is the answer, and the call is released;
+- **off** — the run is **refused**, with an error event and a `finish`.
+
+Refusing is the right failure. It costs a retry and it reports the problem; auto-releasing
+would run a tool against a value nobody chose, which for a `deleteFile` is not a
+regression anyone wants to meet.
+
+The answer is the message **verbatim** — no model decides whether it answers the
+question. Mastra's equivalent (`autoResumeSuspendedTools`) asks a model to extract the
+answer; a model can refuse or hedge, for something a human has already said plainly.
+
+A call already answered is never offered again, so re-running an approved `deleteFile`
+cannot happen.
+
 ### Only two of Mastra's six built-ins
 
 Mastra injects six (`ask_user`, `submit_plan`, `task_write`, `task_update`,

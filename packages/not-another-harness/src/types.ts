@@ -587,10 +587,34 @@ export type HarnessRunOptions = {
 	 *
 	 * A `toolCallId` that is not parked is ignored, and a parked call with no entry
 	 * re-suspends. Both are ordinary: a stale resume is a UI double-click, not a bug.
+	 *
+	 * **Keyed by `toolCallId`, not by approval id.** The two differ — the approval id
+	 * is generated per approval and the call id is the model's — and the value is put
+	 * into the tool's own context, which is keyed by the call being re-run. A map keyed
+	 * by approval id compiles, satisfies every type, and silently delivers nothing: the
+	 * call is released, the tool re-runs, and it sees no answer. Found by driving the
+	 * whole round trip rather than by reading either half.
 	 */
 	toolResumeData?: Record<string, unknown>;
 	/** Pinned onto every {@link PendingSuspension}, for cross-thread resume safety. */
 	suspensionScope?: { threadId?: string; resourceId?: string };
+	/**
+	 * Treat the next user message as the answer to any parked call.
+	 *
+	 * Makes `ask_user` a conversation rather than a form: someone who reads "Which
+	 * environment?" and replies "staging" continues the run, instead of the harness
+	 * asking again because no one clicked.
+	 *
+	 * **Off by default, and the default is the point.** A wrong auto-resume silently
+	 * continues a run on a value nobody chose — the tool executes against a reply that
+	 * was never an answer. Only a caller who has decided that an unrecognised reply
+	 * should proceed rather than re-ask should turn it on.
+	 *
+	 * The answer is the message verbatim. No model decides whether it answers the
+	 * question: a model can refuse or hedge, for something a human has already said
+	 * plainly.
+	 */
+	autoResumeSuspensions?: boolean;
 };
 
 /**

@@ -60,6 +60,8 @@ export {
   createFallbackMemory,
   createInMemoryMemory,
   createWindowedMemory,
+  createInMemoryThreadStore,
+  type DurableThreadStore,
   type FallbackMemoryOptions,
   type ReadOnlyThreadStore,
 } from "./memory-stores.js";

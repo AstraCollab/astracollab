@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { runAgent } from "../src/agent.js";
+import { parkedSuspensionIds, runAgent } from "../src/agent.js";
 import {
 	createAskUserTool,
 	createSubmitPlanTool,
@@ -594,5 +594,202 @@ describe("what the run reports", () => {
 			threadId: "chat-1",
 			resourceId: "org-1",
 		});
+	});
+});
+describe("autoResumeSuspensions", () => {
+	const parked = (calls: ReadonlyArray<{ toolCallId: string; question: string }>) => [
+		{ role: "user" as const, content: "deploy it" },
+		{
+			role: "assistant" as const,
+			content: calls.flatMap((call) => [
+				{ type: "tool-call" as const, toolCallId: call.toolCallId, toolName: "ask_user", input: { question: call.question } },
+				{
+					type: "tool-approval-request" as const,
+					approvalId: `suspension-${call.toolCallId}`,
+					toolCallId: call.toolCallId,
+				},
+			]),
+		},
+	];
+
+	it("continues the run on the user's reply, with no click", async () => {
+		const { events, result } = await drive({
+			model: scriptedModel(textChunks("Deploying to staging.", USAGE)),
+			messages: parked([{ toolCallId: "t1", question: "Which environment?" }]),
+			prompt: "staging",
+			autoResumeSuspensions: true,
+			tools: { ask_user: createAskUserTool() },
+		});
+
+		expect(result.reason).toBe("completed");
+		expect(resumedOutput(result)).toContain("User answered: staging");
+		expect(of(events, "tool-resumed")).toHaveLength(1);
+	});
+
+	it("refuses rather than resuming, so no tool runs on an unrecognised reply", async () => {
+		// Not "leaves it parked": a transcript with a parked call and no answer is
+		// *invalid*, and appending a user message to one throws `MissingToolResultsError`
+		// from the SDK. So the two settings are not a choice — off means the run is
+		// refused, loudly, because the alternative is executing a tool against a value
+		// nobody chose.
+		const handle = runAgent({
+			model: scriptedModel(textChunks("never reached", USAGE)),
+			system: "s", prompt: "staging", maxSteps: 2,
+			messages: parked([{ toolCallId: "t1", question: "Which environment?" }]),
+			tools: { ask_user: createAskUserTool() },
+		});
+		const events: HarnessEvent[] = [];
+		for await (const event of handle.events) events.push(event);
+
+		const error = of(events, "error")[0];
+		expect(String((error as { error?: Error })?.error?.message ?? "")).toContain(
+			"waiting on an answer to a suspended tool call",
+		);
+		// And the stream ends, rather than leaving a caller draining forever.
+		expect(of(events, "finish")).toHaveLength(1);
+		await expect(handle.result).rejects.toThrow(/waiting on an answer/);
+	});
+
+	it("answers every parked call, since the SDK reads the last message only", async () => {
+		// One message covering all of them: a message per call would leave all but the
+		// last unanswered, and the run would re-suspend on the rest.
+		const { result } = await drive({
+			model: scriptedModel(textChunks("done", USAGE)),
+			messages: parked([
+				{ toolCallId: "q1", question: "Which env?" },
+				{ toolCallId: "q2", question: "Which region?" },
+			]),
+			prompt: "staging",
+			autoResumeSuspensions: true,
+			tools: { ask_user: createAskUserTool() },
+		});
+
+		expect(result.reason).toBe("completed");
+		expect(result.pendingSuspensions).toEqual([]);
+	});
+
+	it("does not re-answer a call that was already answered", async () => {
+		// The failure a naive "any marker present" check produces: the marker stays in
+		// the transcript forever, so a later message would answer it again — and
+		// re-running an approved `deleteFile` is the worst possible repeat.
+		//
+		// Asserted as the auto-resume *decision*, not as a run outcome: a transcript
+		// ending in a parked call is invalid to send, so there is no run in which "t1
+		// stays parked" can be observed. A refusal here would be about t2, not t1.
+		const { events } = await drive({
+			model: scriptedModel(textChunks("done", USAGE)),
+			system: "s",
+			messages: [
+				...parked([{ toolCallId: "t1", question: "Which environment?" }]),
+				suspensionResumeMessage([{ toolCallId: "t1", toolName: "ask_user" }], { t1: "staging" }),
+			],
+			prompt: "and now something else",
+			autoResumeSuspensions: true,
+			tools: { ask_user: createAskUserTool() },
+		});
+
+		// Nothing left to resume, so the message is taken as ordinary input and the run
+		// proceeds — rather than re-answering t1 and re-running whatever it asked.
+		expect(of(events, "tool-resumed")).toHaveLength(0);
+		expect(of(events, "error")).toHaveLength(0);
+
+		// The distinction that makes this bite: with the prompt treated as an answer, the
+		// call is released and `tool-resumed` fires; treated as input, it is not. A
+		// broken "already answered" filter would show one where zero is expected.
+		const reoffered = await drive({
+			model: scriptedModel(textChunks("done", USAGE)),
+			system: "s",
+			messages: [...parked([{ toolCallId: "t9", question: "Already answered?" }])],
+			prompt: "something else",
+			autoResumeSuspensions: true,
+			tools: { ask_user: createAskUserTool() },
+		});
+		expect(of(reoffered.events, "tool-resumed")).toHaveLength(1);
+		expect(resumedOutput(reoffered.result)).toContain("something else");
+	});
+
+	it("keeps the reply in the transcript, so the model sees the exchange", async () => {
+		// The prompt is consumed as the answer, not appended as a user message — so it
+		// would otherwise vanish. The model would see a tool result with no question
+		// attached to it, which is not a conversation it can reason about.
+		const seen: string[] = [];
+		const { result } = await drive({
+			model: scriptedModel(textChunks("ok", USAGE)),
+			system: "s",
+			messages: parked([{ toolCallId: "t1", question: "Which environment?" }]),
+			prompt: "staging",
+			autoResumeSuspensions: true,
+			tools: { ask_user: createAskUserTool() },
+		});
+
+		// The reply survives inside the answer the tool returns to the model.
+		expect(resumedOutput(result)).toContain("staging");
+		expect(result.messages.some((m) => JSON.stringify(m).includes("staging"))).toBe(true);
+		void seen;
+	});
+});
+
+describe("parkedSuspensionIds", () => {
+	/**
+	 * Asserted directly rather than through a run, because no run can observe it.
+	 *
+	 * The end-to-end route short-circuits: `endsWithApprovalResponse` sees the answer
+	 * message and the auto-resume path is never reached. So the property that matters
+	 * — a call already answered is not offered again — has no run that fails without
+	 * it. Exporting the filter makes it testable, and the export is the fix rather than
+	 * a test-only hook: a caller resuming from a persisted transcript needs the same
+	 * question answered.
+	 */
+	const marker = (toolCallId: string) => ({
+		role: "assistant" as const,
+		content: [
+			{ type: "tool-call" as const, toolCallId, toolName: "ask_user", input: { question: "Which?" } },
+			{ type: "tool-approval-request" as const, approvalId: `suspension-${toolCallId}`, toolCallId },
+		],
+	});
+
+	it("finds a call still waiting", () => {
+		expect(parkedSuspensionIds([marker("t1")])).toEqual(["t1"]);
+	});
+
+	it("ignores a call already answered", () => {
+		const answered: ModelMessage[] = [
+			marker("t1"),
+			{ role: "tool", content: [{ type: "tool-approval-response", approvalId: "suspension-t1", approved: true }] },
+		];
+		// The property: re-offering this would re-run an approved `deleteFile`.
+		expect(parkedSuspensionIds(answered)).toEqual([]);
+	});
+
+	it("still finds a call answered after it", () => {
+		// Order is why the test above passes: an answer only counts for a marker that
+		// came before it. A new question asked in the same turn must survive.
+		const mixed: ModelMessage[] = [
+			marker("t1"),
+			{ role: "tool", content: [{ type: "tool-approval-response", approvalId: "suspension-t1", approved: true }] },
+			marker("t2"),
+		];
+		expect(parkedSuspensionIds(mixed)).toEqual(["t2"]);
+	});
+
+	it("ignores an approval that is not a suspension", () => {
+		// A real approval's id has no `suspension-` prefix. Treating it as one would
+		// auto-answer a permission question with a chat message.
+		const approval: ModelMessage[] = [
+			{
+				role: "assistant",
+				content: [
+					{ type: "tool-call", toolCallId: "d1", toolName: "deleteFile", input: { path: "a" } },
+					{ type: "tool-approval-request", approvalId: "aitxt-abc", toolCallId: "d1" },
+				],
+			},
+		];
+		expect(parkedSuspensionIds(approval)).toEqual([]);
+	});
+
+	it("finds several parked calls at once", () => {
+		// The SDK reads answers from the final message only, so all of them must be
+		// answered together or the rest re-suspend.
+		expect(parkedSuspensionIds([marker("q1"), marker("q2")])).toEqual(["q1", "q2"]);
 	});
 });
