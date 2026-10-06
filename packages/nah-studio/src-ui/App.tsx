@@ -30,7 +30,8 @@ type NavView =
 	| "traces"
 	| "tools"
 	| "evaluations"
-	| "chat";
+	| "chat"
+	| "workflows";
 type View = NavView | "agent";
 
 const NAV: Array<{ id: NavView; label: string; hint: string }> = [
@@ -44,6 +45,14 @@ const NAV: Array<{ id: NavView; label: string; hint: string }> = [
 		hint: "datasets, scorers, experiments",
 	},
 	{ id: "chat", label: "chat", hint: "ask the read-only agent" },
+	// Last rather than earlier in the ordering: the digit shortcuts are the NAV
+	// index, so anything inserted ahead of chat would silently move the shortcut
+	// people already have in their fingers.
+	{
+		id: "workflows",
+		label: "workflows",
+		hint: "run a workflow, and watch its steps",
+	},
 ];
 
 const App = () => {
@@ -202,6 +211,7 @@ const App = () => {
 								{view === "tools" && "What the tools are doing"}
 								{view === "evaluations" && "Datasets and scorers"}
 								{view === "chat" && "Ask the read-only agent"}
+								{view === "workflows" && "Run a workflow, step by step"}
 							</h1>
 						</div>
 						<div className="flex flex-wrap items-center gap-2">

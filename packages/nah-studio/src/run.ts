@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
  * file it never read.
  */
 import { type StudioAgent, createReadonlyAgent } from "nah-ai/agent";
+import { WorkflowCatalog, WorkflowRuns } from "./workflows.js";
 
 import {
 	type StudioEndpoint,
@@ -112,6 +113,27 @@ export const runServe = async (
 
 	const launcher: Launcher | null = resolveNahBinary(options.nahBin);
 
+	/**
+	 * The workflow feature, built from the agent's own registry and orchestrator.
+	 *
+	 * Built here rather than inside the agent so a Studio with no model configured
+	 * still has a catalog: `WorkflowCatalog` reads the workspace's `.nah/workflows`
+	 * either way and only refuses to *run* one, so the roster and the graph stay
+	 * readable with no key configured. Passing `agent.workflows` through also means
+	 * the workflows the browser can start are the workflows the terminal can start.
+	 */
+	const catalog = new WorkflowCatalog({
+		cwd: options.cwd,
+		runner: agent.workflows
+			? {
+					registry: agent.workflows.registry,
+					orchestrator: agent.workflows.orchestrator,
+					model: agent.model,
+				}
+			: null,
+	});
+	const workflowRuns = new WorkflowRuns({ store, catalog });
+
 	const handle = await startStudioServer({
 		store,
 		// One level under the bundle, not two: the shipped artifact is `dist/cli.js`,
@@ -128,6 +150,7 @@ export const runServe = async (
 		...(launcher === null ? {} : { launcher }),
 		cwd: options.cwd,
 		execute,
+		workflows: { catalog, runs: workflowRuns },
 		...(token === undefined ? {} : { token }),
 	});
 

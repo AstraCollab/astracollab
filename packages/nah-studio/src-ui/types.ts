@@ -35,4 +35,11 @@ export type {
 	ToolStat,
 	Trace,
 	TraceDetail,
+	WorkflowRunDetail,
+	WorkflowRunStatus,
+	WorkflowRunSummary,
+	WorkflowStepInfo,
+	WorkflowStepRecord,
+	WorkflowStepStatus,
+	WorkflowSummary,
 } from "../src/wire.js";

@@ -143,6 +143,19 @@ const readBody = async (request: IncomingMessage): Promise<unknown> => {
  * A flat map rather than a router: the whole API is visible on one screen, and a
  * new route is one line instead of a matching branch somewhere.
  */
+/**
+ * The workflows feature, or the reason this server has none.
+ *
+ * Note what this does *not* mean: a Studio with no model configured still builds a
+ * catalog, because a workflow you cannot start today is still a workflow you need
+ * to be able to read (`WorkflowCatalogOptions`). The null here is a server that
+ * was never given a runner at all — tests, and nothing else.
+ */
+const workflowsOrError = (
+	options: StudioServerOptions,
+): { catalog: WorkflowCatalog; runs: WorkflowRuns } | { error: string } =>
+	options.workflows ?? { error: "this Studio has no workflow runner attached" };
+
 const routes: Record<string, Handler> = {
 	"GET /api/health": async () => ({ ok: true, service: "nah-studio" }),
 
@@ -432,6 +445,91 @@ const routes: Record<string, Handler> = {
 	},
 
 	"GET /api/datasets": async ({ store }) => store.listDatasets(),
+
+	/**
+	 * The workspace's workflows.
+	 *
+	 * Every route below goes through `workflowsOrError`. The feature is absent in
+	 * tests and whenever no model is configured, and a workflow route that answered
+	 * with an empty list in that state would be a Studio reporting "you have no
+	 * workflows" when it means "this build cannot see any" — the same quiet wrong
+	 * answer as a suspended run nothing can resume.
+	 *
+	 * The list carries each workflow's steps, because that is what the canvas lays
+	 * out before anything has run. `canRun` is reported alongside rather than
+	 * inferred from the absence of a model, so the UI can say "configure a key"
+	 * instead of offering a launch button that cannot work.
+	 */
+	"GET /api/workflows": async ({ options }) => {
+		const workflows = workflowsOrError(options);
+		if ("error" in workflows) return workflows;
+		return {
+			workflows: await workflows.catalog.list(),
+			canRun: workflows.catalog.canRun,
+			model: workflows.catalog.model,
+		};
+	},
+
+	/**
+	 * Start a run. Returns its id, not its result: a workflow is a sequence of
+	 * model calls and can run for minutes, and a browser request held open that
+	 * long is a request the browser will eventually report as failed.
+	 */
+	"POST /api/workflows/:id/run": async ({ options, path, body }) => {
+		const workflows = workflowsOrError(options);
+		if ("error" in workflows) return workflows;
+		const payload = (body ?? {}) as { input?: unknown };
+		return workflows.runs.launch(decodeURIComponent(path.split("/").at(-2)!), payload.input);
+	},
+
+	/** Every run, newest first, optionally narrowed to one workflow. */
+	"GET /api/workflow-runs": async ({ store, query, options }) => {
+		if (!options.workflows) return workflowsOrError(options);
+		const workflowId = query.get("workflowId") ?? undefined;
+		return {
+			runs: store.listWorkflowRuns({
+				...(workflowId === undefined ? {} : { workflowId }),
+			}),
+		};
+	},
+
+	/**
+	 * One run with its step records — everything the canvas draws.
+	 *
+	 * A missing run is a 404-shaped `{ error }` rather than null, because the UI
+	 * asks for this after a reload and a null would render as an empty run that
+	 * looks like it is merely waiting.
+	 */
+	"GET /api/workflow-runs/:id": async ({ store, path, options }) => {
+		if (!options.workflows) return workflowsOrError(options);
+		const run = store.getWorkflowRun(decodeURIComponent(path.split("/").at(-1)!));
+		if (!run) return { error: "no such run" };
+		return { run };
+	},
+
+	"POST /api/workflow-runs/:id/stop": async ({ options, path }) => {
+		const workflows = workflowsOrError(options);
+		if ("error" in workflows) return workflows;
+		return workflows.runs.stop(decodeURIComponent(path.split("/").at(-1)!));
+	},
+
+	/**
+	 * Answer a suspended run so it can carry on.
+	 *
+	 * `resumeData` is whatever the suspended step was waiting for — a decision, a
+	 * document, a payload — and is passed through untouched, because the step that
+	 * suspended is the only thing that knows its shape. A run this process cannot
+	 * resume reports that instead of succeeding; see `WorkflowRuns.resume`.
+	 */
+	"POST /api/workflow-runs/:id/resume": async ({ options, path, body }) => {
+		const workflows = workflowsOrError(options);
+		if ("error" in workflows) return workflows;
+		const payload = (body ?? {}) as { resumeData?: unknown };
+		return workflows.runs.resume(
+			decodeURIComponent(path.split("/").at(-1)!),
+			payload.resumeData,
+		);
+	},
 	"GET /api/datasets/:id/items": async ({ store, path }) =>
 		store.listDatasetItems(path.split("/").at(-2)!),
 

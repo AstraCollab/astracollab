@@ -13,6 +13,9 @@ import type {
 	ToolStat,
 	Trace,
 	TraceDetail,
+	WorkflowRunDetail,
+	WorkflowRunSummary,
+	WorkflowSummary,
 } from "./types";
 
 /**
@@ -223,4 +226,61 @@ export const api = {
 			method: "POST",
 			body: JSON.stringify({ message }),
 		}),
+
+	/**
+	 * Workflows.
+	 *
+	 * These routes answer with a body, not a status code: a Studio with no runner
+	 * attached gets `{ error }` with a 200, because the Studio itself is fine — it is
+	 * the machine under it that cannot run anything. Throwing here would paint the
+	 * whole screen red for a condition the header explains better than an error
+	 * banner can, so each envelope is typed as the union it really is and the view
+	 * decides which half it is holding.
+	 */
+	workflows: () => request<WorkflowRoster>(`/api/workflows`),
+
+	launchWorkflow: (id: string, input?: unknown) =>
+		request<WorkflowLaunch>(`/api/workflows/${encodeURIComponent(id)}/run`, {
+			method: "POST",
+			body: JSON.stringify(input === undefined ? {} : { input }),
+		}),
+
+	workflowRuns: (workflowId?: string) =>
+		request<WorkflowRuns>(`/api/workflow-runs${query({ workflowId })}`),
+
+	workflowRun: (id: string) =>
+		request<WorkflowRun>(`/api/workflow-runs/${encodeURIComponent(id)}`),
+
+	stopWorkflowRun: (id: string) =>
+		request<WorkflowOutcome>(
+			`/api/workflow-runs/${encodeURIComponent(id)}/stop`,
+			{ method: "POST" },
+		),
+
+	resumeWorkflowRun: (id: string, resumeData?: unknown) =>
+		request<WorkflowOutcome>(
+			`/api/workflow-runs/${encodeURIComponent(id)}/resume`,
+			{
+				method: "POST",
+				body: JSON.stringify(
+					resumeData === undefined ? {} : { resumeData },
+				),
+			},
+		),
 };
+
+export type WorkflowRoster =
+	| { workflows: WorkflowSummary[]; canRun: boolean; model: string | null }
+	| { error: string };
+export type WorkflowLaunch = { ok: true; runId: string } | { error: string };
+export type WorkflowRuns = { runs: WorkflowRunSummary[] } | { error: string };
+export type WorkflowRun = { run: WorkflowRunDetail | null } | { error: string };
+/**
+ * Stop and resume answer in three voices: refused (`ok: false` plus a reason),
+ * unavailable (`{ error }`, no runner), and done. Only the first two are problems,
+ * and they are told apart here so the view does not have to guess which it got.
+ */
+export type WorkflowOutcome =
+	| { ok: true }
+	| { ok: false; reason?: string }
+	| { error: string };
