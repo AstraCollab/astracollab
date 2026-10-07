@@ -39,6 +39,9 @@ const createAuth = () => {
     )
   }
 
+  const githubId = process.env.GITHUB_CLIENT_ID?.trim()
+  const githubSecret = process.env.GITHUB_CLIENT_SECRET?.trim()
+
   return betterAuth({
     secret: configured || "nah-cloud-development-secret-do-not-use-in-production",
     baseURL: process.env.BETTER_AUTH_URL?.trim() || `http://localhost:${process.env.PORT ?? 3000}`,
@@ -101,7 +104,24 @@ const createAuth = () => {
           rateLimit: { enabled: true, timeWindow: 60_000, maxRequests: 120 }
         }
       ])
-    ]
+    ],
+    /**
+     * GitHub social provider for sign-in and account linking.
+     *
+     * Better Auth's built-in GitHub provider is used rather than genericOAuth.
+     * GitHub returns `email: null` when the profile email is private; the
+     * built-in provider then fetches `/user/emails` as a fallback, which is
+     * what the GitHub docs describe. With genericOAuth, Better Auth's
+     * callback handler requires a non-null email and the flow failed with
+     * `OAUTH_ACCOUNT_SUBJECT_INVALID` / `EMAIL_NOT_FOUND` for private-email
+     * users.
+     */
+    socialProviders: {
+      github: {
+        clientId: process.env.GITHUB_CLIENT_ID!,
+        clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+      }
+    }
   })
 }
 

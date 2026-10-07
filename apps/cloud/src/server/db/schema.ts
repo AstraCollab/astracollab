@@ -1,4 +1,5 @@
-import { pgTableCreator, text, timestamp, uuid, integer, jsonb, boolean, index, uniqueIndex } from "drizzle-orm/pg-core"
+import { pgTableCreator, text, timestamp, uuid, integer, bigint, jsonb, boolean, index, uniqueIndex } from "drizzle-orm/pg-core"
+import { sql } from "drizzle-orm"
 
 import type { RunStatus } from "@/server/domain/errors"
 
@@ -26,6 +27,7 @@ export const agents = table(
     name: text("name").notNull(),
     /** The repo or nothing: an agent is defined by the project it edits. */
     repository: text("repository").notNull(),
+    instructions: text("instructions").notNull().default(""),
     /**
      * The Boat template a sandbox forks from.
      *
@@ -202,8 +204,265 @@ export const SANDBOX_STATUSES = [
   "destroyed"
 ] as const satisfies readonly SandboxStatus[]
 
+/**
+ * GitHub App/OAuth installation per organisation.
+ *
+ * One organisation connects exactly one GitHub account (user or org).
+ * The installation id scopes repository access; the access/refresh tokens
+ * are stored encrypted at rest and used to mint short-lived installation tokens
+ * for agent runs.
+ */
+export const githubConnections = table(
+  "github_connections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id").notNull(),
+    githubInstallationId: text("github_installation_id").notNull().unique(),
+    githubAccountId: text("github_account_id").notNull(),
+    accessToken: text("access_token").notNull(),
+    refreshToken: text("refresh_token"),
+    tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
+    selectedRepositories: text("selected_repositories"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .$onUpdate(() => new Date())
+      .notNull()
+  },
+  (t) => [index("github_connections_org_idx").on(t.organizationId)]
+)
+
+/**
+ * One agent run's telemetry, as a trace.
+ *
+ * The shape is `not-another-harness`'s `Trace` and `Span`, stored as-is rather
+ * than flattened into our columns. That is a deliberate constraint: the harness
+ * emits these, and a field renamed upstream should stop this compiling rather
+ * than quietly render `undefined` on a dashboard for a week. `nah-studio` made the
+ * same call for the same reason (see its `src/wire.ts`).
+ *
+ * The additions are tenancy and the two numbers a list of a thousand traces has to
+ * be sortable and totallable without parsing a single span's JSON: `costUsd` and
+ * the token counts, copied off the root span on the way in.
+ */
+export const traces = table(
+  "traces",
+  {
+    /** The harness's own trace id. Not generated here — it must match the spans. */
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    /** The run it belongs to, when the caller named one. Null is normal. */
+    runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+    /** Which agent produced it, when known. A local `nah` has no cloud agent id. */
+    agentId: uuid("agent_id").references(() => agents.id, { onDelete: "set null" }),
+    name: text("name").notNull(),
+    /**
+     * Epoch ms, matching the harness. Not a `timestamp` — see `spans.startTime`.
+     *
+     * `bigint`, not `integer`. Postgres `integer` is 32-bit, so it tops out at
+     * 2_147_483_647 — which as epoch milliseconds is 20 January 1970. Any real
+     * trace overflowed, and the failure surfaced as `value "…" is out of range for
+     * type integer` from whichever query bound the timestamp as a parameter first.
+     * `{ mode: "number" }` keeps the int8 column reading back as a JS number, so
+     * nothing downstream of this line has to change; epoch ms is far below 2^53.
+     */
+    startTime: bigint("start_time", { mode: "number" }).notNull(),
+    endTime: bigint("end_time", { mode: "number" }),
+    rootSpanId: text("root_span_id").notNull(),
+    status: text("status").$type<SpanStatus>().notNull().default("unset"),
+    /**
+     * JSON-encoded `string[]` rather than a Postgres `text[]`.
+     *
+     * `textarray` is not exported by drizzle-orm 0.45, and the array is a filter
+     * dimension nobody queries — it is read whole to render a trace's chips. JSON
+     * keeps the harness's `string[]` type intact end to end, where a `text[]`
+     * column would have needed a second cast on every read anyway.
+     */
+    /**
+     * `sql` rather than `.default([])` because drizzle-kit 0.31 serialises a JS
+     * array default to an empty string, emitting `DEFAULT  NOT NULL` — invalid
+     * SQL that failed every migration run with "syntax error at or near NOT".
+     */
+    tags: text("tags").$type<string[]>().notNull().default(sql`'[]'`),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    error: jsonb("error").$type<SpanError | null>(),
+    /** Denormalised from the root span, so a list view is one query. */
+    costUsd: integer("cost_usd_micros"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (t) => [
+    index("traces_org_time_idx").on(t.organizationId, t.startTime),
+    index("traces_run_idx").on(t.runId),
+    index("traces_status_idx").on(t.status)
+  ]
+)
+
+/**
+ * One span within a trace.
+ *
+ * `startTime` is epoch milliseconds as a `bigint` rather than a `timestamp`,
+ * because the harness's own type is a number and converting on the way in and out
+ * loses nothing but gains a timezone question nobody can answer correctly. The
+ * duration arithmetic the trace waterfall does — `endTime - startTime` — is then
+ * the same subtraction in both places.
+ *
+ * `bigint` rather than `integer` because epoch milliseconds do not fit in 32 bits;
+ * see the note on `traces.startTime`, which is where the bug that motivated it
+ * surfaced. `{ mode: "number" }` means the int8 still reads back as a `number`, so
+ * the waterfall's arithmetic is untouched by the width of the column.
+ *
+ * `costUsd` is micros rather than a float. Money in a float column is how a
+ * dashboard ends up reporting a total that is a cent off from the sum of its
+ * parts, and a bill nobody can reconcile is worse than no bill.
+ */
+export const spans = table(
+  "spans",
+  {
+    id: text("id").primaryKey(),
+    traceId: text("trace_id")
+      .notNull()
+      .references(() => traces.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id").notNull(),
+    parentId: text("parent_id"),
+    name: text("name").notNull(),
+    kind: text("kind").$type<SpanKind>().notNull(),
+    startTime: bigint("start_time", { mode: "number" }).notNull(),
+    endTime: bigint("end_time", { mode: "number" }),
+    status: text("status").$type<SpanStatus>().notNull().default("unset"),
+    attributes: jsonb("attributes").$type<Record<string, unknown>>().notNull().default({}),
+    input: jsonb("input"),
+    output: jsonb("output"),
+    error: jsonb("error").$type<SpanError | null>(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    costUsdMicros: integer("cost_usd_micros")
+  },
+  (t) => [
+    index("spans_trace_idx").on(t.traceId),
+    index("spans_org_idx").on(t.organizationId)
+  ]
+)
+
+/**
+ * A chat thread against an agent.
+ *
+ * Separate from `runs` on purpose, and this is the whole design of the chat. A
+ * run is one prompt, frozen, executed once, and settled by an exit code. A
+ * conversation is a *sequence* of prompts that share context — the second message
+ * only makes sense because of the first, and neither is meaningful alone. Modelling
+ * a conversation as a run would force every turn to be a fresh isolated execution
+ * and the agent would forget what it was told one message ago.
+ *
+ * `title` is derived from the first message rather than asked for, because a
+ * person starting a conversation does not yet know what to call it, and asking
+ * anyway trains people to type "test 3".
+ */
+export const conversations = table(
+  "conversations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id").notNull(),
+    agentId: uuid("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default("New conversation"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (t) => [
+    index("conversations_agent_idx").on(t.agentId),
+    index("conversations_org_idx").on(t.organizationId)
+  ]
+)
+
+/**
+ * One message in a thread.
+ *
+ * `sequence` rather than `createdAt`, for the same reason `run_events` has one:
+ * two messages inside the same millisecond would order arbitrarily by timestamp,
+ * and a chat that renders its own turns out of order is worse than no ordering
+ * guarantee at all. The unique index is what makes a retry idempotent rather than
+ * duplicating a turn.
+ *
+ * `role` is `user` or `agent`, never anything else. The set is closed on purpose:
+ * a transcript with a system or tool row in it is a log, not a conversation, and
+ * the tool activity already lives in `run_events` where the debugging tools can
+ * find it.
+ */
+export const messages = table(
+  "messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id").notNull(),
+    sequence: integer("sequence").notNull(),
+    role: text("role").$type<MessageRole>().notNull(),
+    content: text("content").notNull(),
+    /**
+     * The run this message produced or was sent as, when there is one.
+     *
+     * Nullable because a message the user typed but the runtime has not picked up
+     * yet has no run. It is also the audit link: every agent reply can be traced
+     * back to the execution that produced it, which is what separates a real
+     * transcript from a plausible-looking one.
+     */
+    runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (t) => [
+    uniqueIndex("messages_conv_seq_idx").on(t.conversationId, t.sequence),
+    index("messages_conv_idx").on(t.conversationId)
+  ]
+)
+
+/**
+ * The harness's telemetry vocabulary, declared here rather than imported.
+ *
+ * These four mirror `not-another-harness`'s `SpanKind`, `SpanStatus`, `Span` and
+ * `SpanError` exactly. The alternative — `import type` from the harness — would be
+ * a stronger coupling, and it is deliberately not taken: `apps/cloud` is a
+ * standalone Next app and does not depend on the harness package, so importing it
+ * would add an edge that exists only to check four string unions. The duplication
+ * is the price, and the comment on the `traces` table says why the *shapes* must
+ * still agree.
+ */
+export type SpanKind = "agent" | "step" | "model" | "tool" | "compaction"
+
+export const SPAN_KINDS = [
+  "agent",
+  "step",
+  "model",
+  "tool",
+  "compaction"
+] as const satisfies readonly SpanKind[]
+
+/**
+ * `interrupted` is never emitted by the harness — it means a run stopped
+ * reporting without saying how it ended. The store can infer it from a trace that
+ * went quiet, so it lives in the vocabulary the dashboard reads.
+ */
+export type SpanStatus = "ok" | "error" | "unset" | "interrupted"
+
+export const SPAN_STATUSES = [
+  "ok",
+  "error",
+  "unset",
+  "interrupted"
+] as const satisfies readonly SpanStatus[]
+
+export type SpanError = { name: string; message: string; stack?: string }
+
+/** Who said a thing. A closed set — see the `messages` comment. */
+export type MessageRole = "user" | "agent"
+
+export const MESSAGE_ROLES = ["user", "agent"] as const satisfies readonly MessageRole[]
+
 export type Agent = typeof agents.$inferSelect
 export type NewAgent = typeof agents.$inferInsert
 export type Run = typeof runs.$inferSelect
 export type RunEvent = typeof runEvents.$inferSelect
 export type Sandbox = typeof sandboxes.$inferSelect
+export type GithubConnection = typeof githubConnections.$inferSelect
+export type NewGithubConnection = typeof githubConnections.$inferInsert
