@@ -1,0 +1,115 @@
+---
+title: "How astra and neb work together"
+description: "The two-CLI model: neb is your version control, astra is your platform — here is the full hosted workflow end to end"
+---
+
+## The two-CLI model
+
+astracollab code hosting is split the same way Git and GitHub are:
+
+- **`neb` owns your code.** Every save, workspace, proposal and merge happens
+  in Nebula — locally in `.nebula/`, and remotely on the astracollab
+  registry. It works offline and is content-addressed end to end.
+- **`astra` owns your platform.** Login, workspace selection, and galaxy
+  management. It authenticates once and hands `neb` the credentials it needs.
+
+```txt
+┌────────────┐        ┌──────────────────┐        ┌─────────────────────────┐
+│  your repo │──neb──▶│  .nebula/ (local) │──push──▶│ registry.astracollab.app│
+└────────────┘        └──────────────────┘        └───────────▲─────────────┘
+                                                              │
+┌──────────────────┐          device flow + JWT               │
+│ astra (platform) │──────────────────────────────────────────┘
+└──────────────────┘
+```
+
+## End-to-end: host your first project
+
+```bash
+# 1. Authenticate (once per machine)
+astra login
+
+# 2. Create a hosted galaxy — inside your project, the remote is wired for you
+cd my-project && neb init
+astra repo create my-app
+
+# 3. Version control as usual
+neb status
+neb save --message "Initial import"
+
+# 4. Push to astracollab
+neb push origin
+```
+
+That's it — your code is hosted on the astracollab registry, scoped to the
+workspace you approved at login.
+
+## The daily loop
+
+```bash
+# branch-like workspaces
+neb workspace create fix-login --from main
+neb workspace switch fix-login
+
+# ...make changes...
+neb status
+neb save --message "Fix login redirect"
+
+# open a proposal (PR equivalent) targeting main
+neb propose --target main --title "Fix login redirect"
+
+# review → merge (fast-forward or deterministic three-way)
+neb merge <proposal-id>
+neb push origin
+```
+
+## How the auth chain fits together
+
+The seamless part is token issuing: one `astra login` mints a credential that
+**both** the platform and the registry accept.
+
+1. `astra login` starts a device flow against
+   `https://astracollab.app/api/cli/device/code`.
+2. In the browser you approve a specific **workspace** (organization).
+3. astracollab mints an ES256 JWT signed with its published JWKS key. The
+   claims say: this token *is* the workspace (`actor_kind: team`,
+   `actor_id: <orgId>`), valid for content sync on that org's galaxies.
+4. The Nebula registry verifies the JWT directly against astracollab's
+   JWKS endpoint — no registry accounts, no shared secrets.
+5. `astra login` writes the token into neb's own credential store
+   (`~/.config/nebula/credentials.*`), so `neb` authenticates to the registry
+   with the exact same identity.
+
+On the registry side, every galaxy auto-trusts its own org's actor for
+content sync, review, proposals and git export — and *only* that org's. A
+token minted for one workspace can never touch another workspace's galaxy.
+
+## Where everything lives
+
+| Path / URL                                          | Purpose                          |
+| --------------------------------------------------- | -------------------------------- |
+| `.nebula/` (in your repo)                           | Local Nebula metadata + objects  |
+| `~/.config/astra/credentials.json`                  | astra token (mode 0600)          |
+| `~/.config/nebula/credentials.*`                    | neb credentials (written by astra) |
+| `https://registry.astracollab.app`                  | Hosted registry                  |
+| `https://astracollab.app/cli/authorize`             | Device-flow approval page        |
+
+## Agents play in the same galaxy
+
+Agent runs on astracollab capture their work as Nebula workspaces,
+snapshots, changesets and proposals in your workspace's galaxy — the same
+objects you create with `neb`. Policy-blocked paths never leave the platform,
+and proposals show up in the dashboard alongside yours.
+
+## Troubleshooting
+
+**`neb push` returns 401.** Your neb credentials are stale or missing — run
+`astra login` again (it refreshes both stores).
+
+**`neb push` returns 403 with a scope hint.** The token is workspace-scoped;
+make sure you approved the workspace that owns the galaxy, or re-run
+`astra login` and pick the right one.
+
+**`astra whoami` says not logged in.** The CLI looks in
+`~/.config/astra/credentials.json`; if you moved it, set
+`ASTRA_CREDENTIAL_STORE_DIR`.

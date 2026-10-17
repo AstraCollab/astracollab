@@ -15,6 +15,16 @@ All API requests should be made to:
 https://api.astracollab.app/v1
 ```
 
+### Environments
+
+| Environment | Base URL | Use it for |
+| --- | --- | --- |
+| Production | `https://api.astracollab.app/v1` | Live integrations — counts against billing and rate limits |
+| Staging | `https://staging.astracollab.app/v1` | Integration tests, staging deploys, and dry runs before production cutover |
+
+Staging is a separate dataset: keys, files, and folders created there never
+appear in production. Mirror your key setup in both when you test.
+
 ## Authentication
 
 All API endpoints require authentication using API keys. Include your API key in the `Authorization` header:
@@ -43,6 +53,10 @@ X-RateLimit-Limit: 1000
 X-RateLimit-Remaining: 999
 X-RateLimit-Reset: 1640995200
 ```
+
+When you receive a `429`, wait for the window indicated by `X-RateLimit-Reset`
+rather than retrying immediately. Backoff-and-jitter is the recommended client
+behavior; the SDKs surface `429` as an error with the `RATE_LIMITED` code.
 
 ## Response Format
 
@@ -84,6 +98,22 @@ Error responses include additional details:
   }
 }
 ```
+
+### Common error codes
+
+| Code | HTTP | Meaning | What to do |
+| --- | --- | --- | --- |
+| `UNAUTHORIZED` | 401 | Missing, malformed, or revoked API key | Check the `Authorization` header; create a new key if revoked |
+| `FORBIDDEN` | 403 | Key is not allowed to act on this resource or org | Confirm the key belongs to the workspace that owns the resource |
+| `FILE_NOT_FOUND` | 404 | File ID does not exist (or was deleted) | Re-list files to get current IDs |
+| `FOLDER_NOT_FOUND` | 404 | Folder ID does not exist | Re-list folders; folders may have been deleted with their parent |
+| `VALIDATION_ERROR` | 400 | A field failed validation (see `details`) | Fix the payload; `details` names the offending field |
+| `FILE_TOO_LARGE` | 413 | File exceeds plan or endpoint limit | Use the [multipart upload](/api-reference/files/multipart) flow |
+| `RATE_LIMITED` | 429 | Too many requests in the current window | Honor `X-RateLimit-Reset`; back off with jitter |
+| `INTERNAL_ERROR` | 500 | Unexpected server error | Retry with exponential backoff; contact support if it persists |
+
+Both official SDKs throw this envelope as an `AstraCollabError` with `status`,
+`code`, and `details` fields — one catch site covers every endpoint.
 
 ## SDKs and Libraries
 

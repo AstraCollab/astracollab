@@ -1,0 +1,103 @@
+---
+title: "Nebula"
+description: "Nebula is the version control system behind astracollab — galaxies, workspaces, snapshots and proposals, driven by the neb CLI"
+---
+
+## Nebula: the version control layer
+
+Nebula is a content-addressed version control system designed for how teams
+(and their AI agents) build software today. It speaks the same concepts as
+Git but renames them around teams:
+
+| Git             | Nebula        | What it means                                    |
+| --------------- | ------------- | ------------------------------------------------ |
+| Repository      | **Galaxy**    | A hosted project on the registry                 |
+| Branch          | **Workspace** | A line of work with a base and latest snapshot   |
+| Commit          | **Snapshot + ChangeSet** | An immutable content-addressed tree + its diff |
+| Pull request    | **Proposal**  | A proposed merge of changesets into a ref        |
+| Remote          | **Registry**  | `https://registry.astracollab.app`               |
+
+Everything in Nebula is content-addressed by SHA-256 — blobs, snapshots and
+trees are immutable and shareable across workspaces, which makes agent-driven
+captures cheap and safe.
+
+## Installing the neb CLI
+
+`neb` is the VCS tool itself — the thing you run instead of `git`:
+
+```bash
+cargo install --path nebula/crates/nebula-cli
+```
+
+Verify it:
+
+```bash
+neb status
+```
+
+## The local loop
+
+Initialize a project (creates the `.nebula/` metadata directory):
+
+```bash
+neb init
+```
+
+Inspect your working tree:
+
+```bash
+neb status
+neb diff
+```
+
+Save the current state as a snapshot + changeset:
+
+```bash
+neb save --message "Implement auth redirect"
+```
+
+Work on parallel lines of work:
+
+```bash
+neb workspace create auth-fix --from main
+neb workspace switch auth-fix
+neb workspace list
+```
+
+Propose and merge — the review unit in Nebula is the proposal:
+
+```bash
+neb propose --target main --title "Fix auth redirect"
+neb proposal list
+neb merge <proposal-id>
+```
+
+<Note>
+  Nebula always excludes its own metadata (`.nebula/`) plus common build
+  directories (`node_modules`, `.next`, `target`, ...). Add your own
+  exclusions to the `ignore` array in `.nebula/config.json` or a root
+  `.nebignore` file (gitignore-style syntax).
+</Note>
+
+## Hosted sync
+
+Galaxies live on the astracollab registry. Once a remote is configured,
+`push` and `pull` stream content over a session-based sync protocol:
+
+```bash
+neb remote add origin https://registry.astracollab.app/<galaxy-id>.neb
+neb push origin
+neb pull origin
+```
+
+Cloning a hosted galaxy works the same way:
+
+```bash
+neb clone https://registry.astracollab.app/<galaxy-id>.neb
+```
+
+<Note>
+  Authentication is handled for you when you log in with the
+  <a href="/code-hosting/astra-cli">astra CLI</a> — `astra login` writes
+  neb-compatible credentials automatically, so `neb push` works right away.
+</Note>

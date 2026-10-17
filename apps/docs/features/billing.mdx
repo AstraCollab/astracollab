@@ -491,12 +491,42 @@ function InvoiceHistory() {
 
 ## Best Practices
 
-1. **Monitor Usage**: Regularly check storage and API usage
-2. **Set Alerts**: Configure alerts for usage thresholds
-3. **Plan Ahead**: Upgrade before hitting limits
-4. **Optimize Storage**: Clean up unused files regularly
-5. **Review Costs**: Monitor monthly billing statements
-6. **User Management**: Keep user count accurate
+The billing model is predictable — base cost plus storage overage — which
+makes it manageable if you look at it before it surprises you. These habits
+keep the monthly number boring.
+
+**Monitor usage where the work happens.** Check storage and API usage on a
+cadence that matches your growth rate — weekly for a fast-moving team, monthly
+otherwise. A gradual creep that goes unnoticed for three months is how teams
+end up with an overage they didn't budget for. The dashboard and the
+[`getBillingInfo`](#billing-information) endpoint both give you the current
+picture; a cron job checking the API works even better.
+
+**Set alerts before the limits, not at them.** Configure alerts at a soft
+threshold (70–80% of included storage) so you have time to react calmly. An
+alert at 100% arrives at the same moment as the overage, which is the least
+useful time to learn about it.
+
+**Plan capacity ahead of known events.** If a launch, a client onboarding, or
+a migration is going to add terabytes, upgrade or purchase additional storage
+*before* the data lands. Overage pricing is a tax on forecasting you could have
+done; a plan change is a line item you chose.
+
+**Optimize what you store.** Storage cost scales with what you keep, and most
+workspaces accumulate drafts, duplicates, and finished-but-forgotten files.
+Schedule a regular cleanup — archive finished projects, delete render
+intermediates — and treat it like the storage audit it is. Deleting data you
+don't need is the cheapest storage upgrade available.
+
+**Review the statement monthly, line by line.** Billing surprises are cheap to
+catch in month one and expensive in month six. Verify the base plan matches
+what you expect, that overage matches your own usage math, and that user
+counts reflect reality. Remove users who left, and confirm added seats were
+intentional.
+
+**Keep the user count honest.** Per-user costs multiply quietly: contractors,
+demos, and old accounts all count. An accurate roster isn't just billing
+hygiene — it's also an access-review artifact for security.
 
 ## Support
 

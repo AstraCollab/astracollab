@@ -153,6 +153,13 @@ const {
 } = useUpload(uploadService);
 ```
 
+<Note>
+  `cancelUpload(fileId)` aborts an in-flight upload and marks its progress
+  entry as `canceled`. Canceled files do not count against storage — the
+  service cleans up the reserved record. `clearProgress()` resets the whole
+  progress map, e.g. after a completed batch.
+</Note>
+
 ### useFiles
 
 Fetches files from the API.
@@ -166,6 +173,15 @@ const {
 } = useFiles(baseURL, apiKey, folderId, orgId);
 ```
 
+**Parameters:**
+- `baseURL` (string, required): API base URL
+- `apiKey` (string, optional): API key — required for private workspaces, omit for authenticated browser calls
+- `folderId` (string, optional): Only list files inside this folder
+- `orgId` (string, optional): Scope the listing to an organization
+
+Backed by React Query: results are cached under `["files", folderId, orgId]`,
+and `refetch()` re-requests the list after uploads or deletes.
+
 ## Configuration
 
 ### UploadServiceConfig
@@ -176,6 +192,38 @@ interface UploadServiceConfig {
   apiKey?: string;
   timeout?: number;
 }
+```
+
+### Tuning batch uploads
+
+`uploadFiles` batches through the upload service. Tune concurrency and
+chunking when you have many files, large files, or flaky networks:
+
+| Option | Default behavior | When to change it |
+| --- | --- | --- |
+| `chunkSize` | Service default (~5 MB chunks) | Lower it on unstable connections so a failed chunk costs less; raise it to cut request overhead on fast links |
+| `maxConcurrentFiles` | Small default parallelism | Raise for bulk ingest of many small files; lower on mobile or metered connections |
+| `maxConcurrentChunks` | Small default parallelism | Raise when uploading a few very large files to saturate bandwidth |
+| `retryAttempts` | Limited retries per chunk | Raise for background/overnight transfers where you prefer retries over surfacing errors |
+
+```tsx
+const uploadService = useUploadService({
+  baseURL: 'https://api.astracollab.app',
+  apiKey: process.env.NEXT_PUBLIC_ASTRACOLLAB_API_KEY,
+});
+
+// Example: large-media ingest profile
+await uploadService.uploadMultipleFiles({
+  files: filesToUpload,
+  folderId: 'ingest-2026',
+  chunkSize: 10 * 1024 * 1024, // 10 MB chunks
+  maxConcurrentFiles: 2,
+  maxConcurrentChunks: 4,
+  retryAttempts: 5,
+  onProgress: (map) => setProgress(new Map(map)),
+  onSuccess: (results) => console.log(`Uploaded ${results.length} files`),
+  onError: (msg, fileId) => console.error(fileId, msg),
+});
 ```
 
 ### FileUploadProgress
@@ -191,6 +239,10 @@ interface FileUploadProgress {
   error?: string;
 }
 ```
+
+The `status` field is the source of truth for UI state: `pending` (queued,
+not started), `uploading` (bytes in flight), `completed`, `failed` (see
+`error`), or `canceled` (user-aborted).
 
 ## Examples
 
@@ -323,11 +375,32 @@ function UploadWithErrorHandling() {
 
 ## Best Practices
 
-1. **Environment Variables**: Always use environment variables for API keys
-2. **Error Handling**: Implement proper error handling for upload failures
-3. **Progress Feedback**: Show upload progress to improve user experience
-4. **File Validation**: Validate file types and sizes before upload
-5. **Rate Limiting**: Respect API rate limits in your application
+**Keep the key in environment variables, keyed to the runtime.** Server-side
+code reads `ASTRACOLLAB_API_KEY`; browser-exposed code gets a separate,
+differently-named key (`NEXT_PUBLIC_ASTRACOLLAB_API_KEY`) so the two can be
+rotated and revoked independently. Never reuse the server key in client
+components — anything with the `NEXT_PUBLIC_` prefix ships in the bundle.
+
+**Treat upload errors as product surface, not console noise.** Branch on
+`AstraCollabError`'s `status` and `code`: `4xx` tells the user something
+actionable (file too large, wrong type), `5xx` and network errors are retry
+candidates. An upload that fails silently is the bug report you'll get at 9pm.
+
+**Show progress as a first-class UI element.** The `uploadProgress` map gives
+you per-file bytes, percentage, and status (`uploading`, `failed`,
+`canceled`…). Files above a few megabytes without visible progress read as
+"frozen" — and users close the tab, which guarantees a failed upload.
+
+**Validate before you upload, not while.** Check size against plan limits and
+type against your allowlist at file-select time. It's cheaper for the user,
+and it keeps your error surface down to genuine network/server issues. This
+is UX on the client — repeat the checks server-side, where it's security.
+
+**Work with the rate limiter, not against it.** Keep 2–4 uploads in flight,
+back off on `429` using `X-RateLimit-Reset`, and tune the batch options
+(`maxConcurrentFiles`, `maxConcurrentChunks`, `retryAttempts`) for your
+network profile rather than maxing them out. Bulk ingest jobs should be the
+polite one in the room.
 
 ## Support
 

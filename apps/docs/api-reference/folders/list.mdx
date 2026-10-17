@@ -159,9 +159,9 @@ curl -X GET "https://api.astracollab.app/v1/folders" \
 ```
 
 ```javascript JavaScript SDK
-import { AstraCollab } from '@astracollab/sdk';
+import { AstraCollabClient } from '@astracollab/js';
 
-const client = new AstraCollab('your-api-key');
+const client = new AstraCollabClient({ apiKey: 'your-api-key' });
 
 // List all folders
 const folders = await client.folders.list();

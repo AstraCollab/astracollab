@@ -70,7 +70,10 @@ const client = new AstraCollabClient(config);
 
 **Parameters:**
 - `config.apiKey` (string, required): Your AstraCollab API key
-- `config.baseURL` (string, optional): API base URL (defaults to `https://api.astracollab.app`)
+- `config.baseURL` (string, optional): API base URL (defaults to `https://api.astracollab.app`). For staging integrations use `https://staging.astracollab.app`
+- `config.timeout` (number, optional): Request timeout in milliseconds. Requests that exceed it reject with an `AstraCollabError`
+
+All methods reject with an [`AstraCollabError`](#error-handling) on failure, which carries the HTTP `status`, a machine-readable `code`, and optional `details`.
 
 ### File Management
 
@@ -185,6 +188,127 @@ await client.revokeApiKey(keyId);
 
 **Parameters:**
 - `keyId` (string, required): API key ID to revoke
+
+### Multipart Upload
+
+For large files, use the multipart flow: reserve the file, upload chunks to
+presigned URLs in any order, then commit. Use this when uploads exceed ~100 MB
+or when you want per-chunk retry behavior on unreliable networks.
+
+#### Start a multipart upload
+
+```javascript
+const start = await client.startMultipartUpload({
+  fileName: 'conference-recording.mp4',
+  fileType: 'video/mp4',
+  fileSize: 4_712_889_344,
+  totalChunks: 12,
+  folderId: 'optional-folder-id',
+});
+```
+
+**Parameters:**
+- `fileName` (string, required): Original file name
+- `fileType` (string, required): MIME type
+- `fileSize` (number, required): Total size in bytes
+- `totalChunks` (number, required): Number of chunks you will upload
+- `folderId` (string, optional): Folder to place the file in
+
+**Returns:** An object with `uploadId`, `fileId`, `key`, and `presignedUrls` —
+an array of `{ url, partNumber }` upload targets, one per chunk.
+
+#### Upload the chunks
+
+Each entry in `presignedUrls` is a `PUT` target for exactly one chunk. Chunks
+can be uploaded concurrently and in any order:
+
+```javascript
+const parts = await Promise.all(
+  start.presignedUrls.map(async ({ url, partNumber }) => {
+    const chunk = chunkSlice(fileBuffer, partNumber); // your chunking logic
+    const res = await fetch(url, {
+      method: 'PUT',
+      body: chunk,
+      headers: { 'Content-Type': 'application/octet-stream' },
+    });
+    return {
+      partNumber,
+      etag: res.headers.get('etag'),
+    };
+  }),
+);
+```
+
+<Note>
+  Presigned URLs are time-limited. If an upload is abandoned mid-way, the
+  reserved file stays in `pending` state until it is completed or cleaned up.
+  Keep the `partNumber → etag` mapping from every successful `PUT` — the
+  complete call requires all of them.
+</Note>
+
+#### Complete the upload
+
+```javascript
+await client.completeMultipartUpload({
+  uploadId: start.uploadId,
+  key: start.key,
+  fileId: start.fileId,
+  parts,
+});
+```
+
+**Parameters:**
+- `uploadId` (string, required): From the start response
+- `key` (string, required): Storage key from the start response
+- `fileId` (string, required): File record ID from the start response
+- `parts` (array, required): Every `{ partNumber, etag }` from the chunk uploads
+
+Once completed, the file appears in `listFiles` like any other upload.
+
+### Billing
+
+#### Get billing info
+
+```javascript
+const billing = await client.getBillingInfo();
+```
+
+**Returns:** An object with the subscription summary and cost breakdown:
+
+```javascript
+{
+  subscription: {
+    plan: 'creator',
+    status: 'active',
+    includedStorageGB: 500,
+    additionalStorageGB: 0,
+    currentUsageGB: 231.4,
+    overageGB: 0,
+    filesCount: 1849,
+    monthlyCost: { base: 1200, overage: 0, total: 1200 }
+  }
+}
+```
+
+Monetary values are in cents. `overageGB` is the amount of storage beyond
+`includedStorageGB + additionalStorageGB` in the current period.
+
+#### Get usage history
+
+```javascript
+const history = await client.getUsageHistory();
+```
+
+**Returns:** An array of per-period usage records:
+
+```javascript
+[
+  { period: '2026-09', filesCount: 1620, storageGB: 201.8 },
+  { period: '2026-10', filesCount: 1849, storageGB: 231.4 }
+]
+```
+
+Use this to render usage graphs or to alert before an overage begins.
 
 ## Examples
 
@@ -363,11 +487,37 @@ try {
 
 ## Best Practices
 
-1. **Environment Variables**: Store API keys in environment variables
-2. **Error Handling**: Always implement proper error handling
-3. **Progress Tracking**: Use progress callbacks for large file uploads
-4. **Rate Limiting**: Respect API rate limits in your application
-5. **File Validation**: Validate files before upload (size, type, etc.)
+**Store keys in environment variables, never in source.** The client reads
+`config.apiKey` from wherever you construct it — make that
+`process.env.ASTRACOLLAB_API_KEY` on the server. A key that lands in a git
+history is a key you should rotate, so don't commit one in the first place:
+add the `.env` file to `.gitignore` before the first commit. If a key does
+leak, [revoke it](#revoke-api-key) immediately and rotate — that's minutes of
+work versus an incident.
+
+**Handle `AstraCollabError` at one boundary.** Every client method rejects
+with the same error shape (`status`, `code`, `details`), so wrap calls once —
+a helper or middleware — and branch on the code: `4xx` is actionable and
+shouldn't be retried; `5xx` and network errors are retry candidates with
+exponential backoff and jitter. This single catch site is what keeps error
+handling from sprawling across every call site.
+
+**Use progress callbacks for anything large.** `onProgress` turns a
+multi-minute upload into an honest progress bar. Better: switch to the
+[multipart flow](#multipart-upload) for large files, where failed chunks
+retry individually instead of restarting the whole upload.
+
+**Be a good API citizen under load.** Batch scripts and cron jobs are the
+usual rate-limit offenders. Keep concurrency bounded (2–4 parallel uploads),
+honor `429` responses by waiting for `X-RateLimit-Reset`, and back off with
+jitter rather than hammering on a fixed interval. A nightly ingest that
+respects the limiter finishes faster than one that spends the night retrying.
+
+**Validate files before they leave your process.** Check size and MIME type
+against your plan limits and allowlist before calling `uploadFile` — you'll
+reject bad input in milliseconds instead of after the upload. This is
+correctness for your users and hygiene for the workspace; the API will still
+enforce its own limits, just less helpfully.
 
 ## Support
 

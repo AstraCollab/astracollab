@@ -3,9 +3,21 @@
     "theme": "mint",
     "name": "AstraCollab",
     "colors": {
-        "primary": "#16A34A",
-        "light": "#07C983",
-        "dark": "#15803D"
+        "primary": "#5900C6",
+        "light": "#7C3AED",
+        "dark": "#4A00A6"
+    },
+    "fonts": {
+        "heading": {
+            "family": "Inter",
+            "source": "google",
+            "format": "woff2"
+        },
+        "body": {
+            "family": "Inter",
+            "source": "google",
+            "format": "woff2"
+        }
     },
     "favicon": "/favicon.svg",
     "navigation": {
@@ -24,6 +36,14 @@
                             "sdk/nextjs",
                             "sdk/javascript",
                             "sdk/examples"
+                        ]
+                    },
+                    {
+                        "group": "Code hosting",
+                        "pages": [
+                            "code-hosting/nebula",
+                            "code-hosting/astra-cli",
+                            "code-hosting/how-they-work-together"
                         ]
                     },
                     {
@@ -97,8 +117,8 @@
         }
     },
     "logo": {
-        "light": "/logo/logo.svg",
-        "dark": "/logo/logo.svg"
+        "light": "/logo/light.svg",
+        "dark": "/logo/dark.svg"
     },
     "navbar": {
         "links": [{
@@ -108,7 +128,7 @@
         "primary": {
             "type": "button",
             "label": "Get Started",
-            "href": "https://www.astracollab.ap/"
+            "href": "https://www.astracollab.app/"
         }
     },
     "contextual": {

@@ -47,17 +47,45 @@ API keys inherit the permissions of the organization they belong to:
   Keep your API keys secure and never expose them in client-side code.
 </Note>
 
-### Do's
-- Store API keys in environment variables
-- Use different keys for different environments (dev, staging, prod)
-- Rotate keys regularly
-- Use the minimum required permissions
+### Key storage
 
-### Don'ts
-- Never commit API keys to version control
-- Don't share keys publicly
-- Avoid using the same key across multiple applications
-- Don't hardcode keys in client-side applications
+Store keys where only your server can reach them — environment variables are
+the baseline, a secrets manager (AWS Secrets Manager, Doppler, Vault) is the
+upgrade. A key in environment variables survives deploys without living in
+code; a key in source code survives in git history forever, which is why
+"never commit keys" is a *pre-commit* rule: add `.env` to `.gitignore` before
+the first commit, not after the first leak. For browser applications, the key
+belongs behind your own backend — a route handler that proxies to AstraCollab
+— because anything shipped to the browser is public.
+
+### Key isolation
+
+Use one key per environment (dev, staging, production) and, ideally, one per
+application or service. Environment isolation means a staging incident can
+never touch production data; application isolation means revoking a
+compromised integration's key doesn't take down unrelated systems. When
+multiple apps share a key, you can't rotate one without breaking the rest —
+and you can't tell from usage logs which app made which request. If a key
+must cross environments temporarily, plan the rotation before the temporary
+becomes permanent.
+
+### Key rotation
+
+Rotate on a schedule (quarterly works for most teams) rather than waiting for
+a reason. The safe sequence: create the replacement key, deploy it to all
+consumers, verify traffic is flowing on the new key via usage logs, then
+revoke the old one. Revoke-then-create is how outages happen. After any
+suspected compromise, skip the schedule and rotate immediately — a rotation
+costs minutes; an intruder with your key costs more.
+
+### Least privilege
+
+Issue keys scoped to the operations they actually perform. A read-only
+reporting job doesn't need delete access; an upload worker doesn't need key
+management. Narrow scope is what makes every other practice more effective:
+the leaked key that can only read is an inconvenience, not a breach. When
+your integration's needs grow, grow the key's scope deliberately — in a
+change you reviewed — rather than minting every new key as an admin.
 
 ## Rate Limiting
 

@@ -371,7 +371,9 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
           }
           await turn.done;
         } catch (error) {
-          output.addLine(c.red(`  ${error instanceof Error ? error.message : String(error)}`));
+          const msg = error instanceof Error ? error.message : String(error);
+          const firstLine = msg.split(/\r\n|\r|\n/)[0] ?? msg;
+          output.addLine(c.red(`  ${firstLine.slice(0, 200)}`));
           screen.requestRender();
         } finally {
           run.abort = null;

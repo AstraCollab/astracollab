@@ -408,13 +408,47 @@ function SecureUpload() {
 
 ## Best Practices
 
-1. **File Size Limits**: Always validate file sizes before upload
-2. **File Type Validation**: Restrict allowed file types for security
-3. **Progress Feedback**: Show upload progress to improve user experience
-4. **Error Handling**: Implement comprehensive error handling
-5. **Retry Logic**: Add retry mechanisms for network failures
-6. **Queue Management**: Use upload queues for multiple files
-7. **Security**: Validate files on both client and server side
+Uploads are where your users most directly feel integration quality — a file
+picker that hangs or fails silently reads as "the app is broken." These
+practices keep the experience solid under real-world network conditions.
+
+**Validate size and type before the request starts.** Check the file size
+against your plan's limit and the accepted MIME types the moment a file is
+selected, not after an upload has consumed the user's bandwidth. Rejecting a
+2 GB file instantly is a courtesy; rejecting it at 97% is a betrayal. This is
+also your security boundary — never rely on the client alone to enforce what
+your server will accept.
+
+**Choose the right upload method for the size.** Single-request uploads are
+simpler and fine below ~100 MB. Above that, use the multipart flow: chunks
+upload independently, a failed chunk retries alone, and overall progress
+advances smoothly. The [multipart section](#multipart-upload) covers the flow;
+the SDKs automate it.
+
+**Show progress that means something.** Surface per-file progress with bytes
+or percentages, and distinguish *uploading* from *processing* — users
+tolerate waiting but not ambiguity. The SDKs expose
+`FileUploadProgress` with exactly this state.
+
+**Handle every failure path explicitly.** Networks drop, presigned URLs
+expire, keys get revoked mid-session. Catch `AstraCollabError`, branch on
+`status` and `code`, and show a message that tells the user what to do next
+(retry now / check connection / contact an admin). An unhandled rejection is
+how "it just spins forever" bug reports happen.
+
+**Build retry in from the start.** Transient failures are normal at scale;
+wrap uploads in retry with exponential backoff and jitter for network-class
+errors, but never retry a `4xx` validation failure — that will fail forever.
+
+**Queue concurrent uploads deliberately.** Uploading fifty files at once
+saturates connections and trips rate limits. Keep 2–4 uploads in flight
+(large files: fewer), and let the rest wait in a queue — the Next.js SDK's
+batch options tune exactly this.
+
+**Keep secrets server-side.** For browser apps, route uploads through your
+own backend so the API key never reaches the client, and re-validate file
+type and size there. Client validation is UX; server validation is security.
+
 
 ## Support
 

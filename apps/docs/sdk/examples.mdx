@@ -551,6 +551,171 @@ function LazyFileList() {
 }
 ```
 
+## Server and Automation Examples
+
+### Node.js Batch Ingest with Concurrency
+
+A CLI or cron job that ingests a directory of files into AstraCollab using the
+JavaScript SDK — with bounded concurrency, per-file progress, and a summary.
+
+```javascript
+import { AstraCollabClient, AstraCollabError } from '@astracollab/js';
+import fs from 'fs';
+import path from 'path';
+
+const client = new AstraCollabClient({
+  apiKey: process.env.ASTRACOLLAB_API_KEY,
+});
+
+const MIME_BY_EXT = {
+  '.jpg': 'image/jpeg',
+  '.png': 'image/png',
+  '.mp4': 'video/mp4',
+  '.pdf': 'application/pdf',
+};
+
+async function ingestDirectory(dir, { concurrency = 3, folderId } = {}) {
+  const entries = fs
+    .readdirSync(dir)
+    .filter((name) => !name.startsWith('.'))
+    .map((name) => path.join(dir, name))
+    .filter((p) => fs.statSync(p).isFile());
+
+  const queue = [...entries];
+  const uploaded = [];
+  const failed = [];
+
+  async function worker() {
+    while (queue.length > 0) {
+      const filePath = queue.shift();
+      const fileName = path.basename(filePath);
+      const type = MIME_BY_EXT[path.extname(fileName).toLowerCase()] ?? 'application/octet-stream';
+      const file = new Blob([fs.readFileSync(filePath)], { type });
+
+      try {
+        const fileId = await client.uploadFile({
+          file,
+          fileName,
+          folderId,
+          onProgress: (pct) => process.stdout.write(`\r${fileName}: ${pct}%   `),
+        });
+        uploaded.push({ fileName, fileId });
+        console.log(`✔ ${fileName}`);
+      } catch (error) {
+        if (error instanceof AstraCollabError) {
+          console.error(`✖ ${fileName}: [${error.status}] ${error.code ?? 'error'} — ${error.message}`);
+        } else {
+          console.error(`✖ ${fileName}: ${error.message}`);
+        }
+        failed.push(fileName);
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, worker));
+  console.log(`\nDone. ${uploaded.length} uploaded, ${failed.length} failed.`);
+  return { uploaded, failed };
+}
+
+await ingestDirectory('./assets', { concurrency: 3, folderId: 'ingest-2026' });
+```
+
+<Note>
+  Keep `concurrency` modest (2–4). The API rate-limits bursts, and the browser
+  SDK's parallelism guidance applies to server code too: a few concurrent
+  uploads saturate bandwidth faster than many.
+</Note>
+
+### Organized Backup Flow (Folders per Date)
+
+Create a dated folder structure and upload into it — a common pattern for
+nightly backups or scheduled exports.
+
+```javascript
+import { AstraCollabClient, AstraCollabError } from '@astracollab/js';
+
+const client = new AstraCollabClient({
+  apiKey: process.env.ASTRACOLLAB_API_KEY,
+});
+
+async function backupToDatedFolder(rootFolderId, files) {
+  // Idempotent: reuse today's folder if it already exists
+  const today = new Date().toISOString().slice(0, 10);
+  const existing = await client.listFolders(rootFolderId);
+  let target = existing.find((f) => f.name === today);
+
+  if (!target) {
+    target = await client.createFolder({
+      name: today,
+      parentFolderId: rootFolderId,
+    });
+  }
+
+  const results = [];
+  for (const { name, blob } of files) {
+    try {
+      const fileId = await client.uploadFile({
+        file: blob,
+        fileName: name,
+        folderId: target.id,
+      });
+      results.push({ name, fileId, ok: true });
+    } catch (error) {
+      results.push({ name, ok: false, error: error.message });
+    }
+  }
+
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length > 0) {
+    // Re-raise after writing partial results so the scheduler marks the run failed
+    throw new AstraCollabError(
+      `${failed.length} of ${results.length} backups failed`,
+      undefined,
+      'PARTIAL_BACKUP_FAILURE',
+      { failed },
+    );
+  }
+  return results;
+}
+```
+
+### Usage Watchdog (Billing Check from Cron)
+
+Fail a scheduled job before the overage grows, using the billing endpoints.
+
+```javascript
+import { AstraCollabClient } from '@astracollab/js';
+
+const client = new AstraCollabClient({
+  apiKey: process.env.ASTRACOLLAB_API_KEY,
+});
+
+const USAGE_SOFT_LIMIT_PCT = 90;
+
+const billing = await client.getBillingInfo();
+const { includedStorageGB, additionalStorageGB, currentUsageGB, overageGB } =
+  billing.subscription;
+
+const limitGB = includedStorageGB + additionalStorageGB;
+const usedPct = (currentUsageGB / limitGB) * 100;
+
+console.log(
+  `Storage: ${currentUsageGB.toFixed(1)} / ${limitGB} GB (${usedPct.toFixed(0)}%)` +
+    (overageGB > 0 ? ` — ${overageGB} GB over!` : ''),
+);
+
+if (usedPct >= USAGE_SOFT_LIMIT_PCT || overageGB > 0) {
+  // Page yourself, open a ticket, or auto-upgrade additional storage here.
+  process.exitCode = 1;
+}
+
+// Optional: feed a usage graph
+const history = await client.getUsageHistory();
+for (const { period, storageGB } of history) {
+  console.log(`${period}: ${storageGB} GB`);
+}
+```
+
 ## Support
 
 Need help implementing these examples?

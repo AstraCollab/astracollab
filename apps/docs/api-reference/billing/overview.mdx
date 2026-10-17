@@ -194,9 +194,9 @@ curl -X GET "https://api.astracollab.app/v1/billing" \
 ```
 
 ```javascript JavaScript SDK
-import { AstraCollab } from '@astracollab/sdk';
+import { AstraCollabClient } from '@astracollab/js';
 
-const client = new AstraCollab('your-api-key');
+const client = new AstraCollabClient({ apiKey: 'your-api-key' });
 
 const billing = await client.billing.get();
 

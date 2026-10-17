@@ -114,6 +114,42 @@ ASTRACOLLAB_BASE_URL=https://api.astracollab.app
 2. Verify the file appears in your dashboard
 3. Check the file details and metadata
 
+## Troubleshooting
+
+Most first-run issues are one of the following:
+
+<AccordionGroup>
+  <Accordion title="401 Unauthorized on every request">
+    The key is missing from the header, malformed, or revoked. Confirm the
+    header reads `Authorization: Bearer <key>` (with the word `Bearer`), that
+    the env variable is actually loaded (log `process.env.ASTRACOLLAB_API_KEY`
+    length, never the value), and that the key wasn't revoked in the dashboard.
+    Server-side keys created for one workspace can't act on another
+    workspace's resources — that returns `403`, not `401`.
+  </Accordion>
+  <Accordion title="CORS errors in the browser">
+    API keys are meant for server-side calls. For browser apps, proxy uploads
+    through your own backend (a Next.js route handler or server action) rather
+    than shipping the key to the client. The Next.js SDK's components expect
+    the key in server-rendered or API-route contexts.
+  </Accordion>
+  <Accordion title="413 on large uploads">
+    The single-request upload endpoint has a size ceiling. Switch to the
+    multipart flow — the SDKs handle chunking, presigned URLs, and completion
+    for you (see the [file upload guide](/features/file-upload)).
+  </Accordion>
+  <Accordion title="429 Rate Limited during bulk uploads">
+    You're outpacing your plan's hourly quota. Lower concurrency (2–4 parallel
+    uploads), honor `X-RateLimit-Reset`, and back off with jitter. Batch
+    tuning options are documented in the [Next.js SDK guide](/sdk/nextjs).
+  </Accordion>
+  <Accordion title="File uploaded but not visible in the dashboard">
+    Check that you passed the right `folderId`/`orgId` and that the upload
+    fully completed — multipart uploads stay `pending` until the complete call
+    runs. Listing files scoped to the wrong folder is the most common cause.
+  </Accordion>
+</AccordionGroup>
+
 ## Next Steps
 
 Now that you're set up, explore these resources:

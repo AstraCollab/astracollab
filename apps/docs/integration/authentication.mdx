@@ -11,40 +11,103 @@ Integrate AstraCollab authentication into your applications using API keys, OAut
 
 ### Basic Integration
 
-The simplest way to authenticate with AstraCollab is using API keys:
+The simplest way to authenticate is with an API key on one of the official
+SDKs. Keys are workspace-scoped: they can only see and act on the workspace
+that issued them.
 
 ```javascript
-import { AstraCollab } from '@astracollab/sdk';
+import { AstraCollabClient } from '@astracollab/js';
 
 // Initialize client with API key
-const client = new AstraCollab('your-api-key-here');
+const client = new AstraCollabClient({
+  apiKey: process.env.ASTRACOLLAB_API_KEY,
+});
 
 // Make authenticated requests
-const files = await client.files.list();
+const files = await client.listFiles();
 ```
+
+For React applications, the Next.js SDK accepts the same configuration:
+
+```tsx
+import { FileUploaderWithUI } from '@astracollab/nextjs';
+
+<FileUploaderWithUI
+  config={{
+    baseURL: 'https://api.astracollab.app',
+    apiKey: process.env.NEXT_PUBLIC_ASTRACOLLAB_API_KEY,
+  }}
+  onUploadComplete={(results) => console.log(results)}
+/>
+```
+
+<Note>
+  Server-side keys (`ASTRACOLLAB_API_KEY`) and browser-exposed keys
+  (`NEXT_PUBLIC_ASTRACOLLAB_API_KEY`) should be different keys with different
+  names. Rotate them independently.
+</Note>
 
 ### Environment-Based Configuration
 
-Configure API keys for different environments:
+Configure API keys for different environments. Staging has its own base URL
+and dataset, so give each environment its own key **and** its own client
+configuration:
 
 ```javascript
 // config/auth.js
-const getApiKey = () => {
-  switch (process.env.NODE_ENV) {
-    case 'production':
-      return process.env.ASTRACOLLAB_PROD_API_KEY;
-    case 'staging':
-      return process.env.ASTRACOLLAB_STAGING_API_KEY;
-    case 'development':
-      return process.env.ASTRACOLLAB_DEV_API_KEY;
-    default:
-      throw new Error('Invalid environment');
-  }
+const configs = {
+  production: {
+    apiKey: process.env.ASTRACOLLAB_PROD_API_KEY,
+    baseURL: 'https://api.astracollab.app',
+  },
+  staging: {
+    apiKey: process.env.ASTRACOLLAB_STAGING_API_KEY,
+    baseURL: 'https://staging.astracollab.app',
+  },
+  development: {
+    apiKey: process.env.ASTRACOLLAB_DEV_API_KEY,
+    baseURL: 'https://staging.astracollab.app',
+  },
 };
 
-// Initialize client
-const client = new AstraCollab(getApiKey());
+export const getClient = () => {
+  const env = process.env.NODE_ENV === 'production' ? 'production' : 'development';
+  const config = configs[env];
+  if (!config?.apiKey) throw new Error(`No AstraCollab key configured for ${env}`);
+  return new AstraCollabClient(config);
+};
 ```
+
+### Proxying from the Browser
+
+API keys belong on the server. For browser apps, wrap calls in your own
+backend so the key never ships to the client — a Next.js route handler makes
+this a few lines:
+
+```ts
+// app/api/storage/files/route.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { AstraCollabClient } from '@astracollab/js';
+
+const client = new AstraCollabClient({
+  apiKey: process.env.ASTRACOLLAB_API_KEY,
+});
+
+export async function GET() {
+  try {
+    const files = await client.listFiles();
+    return NextResponse.json({ success: true, data: files });
+  } catch (error) {
+    return NextResponse.json(
+      { success: false, error: { message: 'Upstream storage error' } },
+      { status: 502 },
+    );
+  }
+}
+```
+
+The client calls your route; your route calls AstraCollab. Your auth decides
+who gets through the front door — the API key stays inside.
 
 ## Error Handling
 
@@ -165,7 +228,7 @@ const validateToken = (token) => {
 const safeClientInit = (token) => {
   try {
     validateToken(token);
-    return new AstraCollab(token);
+    return new AstraCollabClient({ apiKey: token });
   } catch (error) {
     console.error('Token validation failed:', error);
     throw error;
@@ -181,6 +244,7 @@ Create mock authentication for testing:
 
 ```javascript
 // test/mocks/auth.js
+import { AstraCollabClient } from '@astracollab/js';
 export const mockAuth = {
   apiKey: 'test_api_key_1234567890abcdef',
   user: {
@@ -190,7 +254,7 @@ export const mockAuth = {
   },
   
   createMockClient: () => {
-    return new AstraCollab(mockAuth.apiKey);
+    return new AstraCollabClient({ apiKey: mockAuth.apiKey });
   },
   
   mockLogin: async (email, password) => {
@@ -212,23 +276,23 @@ Test authentication integration:
 
 ```javascript
 // test/integration/auth.test.js
-import { AstraCollab } from '@astracollab/sdk';
+import { AstraCollabClient } from '@astracollab/js';
 
 describe('Authentication Integration', () => {
   test('should authenticate with valid API key', async () => {
-    const client = new AstraCollab(process.env.TEST_API_KEY);
-    const files = await client.files.list();
+    const client = new AstraCollabClient({ apiKey: process.env.TEST_API_KEY });
+    const files = await client.listFiles();
     expect(files).toBeDefined();
   });
 
   test('should reject invalid API key', async () => {
-    const client = new AstraCollab('invalid_key');
-    await expect(client.files.list()).rejects.toThrow();
+    const client = new AstraCollabClient({ apiKey: 'invalid_key' });
+    await expect(client.listFiles()).rejects.toThrow();
   });
 
   test('should handle expired token', async () => {
-    const client = new AstraCollab(expiredToken);
-    await expect(client.files.list()).rejects.toThrow();
+    const client = new AstraCollabClient({ apiKey: expiredToken });
+    await expect(client.listFiles()).rejects.toThrow();
   });
 });
 ```
@@ -236,18 +300,38 @@ describe('Authentication Integration', () => {
 ## Best Practices Summary
 
 ### Security
-- Store keys securely (environment variables, secure storage)
-- Use least privilege principle
-- Validate tokens before use
+
+The rule underneath everything else: **the key never reaches the client**.
+Server-side code keeps it in environment variables or a secrets manager;
+browser apps proxy through their own backend (a route handler is enough) so
+the key stays on the server. Apply least privilege by issuing one key per
+environment and per integration — a staging key can't touch production, and a
+leaked reporting key can't write. Wherever keys are accepted, validate
+responses before trusting them: an unexpected `401` on a previously-working
+call is a signal (revocation, rotation, or compromise), not just a retry.
 
 ### User Experience
-- Handle authentication errors gracefully
-- Provide clear error messages
-- Implement automatic token refresh
-- Support multiple authentication methods
+
+Authentication failures are the moment users decide whether your integration
+is trustworthy. Catch auth errors and translate them into plain language —
+"Your connection to storage expired, please reconnect" beats
+`Error: INVALID_API_KEY`. Never loop users through silent retries on a `401`;
+surface a single clear action (re-authenticate, contact an admin). When the
+integration runs unattended, implement automatic rotation *before* expiry:
+create the new key, deploy it, verify, then revoke the old — the
+[rotation workflow](#key-rotation) applies here. Supporting both interactive
+and programmatic auth paths is fine, but each should have one obvious,
+documented way in.
 
 ### Development
-- Use environment-specific configurations
-- Implement comprehensive testing
-- Monitor authentication failures
-- Document authentication flows
+
+Environment-specific configuration isn't optional: production, staging, and
+development should each have their own key **and** base URL, wired through a
+single config module so a staging client can never point at production by
+accident. Cover the auth boundary in tests — the valid-key, invalid-key, and
+expired-key cases above are the minimum set, and they run without touching
+production data. Log authentication failures (with code, never with the key
+itself) and alert on spikes: a burst of `401`s is either a deploy gone wrong
+or someone probing. Finally, document your own auth flow — which key goes
+where, how rotation happens, who owns it — in the same runbook as the
+integration itself.

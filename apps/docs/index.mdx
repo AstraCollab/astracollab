@@ -1,120 +1,114 @@
 ---
-title: "Introduction"
-description: "Storage solution with easy API access, built for developers by developers"
+title: "AstraCollab for developers"
+description: "One workspace for ideas, files, and decisions — with an API that treats all three as first-class objects."
 ---
 
-## Welcome to AstraCollab
+Wherever work starts, it starts on a thread. For developers, the thread has an
+API: files, folders, keys, and billing as plain REST — with SDKs that speak
+React.
 
-Upload, manage, and share files with ease.
-
-<Card
-  title="Get Started"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Set up AstraCollab in minutes with our quickstart guide.
-</Card>
-
-## Core Features
-
-Build powerful file management applications with our comprehensive feature set.
-
-<Columns cols={2}>
+<CardGroup cols={2}>
   <Card
-    title="File Upload & Management"
-    icon="upload"
-    href="/features/file-upload"
+    title="Quickstart"
+    icon="rocket"
+    color="purple"
+    href="/quickstart"
+    horizontal
   >
-    Upload files with progress tracking, multipart uploads for large files, and real-time status updates.
+    From API key to first uploaded file in five minutes.
   </Card>
   <Card
-    title="API Access"
-    icon="terminal"
-    href="/api-reference/introduction"
+    title="Authentication"
+    icon="key"
+    color="purple"
+    href="/api-reference/authentication"
+    horizontal
   >
-    Full REST API with authentication, rate limiting, and comprehensive documentation.
+    Create keys, scope them, and call the API safely.
   </Card>
-  <Card
-    title="SDK & Libraries"
-    icon="code"
-    href="/sdk/nextjs"
-  >
-    Official SDKs for Next.js and JavaScript with React hooks and components.
-  </Card>
-  <Card
-    title="Billing & Usage"
-    icon="credit-card"
-    href="/features/billing"
-  >
-    Per-user and per-storage billing with usage tracking and overage management.
-  </Card>
-</Columns>
+</CardGroup>
 
-## Quick Integration
+## Build with
 
-Get up and running with AstraCollab in your application.
-
-<Columns cols={2}>
+<CardGroup cols={2}>
   <Card
     title="Next.js SDK"
     icon="nextjs"
+    color="purple"
     href="/sdk/nextjs"
   >
-    React hooks, components, and utilities for Next.js applications.
+    React hooks, components, and utilities — upload progress and storage state as hooks.
   </Card>
   <Card
     title="JavaScript SDK"
     icon="javascript"
+    color="purple"
     href="/sdk/javascript"
   >
-    Pure JavaScript SDK for Node.js and browser environments.
+    Pure JavaScript for Node and browser environments.
   </Card>
   <Card
-    title="API Reference"
-    icon="book"
+    title="API reference"
+    icon="terminal"
+    color="purple"
     href="/api-reference/introduction"
   >
-    Complete API documentation with examples and authentication guides.
+    Every endpoint — files, folders, keys, billing — with request and response shapes.
   </Card>
   <Card
     title="Examples"
     icon="lightbulb"
+    color="purple"
     href="/sdk/examples"
   >
-    Code examples and integration patterns for common use cases.
+    Copy-paste patterns for the integrations teams actually build.
   </Card>
-</Columns>
+</CardGroup>
 
-## Why AstraCollab?
+## The mechanics
 
-<Columns cols={3}>
+<CardGroup cols={2}>
   <Card
-    title="Developer First"
-    icon="code"
+    title="File upload"
+    icon="upload"
+    color="purple"
+    href="/features/file-upload"
   >
-    Built by developers, for developers. Comprehensive APIs, SDKs, and documentation.
+    Single-shot or multipart for large files, with real-time progress.
   </Card>
   <Card
-    title="Enterprise Ready"
+    title="Storage management"
+    icon="folder"
+    color="purple"
+    href="/features/storage-management"
+  >
+    Folders, listings, and usage — the workspace, programmatically.
+  </Card>
+  <Card
+    title="API keys"
     icon="shield"
+    color="purple"
+    href="/features/api-keys"
   >
-    Authentication, rate limiting, billing, and security features out of the box.
+    Scoped keys with usage tracking and revocation.
   </Card>
   <Card
-    title="Scalable"
-    icon="chart-line"
+    title="Billing & usage"
+    icon="credit-card"
+    color="purple"
+    href="/features/billing"
   >
-    Handle large files, multiple uploads, and high traffic with ease.
+    Per-storage billing with usage records and overage math.
   </Card>
-</Columns>
+</CardGroup>
 
-## Ready to get started?
+## Ready when you are
 
 <Card
-  title="Start building today"
-  icon="stars"
+  title="Open a thread — then wire it up"
+  icon="arrow-right"
+  color="purple"
   href="/quickstart"
 >
-  Follow our quickstart guide to integrate AstraCollab into your application.
+  Start free in the app, grab an API key from settings, and follow the quickstart.
 </Card>

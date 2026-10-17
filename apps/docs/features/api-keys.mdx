@@ -14,9 +14,9 @@ API keys provide secure programmatic access to your AstraCollab storage. Learn h
 Create a new API key with default permissions:
 
 ```javascript
-import { AstraCollab } from '@astracollab/sdk';
+import { AstraCollabClient } from '@astracollab/js';
 
-const client = new AstraCollab('your-api-key');
+const client = new AstraCollabClient({ apiKey: 'your-api-key' });
 
 const newKey = await client.keys.create({
   name: 'My Application Key',
@@ -179,7 +179,7 @@ const rotateApiKey = async (oldKeyId, oldKeyName) => {
     await updateApplicationConfig(newKey.fullKey);
     
     // 3. Verify new key works
-    const testClient = new AstraCollab(newKey.fullKey);
+    const testClient = new AstraCollabClient({ apiKey: newKey.fullKey });
     await testClient.files.list();
     
     // 4. Revoke old key
@@ -406,25 +406,59 @@ const recoverFromCompromise = async (compromisedKeyId) => {
 
 ## Best Practices Summary
 
+The practices below distill the rest of this guide into what actually matters
+day to day. They are grouped by where you are in a key's life — creating it,
+living with it, guarding it, and watching it. Each group links back to the
+detailed section if you need the mechanics.
+
 ### Creation
-- Use descriptive names
-- Follow least privilege principle
-- Set appropriate expiration dates
-- Document key purposes
+
+Give every key a name that answers two questions a year from now: *what uses
+this* and *who do I call when it misbehaves* — `prod-worker-nightly-ingest` beats
+`key2`. Scope each key to the narrowest set of operations it genuinely needs
+(least privilege), so a leaked key is an inconvenience instead of an incident.
+If the consumer is a short-lived integration — a script, a contractor's
+prototype, a demo — set an expiration up front rather than remembering to
+revoke it later. Finally, write down the key's purpose where your team keeps
+runbooks: which app uses it, where the credential lives, and who owns the
+system around it. The [creation section](#creating-api-keys) covers the API
+calls involved.
 
 ### Management
-- Regular key rotation
-- Monitor usage patterns
-- Review permissions periodically
-- Keep key inventory updated
+
+Keys rot silently: apps get decommissioned, staff rotate, permissions drift
+beyond what the integration now needs. Schedule a recurring review — quarterly
+is a reasonable cadence for small teams — and walk the key inventory asking
+"do I still know what this is?" Anything you can't answer gets revoked, since
+recreating a key is minutes of work while an orphaned one is standing risk.
+Rotate long-lived keys on a schedule too, ideally by creating the replacement,
+deploying it, and revoking the old one only after you've confirmed the new one
+in production. Watch the usage analytics for patterns that contradict what the
+key is supposed to do — a reporting key writing files is telling you
+something. The [management section](#managing-api-keys) has the
+listing, update, and revocation calls.
 
 ### Security
-- Store keys securely
-- Never commit keys to version control
-- Use environment variables
+
+Treat keys like passwords with database access. Keep them in a secrets manager
+or, minimally, environment variables that never leave the server; a key that
+appears in client-side code, a git history, or a shared Slack message should be
+considered compromised and rotated immediately. Never commit keys to version
+control — add the `.env` file to `.gitignore` before the first commit, not
+after. Use one key per environment (dev, staging, production) so a staging
+incident can't touch production data and a leaked dev key is low-value to an
+attacker. The [security best practices section](#security-best-practices) goes
+deeper on storage and [emergency procedures](#emergency-procedures) covers the
+compromise playbook.
 
 ### Monitoring
-- Track key usage
-- Set up usage alerts
-- Regular security audits
-- Monitor for unusual activity
+
+An unused key is a liability; an unusually busy key is a warning. Check the
+usage analytics regularly enough to notice when a key that normally serves a
+hundred requests a day suddenly serves ten thousand — spikes usually mean a
+runaway loop, a compromised credential, or someone new using an old key they
+found. Configure usage alerts so you find out without watching, and audit key
+lists as part of security reviews alongside your other credentials. When you
+do find an anomaly, the fastest safe move is revocation: the [usage
+monitoring section](#usage-monitoring) shows what's available, and
+[key rotation](#key-rotation) makes recovery cheap.

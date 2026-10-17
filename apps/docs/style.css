@@ -1,0 +1,79 @@
+/*
+ * AstraCollab docs theme — prism landing language:
+ * sharp corners, zinc borders, purple #5900C6 accents, near-black surfaces.
+ * Accent colors themselves come from docs.json (`colors.primary/light/dark`).
+ */
+
+:root {
+  --rounded-sm: 0px;
+  --rounded-md: 0px;
+  --rounded-lg: 0px;
+  --rounded-xl: 0px;
+  --rounded-3xl: 0px;
+}
+
+/* Sharp corners everywhere — the AstraCollab look. */
+button,
+a[class*="button"],
+input,
+select,
+textarea,
+pre,
+code,
+table,
+img,
+iframe,
+[class*="rounded"],
+[class*="rounded-"]:not([class*="animate-spin"]) {
+  border-radius: 0 !important;
+}
+
+/* Keep the search dialog and popovers consistent with the page frame. */
+#search-bar-entry,
+[class*="dialog"],
+[class*="popover"],
+[class*="dropdown"] {
+  border-radius: 0 !important;
+}
+
+/* Sidebar + top bar chrome: crisp hairlines instead of soft cards. */
+#sidebar,
+#topbar,
+header[class*="top"] {
+  border-color: rgb(228 228 231);
+}
+:where(.dark) #sidebar,
+:where(.dark) #topbar,
+:where(.dark) header[class*="top"] {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Code blocks sit on near-black in both modes — like the app's rail dock. */
+pre {
+  background: #09080d !important;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+pre code {
+  background: transparent !important;
+}
+
+/* Cards: hairline borders, no shadows-as-structure. */
+.card,
+[class*="card"] {
+  border: 1px solid rgb(228 228 231);
+  box-shadow: none;
+  transition: border-color 150ms ease;
+}
+.card:hover,
+[class*="card"]:hover {
+  border-color: rgba(89, 0, 198, 0.45);
+}
+:where(.dark) .card,
+:where(.dark) [class*="card"] {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Purple selection, matching the landing. */
+::selection {
+  background: rgba(89, 0, 198, 0.3);
+}

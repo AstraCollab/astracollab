@@ -1,0 +1,121 @@
+---
+title: "astra CLI"
+description: "astra is to neb what gh is to git — log in, pick a workspace, create hosted galaxies, and let neb do the version control"
+---
+
+## astra: the platform CLI
+
+`neb` handles version control locally; `astra` is its GitHub-CLI-style
+companion that handles the astracollab platform: authentication, workspaces
+(organizations), and hosted galaxies on
+`https://registry.astracollab.app`.
+
+| Tool   | Role                                            | Analogy |
+| ------ | ----------------------------------------------- | ------- |
+| `neb`  | Version control (init, save, push, propose)     | `git`   |
+| `astra`| Platform (login, workspaces, galaxy management) | `gh`    |
+
+## Install
+
+```bash
+cd packages/astra-cli
+npm install
+npm run build
+npm link   # exposes `astra` on your PATH
+```
+
+## astra login
+
+Logging in uses a device flow — the same pattern as `gh auth login`:
+
+```bash
+astra login
+```
+
+1. The CLI requests a device code and shows a one-time code
+   (e.g. `ABCD-EFGH`).
+2. Your browser opens the authorization page
+   (`https://astracollab.app/cli/authorize?user_code=...`).
+3. You pick which **workspace** (organization) to connect and approve.
+4. The CLI receives a workspace-scoped token and stores it locally.
+
+```bash
+$ astra login
+• First, copy your one-time code: ABCD-EFGH
+• Open this URL to continue: https://astracollab.app/cli/authorize?user_code=ABCD-EFGH
+✓ Logged in as Elias → workspace Acme
+✓ neb authenticated for https://registry.astracollab.app (org_ab12cd34)
+```
+
+<Note>
+  `astra login` also writes neb-compatible credentials to
+  `~/.config/nebula/credentials.*`. After logging in, plain `neb push`,
+  `neb pull` and `neb clone` work immediately — no separate `neb auth login`
+  required.
+</Note>
+
+### What happens under the hood
+
+- The token is a short-lived **JWT signed by astracollab** (ES256, via its
+  public JWKS endpoint) that the Nebula registry verifies directly.
+- It is bound to the workspace you approved:
+  `actor_kind: team`, `actor_id: <orgId>` — the registry resolves this to the
+  org's own actor, trusted for that org's galaxies only.
+- The raw token is returned exactly once and stored at
+  `~/.config/astra/credentials.json` (mode `0600`). Nothing is kept on the
+  server — only a SHA-256 fingerprint for audit.
+
+## Everyday commands
+
+```bash
+astra whoami        # user, workspace, scopes, registry
+astra logout        # clears astra AND neb credentials
+```
+
+## Hosting a repository
+
+Create a hosted galaxy for the current workspace:
+
+```bash
+astra repo create my-app
+```
+
+```
+✓ Created galaxy my-app (repo_5f3a...)
+  remote    https://registry.astracollab.app/repo_5f3a....neb
+```
+
+If you run this inside a project that already has a `.nebula/` directory, the
+CLI wires the remote for you (`neb remote add origin <url>`). Otherwise it
+prints the three commands to run:
+
+```bash
+neb init
+neb remote add origin https://registry.astracollab.app/repo_5f3a....neb
+neb push origin
+```
+
+List your workspace's galaxies:
+
+```bash
+astra repo list
+```
+
+## Configuration
+
+| Env / flag                     | Default                        | Meaning                        |
+| ------------------------------ | ------------------------------ | ------------------------------ |
+| `--app-url` / `ASTRA_APP_URL`  | `https://astracollab.app`      | astracollab app origin         |
+| `ASTRA_CREDENTIAL_STORE_DIR`   | `~/.config/astra`              | astra credential store         |
+| `NEBULA_CREDENTIAL_STORE_DIR`  | `~/.config/nebula`             | neb credential store (handoff) |
+
+## Command reference
+
+| Command              | Description                                              |
+| -------------------- | -------------------------------------------------------- |
+| `astra login`        | Log in via the browser (device flow), wire up `neb`      |
+| `astra login --force`| Re-authenticate even when a stored token exists          |
+| `astra whoami`       | Show the authenticated user, workspace and scopes        |
+| `astra repo create <name>` | Create a hosted galaxy (and link it when run in a project) |
+| `astra repo list`    | List galaxies for your workspace                         |
+| `astra logout`       | Clear stored credentials (astra + neb)                   |

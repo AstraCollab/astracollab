@@ -14,9 +14,9 @@ AstraCollab provides powerful storage management features to help you organize, 
 Organize your files into logical folder structures:
 
 ```javascript
-import { AstraCollab } from '@astracollab/sdk';
+import { AstraCollabClient } from '@astracollab/js';
 
-const client = new AstraCollab('your-api-key');
+const client = new AstraCollabClient({ apiKey: 'your-api-key' });
 
 // Create a project folder structure
 const projectFolder = await client.folders.create({
@@ -385,26 +385,53 @@ const monitorUsage = async () => {
 
 ## Best Practices Summary
 
+The structure you set up now is what you'll be navigating a year from now,
+when the workspace has an order of magnitude more files and half the original
+team. These are the habits that keep storage navigable, fast, and safe — each
+group maps back to a section of this guide.
+
 ### Organization
-- Use clear, consistent naming conventions
-- Create logical folder hierarchies
-- Add meaningful metadata to files
-- Regular cleanup and archiving
+
+Decide on a naming convention early and enforce it lightly — `client/
+project/ asset-type/` beats a taxonomy nobody follows. Build folder
+hierarchies that mirror how your team *thinks* about the work (by client or
+by project, rarely both), and keep them consistent enough that a new folder's
+location is guessable. Use metadata and descriptions for the context that
+doesn't fit a name: status, source, who approved it. Most importantly, delete
+with the same discipline you upload with — finished projects get archived,
+intermediates get cleaned, and storage stops being a junk drawer. The
+[folder organization](#folder-organization) section shows the API calls.
 
 ### Performance
-- Keep folder hierarchies shallow
-- Use bulk operations for efficiency
-- Monitor storage usage regularly
-- Implement file deduplication
+
+Keep folder hierarchies shallow. Every listing is a request, so a path ten
+folders deep is ten requests of latency before the first file appears — two
+to three levels is the practical sweet spot. Prefer bulk operations over
+per-file loops; one request that touches fifty files beats fifty requests
+touching one. Monitor usage with the billing endpoints so growth is a
+dashboard, not a discovery, and deduplicate assets at upload time (checking
+by name and size first) rather than paying to store the same file five ways.
+The [bulk operations](#bulk-operations) section has the details.
 
 ### Security
-- Set appropriate folder permissions
-- Regular access reviews
-- Secure sharing practices
-- Backup important data
+
+Apply permissions at the folder level, not the file level — a client folder
+that's private as a unit is far easier to reason about than per-file ACLs.
+Review who has access on the same cadence as team roster changes, since
+access granted to a contractor in spring tends to outlive the contract. When
+sharing externally, prefer time-limited share links with passwords over
+workspace invitations whenever the recipient only needs to *look* — the
+[sharing folders](#sharing-folders) section covers the options. And back up
+irreplaceable assets outside the platform: storage providers protect against
+loss, not against a determined delete.
 
 ### Maintenance
-- Regular storage audits
-- Archive old content
-- Monitor usage patterns
-- Optimize based on analytics
+
+Treat storage like a garden, not a landfill. Schedule a periodic audit —
+quarterly works for most teams — that answers three questions: what can be
+archived, what can be deleted, and what is nobody's job anymore. Watch usage
+patterns from the analytics to see which folders actually earn their keep;
+dormant branches are archive candidates. Then act on what you learn: archive
+old content to cold storage, monitor the effect on usage, and optimize based
+on what the numbers show rather than intuition. The [storage
+analytics](#storage-analytics) section is the starting point.
