@@ -1,6 +1,6 @@
 {
 	"name": "nah-studio",
-	"version": "0.0.1-beta.8",
+	"version": "0.0.1-beta.10",
 	"description": "The nah Studio: a dashboard for watching agents, with traces, evaluations and chat. Started by `nah` with /studio.",
 	"type": "module",
 	"bin": {
@@ -9,7 +9,10 @@
 	"exports": {
 		"./package.json": "./package.json"
 	},
-	"files": ["dist", "LICENSE"],
+	"files": [
+		"dist",
+		"LICENSE"
+	],
 	"sideEffects": false,
 	"license": "MIT",
 	"author": "AstraCollab",
@@ -36,8 +39,8 @@
 	},
 	"dependencies": {
 		"ai": "^7.0.127",
-		"nah-ai": "workspace:^",
-		"not-another-harness": "workspace:^"
+		"nah-ai": "0.0.1-beta.7",
+		"not-another-harness": "0.0.1-beta.8"
 	},
 	"devDependencies": {
 		"@ai-sdk/provider": "^4.0.0",
