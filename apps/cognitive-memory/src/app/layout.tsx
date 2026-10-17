@@ -1,15 +1,19 @@
-import type { Metadata } from "next"
-import { Geist, Geist_Mono } from "next/font/google"
+import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+import { CanopyProvider } from "@wnstn/canopy-nextjs";
 
-import "./globals.css"
+import "./globals.css";
 
-const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] })
-const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] })
+const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
 
 export const metadata: Metadata = {
   title: {
     default: "Cognitive Memory — every memory line has a reason and a price",
-    template: "%s · Cognitive Memory"
+    template: "%s · Cognitive Memory",
   },
   description:
     "A four-tier memory service for agents. Every line injected into a prompt carries the rule that selected it and its token cost, so the per-turn budget is a decision rather than an accident.",
@@ -17,9 +21,9 @@ export const metadata: Metadata = {
     title: "Cognitive Memory",
     description:
       "A four-tier memory service for agents: contradictions kept as first-class records, per-domain reliability, and a bounded, auditable prompt block.",
-    type: "website"
-  }
-}
+    type: "website",
+  },
+};
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
@@ -39,11 +43,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `try{if(matchMedia("(prefers-reduced-motion: no-preference)").matches)document.documentElement.setAttribute("data-motion","ok")}catch(e){}`
+            __html: `try{if(matchMedia("(prefers-reduced-motion: no-preference)").matches)document.documentElement.setAttribute("data-motion","ok")}catch(e){}`,
           }}
         />
       </head>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <CanopyProvider endpoint={process.env.NEXT_PUBLIC_CANOPY_URL ?? ""} siteId={process.env.NEXT_PUBLIC_CANOPY_SITE_ID ?? ""}>
+        <body className="min-h-full flex flex-col">{children}</body>
+      </CanopyProvider>
     </html>
-  )
+  );
 }
