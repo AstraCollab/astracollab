@@ -136,28 +136,193 @@
  * sign-up are app chrome a real user stares at while authenticating, and they
  * read better on the light default. Only the front door gets the dark treatment.
  *
- * The palette is near-monochrome with one signal colour. A landing page for a
- * developer tool competes with the terminal screenshots it shows, and a
- * multi-colour palette fights the syntax highlighting inside them. Ink carries
- * the hierarchy; `signal` is spent only on things that are actually clickable
- * or genuinely running.
+ * These values are the ones `apps/nah`'s docs and `packages/nah-studio` both
+ * use — a zinc-950 ground, a violet accent, and hairlines at 8% white. They are
+ * copied rather than invented so a panel here and a panel in the studio are the
+ * same object and not two things that look alike. Do not drift them: the next
+ * value that is "a bit nicer on its own" is how three surfaces stopped matching.
  */
 @layer components {
-  .landing {
-    --surface: oklch(0.16 0.006 265);
-    --surface-raised: oklch(0.2 0.007 265);
-    --surface-inset: oklch(0.13 0.006 265);
-    --line: oklch(1 0 0 / 9%);
-    --line-strong: oklch(1 0 0 / 16%);
-    --ink: oklch(0.99 0 0);
-    --ink-muted: oklch(0.68 0.008 265);
-    --ink-faint: oklch(0.5 0.008 265);
-    --signal: oklch(0.82 0.19 145);
-    --signal-dim: oklch(0.55 0.13 145);
-    --warn: oklch(0.78 0.15 80);
+  .landing,
+  .auth,
+  .app {
+    --surface: #09090b;
+    --surface-raised: #101012;
+    --surface-inset: #0b0b0d;
+    --line: rgb(255 255 255 / 8%);
+    --line-soft: rgb(255 255 255 / 5%);
+    --line-strong: rgb(255 255 255 / 14%);
+    --ink: #e4e4e7;
+    --ink-muted: #8a8a99;
+    --ink-faint: #52525b;
+    --signal: #a78bfa;
+    --signal-dim: #8b6ff0;
+    --warn: #fbbf24;
 
     background-color: var(--surface);
     color: var(--ink);
+    /* Wired to the families loaded in layout.tsx. */
+    font-family: var(--font-grotesk), ui-sans-serif, system-ui, sans-serif;
+  }
+
+  /**
+   * Auth, on the same theme.
+   *
+   * These pages used to sit on the stock light shadcn palette, which made signing
+   * in look like a different product from the page that sent you there — a white
+   * form under a link out of a zinc-and-violet hero.
+   *
+   * The remap below is the part that actually does the work: `auth-form.tsx` and
+   * the shadcn `Button` both style themselves with semantic names — `bg-background`,
+   * `text-muted-foreground`, `border`, `ring` — so rather than override those
+   * components case by case, the tokens they already read are pointed at the
+   * shared theme. One block, and every shadcn primitive follows the palette.
+   *
+   * `.app` carries the same remap, which is what lets the dashboard reuse every
+   * shadcn primitive without a single override on the pages themselves.
+   */
+  .auth,
+  .app {
+    --background: var(--surface);
+    --foreground: var(--ink);
+    --card: var(--surface-raised);
+    --card-foreground: var(--ink);
+    --popover: var(--surface-raised);
+    --popover-foreground: var(--ink);
+    --primary: var(--signal);
+    --primary-foreground: #09090b;
+    --secondary: var(--surface-inset);
+    --secondary-foreground: var(--ink);
+    --muted: var(--surface-inset);
+    --muted-foreground: var(--ink-muted);
+    --accent: var(--surface-inset);
+    --accent-foreground: var(--ink);
+    --border: var(--line);
+    --input: var(--line);
+    --ring: var(--signal);
+    --destructive: #f87171;
+    /* The shared theme's panel radius, not shadcn's 0.625rem default. */
+    --radius: 0.75rem;
+  }
+
+  /**
+   * The eyebrow.
+   *
+   * The shared theme's one recurring typographic device, and the thing that
+   * makes a label read as a field name rather than as a heading. Nine pixels is
+   * deliberately below the comfortable reading size — it is chrome, not copy,
+   * and the wide tracking is what keeps it from turning into smudge.
+   */
+  .eyebrow {
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+    font-size: 9px;
+    line-height: 1.4;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  /** The panel: a hairline, a 0.75rem radius, and a barely-there lift. */
+  .panel {
+    border: 1px solid var(--line);
+    border-radius: 0.75rem;
+    background: rgb(255 255 255 / 2.5%);
+  }
+
+  /**
+   * Depth, as a three-step scale.
+   *
+   * Each step is a *pair* of shadows: a tight one for contact with the surface
+   * and a wide, very soft one for the ambient occlusion a real object casts. A
+   * single shadow reads as a sticker; the two together read as an object lit
+   * from above. The ambient layer is deliberately huge and faint — that is what
+   * separates "floating above the page" from "floating slightly".
+   */
+  .elev-1 {
+    box-shadow:
+      0 1px 2px oklch(0 0 0 / 0.4),
+      0 4px 16px oklch(0 0 0 / 0.28);
+  }
+
+  .elev-2 {
+    box-shadow:
+      0 2px 4px oklch(0 0 0 / 0.4),
+      0 12px 32px oklch(0 0 0 / 0.36);
+  }
+
+  .elev-3 {
+    box-shadow:
+      0 4px 8px oklch(0 0 0 / 0.42),
+      0 24px 64px oklch(0 0 0 / 0.48);
+  }
+
+  /**
+   * Glass.
+   *
+   * Four stacked effects, and all four matter — a frosted panel without them
+   * just looks like a translucent rectangle:
+   *   1. a translucent fill, so the backdrop shows through
+   *   2. `backdrop-filter` to blur what is behind it
+   *   3. a light top hairline plus an inset highlight, which is what sells the
+   *      idea of a lit glass edge
+   *   4. `saturate`, because blurring desaturates whatever passes underneath and
+   *      without it the blur looks grey rather than glassy
+   *
+   * The `@supports` guard matters for real users: `backdrop-filter` is still
+   * unsupported in a few browsers, and there a bare translucent fill would be
+   * an unreadable panel. The fallback is an opaque surface.
+   */
+  .glass {
+    background-color: color-mix(in oklch, var(--surface-raised) 55%, transparent);
+    border: 1px solid var(--line-strong);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 12%),
+      0 2px 4px oklch(0 0 0 / 0.4),
+      0 24px 64px oklch(0 0 0 / 0.48);
+  }
+
+  @supports (backdrop-filter: blur(1px)) {
+    .glass {
+      background-color: color-mix(in oklch, var(--surface-raised) 42%, transparent);
+      backdrop-filter: blur(20px) saturate(140%);
+    }
+  }
+
+  /**
+   * An ambient glow.
+   *
+   * Depth on a dark page cannot come from shadow alone — there is nothing to
+   * cast a shadow onto when the backdrop is already near-black. It comes from
+   * light. These are blurred radial gradients sitting behind the content, sized
+   * and positioned per instance, and they are the single biggest reason the hero
+   * stops looking like a flat rectangle of dark grey.
+   */
+  .glow {
+    position: absolute;
+    border-radius: 9999px;
+    filter: blur(90px);
+    pointer-events: none;
+    will-change: transform;
+  }
+
+  /**
+   * Film grain.
+   *
+   * Large blurred gradients on a near-black surface band visibly on 8-bit
+   * displays — you get concentric rings instead of a smooth falloff. A single
+   * low-opacity noise tile dithered over the top removes them, and also stops
+   * the flat background from looking like a solid fill.
+   *
+   * Inline SVG rather than an asset: no request, no layout shift, and it is the
+   * only way to get noise without shipping a PNG.
+   */
+  .grain::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
   }
 
   /**
@@ -167,12 +332,20 @@
    * nothing to ship, scales to any viewport without a second asset, and — the
    * reason it is a background and not a positioned div — it cannot affect
    * layout. Masked to fade out downward so it does not fight the section below.
+   *
+   * 72px at 2.5% white is the grid the docs and the studio both sit on, taken
+   * from `.grid-field` in `packages/nah-studio/src-ui/index.css`. It is the
+   * single most recognisable thing about the theme, so it is worth matching
+   * exactly — a 64px grid reads as a different site.
    */
   .landing-grid {
     background-image:
-      linear-gradient(to right, var(--line) 1px, transparent 1px),
-      linear-gradient(to bottom, var(--line) 1px, transparent 1px);
-    background-size: 64px 64px;
+      linear-gradient(
+        rgb(255 255 255 / 2.5%) 1px,
+        transparent 1px
+      ),
+      linear-gradient(90deg, rgb(255 255 255 / 2.5%) 1px, transparent 1px);
+    background-size: 72px 72px;
     mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
   }
 
@@ -198,6 +371,84 @@
   }
   .border-line {
     border-color: var(--line);
+  }
+
+  /**
+   * The technical face.
+   *
+   * A utility rather than a `font-mono` override because the whole page leans on
+   * it for *tone* — labels, prefixes, status words — not just for code. That
+   * pairing is what makes the page read as a developer tool: the same mono marks
+   * both the chrome and the transcript, so the product and its description look
+   * like they came from the same place.
+   *
+   * Geist Mono, because that is the mono the studio and the docs set their
+   * micro-labels in, and a label is the thing most likely to be compared
+   * side by side between the two surfaces.
+   */
+  .font-mono-tech {
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+    font-feature-settings: "liga" 0, "calt" 0;
+  }
+
+  /**
+   * Display tracking.
+   *
+   * Space Grotesk runs wide at large sizes, so the headline gets pulled in
+   * slightly. This is the difference between a headline that looks set and one
+   * that looks defaulted, and it is the cheapest possible upgrade.
+   */
+  .tracking-display {
+    letter-spacing: -0.035em;
+  }
+
+  /** Tabular figures, so a column of numbers lines up on the decimal. */
+  .num {
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/**
+ * Selection, focus and scrollbars.
+ *
+ * All three are the shared theme's, because they are the parts of an interface
+ * a user meets before they have read a single word. A violet selection bar on a
+ * zinc ground is the first signal that this page and the studio are one product.
+ */
+@layer base {
+  .landing ::selection {
+    background-color: rgb(167 139 250 / 28%);
+    color: var(--ink);
+  }
+
+  .landing :focus-visible {
+    outline: 2px solid var(--signal);
+    outline-offset: 1px;
+  }
+
+  .landing ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .landing ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* `background-clip: content-box` with a transparent 3px border is what makes
+     the bar read as 4px of thumb sitting in a 10px track, rather than as a
+     10px fat bar. */
+  .landing ::-webkit-scrollbar-thumb {
+    background: rgb(255 255 255 / 8%);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+
+  .landing ::-webkit-scrollbar-thumb:hover {
+    background: rgb(255 255 255 / 16%);
+    background-clip: content-box;
   }
 }
 
@@ -240,6 +491,25 @@
   }
 }
 
+/**
+ * The orbs drift.
+ *
+ * Very slow, very small, and offset from each other, so the hero never settles
+ * and the eye never quite locks onto a single position. A short period on a
+ * `translate` also keeps it on the compositor — animating `left`/`top` here
+ * would relayout a blurred 90px element every frame and drop frames on a
+ * laptop.
+ */
+@keyframes landing-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(2%, -3%, 0) scale(1.06);
+  }
+}
+
 .animate-fade-up {
   animation: landing-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -252,10 +522,23 @@
   animation: landing-sweep 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
+.animate-drift {
+  animation: landing-drift 22s ease-in-out infinite;
+}
+
+/**
+ * Reduced motion.
+ *
+ * Animations off, yes — but the orbs also stop *moving* and stay lit, because
+ * the glow is doing real work: it is the depth on the page. Removing it would
+ * leave a flat dark rectangle, which is worse than a static one. So they keep
+ * their transform, just without the animation.
+ */
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-up,
   .animate-caret,
-  .animate-sweep {
+  .animate-sweep,
+  .animate-drift {
     animation: none;
   }
 }

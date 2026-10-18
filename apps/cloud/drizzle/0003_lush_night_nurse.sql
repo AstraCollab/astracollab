@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "usage_run_unique_idx" ON "nah_usage" USING btree ("run_id") WHERE "nah_usage"."run_id" is not null;

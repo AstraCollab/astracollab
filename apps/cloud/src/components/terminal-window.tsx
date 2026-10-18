@@ -42,15 +42,15 @@ const STAGGER_MS = 260
 
 export function TerminalWindow() {
   return (
-    <div className="landing-rule relative overflow-hidden rounded-xl border border-line bg-[var(--surface-inset)]">
+    <div className="glass landing-rule grain relative overflow-hidden rounded-[0.75rem]">
       {/* Title bar. The dots are decorative, so they are hidden from AT. */}
       <div className="flex items-center gap-3 border-b border-line px-4 py-3">
         <div className="flex gap-1.5" aria-hidden="true">
-          <span className="size-2.5 rounded-full bg-[oklch(0.32_0.008_265)]" />
-          <span className="size-2.5 rounded-full bg-[oklch(0.32_0.008_265)]" />
-          <span className="size-2.5 rounded-full bg-[oklch(0.32_0.008_265)]" />
+          <span className="size-2.5 rounded-full bg-white/10" />
+          <span className="size-2.5 rounded-full bg-white/10" />
+          <span className="size-2.5 rounded-full bg-white/10" />
         </div>
-        <p className="font-mono text-xs text-[var(--ink-faint)]">
+        <p className="font-mono-tech text-xs text-[var(--ink-faint)]">
           nah — run 4f2a · eu-central-1
         </p>
         <p className="ml-auto flex items-center gap-1.5 font-mono text-xs text-signal-dim">
@@ -67,7 +67,7 @@ export function TerminalWindow() {
       <div
         role="img"
         aria-label="A terminal session in which an agent finds a flaky test caused by a real timestamp assertion, edits it to use a mocked clock, and runs the suite to 31 passing."
-        className="space-y-1.5 p-5 font-mono text-[13px] leading-relaxed"
+        className="space-y-1.5 p-5 font-mono-tech text-[13px] leading-relaxed"
       >
         {session.map((line, index) => (
           <TerminalLine key={index} line={line} delay={index * STAGGER_MS} />

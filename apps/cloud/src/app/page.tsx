@@ -88,22 +88,32 @@ const lifecycle = [
 
 export default function Home() {
   return (
-    <div className="landing flex min-h-full flex-col">
+    <div className="landing flex min-h-screen flex-col">
       <SiteHeader />
 
       <main className="flex-1">
         {/* Hero. The grid sits behind everything and is masked to fade out. */}
-        <section className="relative overflow-hidden">
+        <section className="grain relative overflow-hidden">
           <div className="landing-grid pointer-events-none absolute inset-0" aria-hidden="true" />
+
+          {/*
+            Two orbs, not one. A single glow is a spotlight and reads as a bug;
+            a green one low and a violet one high and off-centre gives the
+            section a light source at each end, which is what makes the glass
+            panel in the middle look like it is catching something.
+          */}
+          <div className="glow animate-drift -top-24 -left-20 size-[34rem] bg-[#a78bfa]/20" aria-hidden="true" />
+          <div
+            className="glow animate-drift -right-24 -bottom-32 size-[38rem] bg-[#6366f1]/15 [animation-delay:-11s]"
+            aria-hidden="true"
+          />
 
           <div className="relative mx-auto w-full max-w-6xl px-6 pt-20 pb-16 sm:pt-28 sm:pb-24">
             <div className="grid items-center gap-14 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
               <div className="animate-fade-up">
-                <p className="font-mono text-xs tracking-[0.18em] text-signal-dim uppercase">
-                  Hosted agent runtime
-                </p>
+                <p className="eyebrow">Hosted agent runtime</p>
 
-                <h1 className="mt-5 text-5xl font-semibold tracking-tight text-balance sm:text-6xl">
+                <h1 className="tracking-display mt-5 text-5xl font-semibold text-balance sm:text-6xl">
                   Your agent keeps working
                   <br />
                   after you close
@@ -120,22 +130,22 @@ export default function Home() {
                 <div className="mt-9 flex flex-wrap items-center gap-3">
                   <Button
                     size="lg"
-                    className="bg-signal text-[oklch(0.16_0.006_265)] hover:bg-signal/90"
-                    render={<Link href="/sign-up" />}
+                    className="elev-2 rounded-[0.75rem] border-signal bg-signal text-[#09090b] hover:bg-signal/90"
+                    nativeButton={false} render={<Link href="/sign-up" />}
                   >
                     Start running
                   </Button>
                   <Button
                     size="lg"
                     variant="outline"
-                    className="border-line-strong bg-transparent hover:bg-[var(--surface-raised)] hover:text-[var(--ink)]"
-                    render={<Link href="/sign-in" />}
+                    className="rounded-[0.75rem] border-line-strong bg-transparent hover:bg-[var(--surface-raised)] hover:text-[var(--ink)]"
+                    nativeButton={false} render={<Link href="/sign-in" />}
                   >
                     Sign in
                   </Button>
                 </div>
 
-                <p className="mt-7 font-mono text-xs text-[var(--ink-faint)]">
+                <p className="font-mono-tech mt-7 text-xs text-[var(--ink-faint)]">
                   Bring your own model key · no card to see it work
                 </p>
               </div>
@@ -152,11 +162,16 @@ export default function Home() {
           title="Four things that are hard to fake"
           lede="Most hosted agent products hand you a container API and call it a machine. These are the parts we refused to compromise on."
         >
-          {/* A 1px gap over a line-coloured backdrop draws the grid without
-              four separate borders, so the cells stay flush. */}
-          <div className="grid gap-px overflow-hidden rounded-xl border border-line bg-[var(--line)] sm:grid-cols-2">
+          {/*
+            Individual cards rather than one bordered grid. The 1px-gap-over-a
+            line-coloured-backdrop trick draws a grid without four borders, but it
+            produces a single flat slab — and four panels with their own shadow
+            are what carry the elevation. The surface sits between two glows
+            here, so the cards are lit from behind as well as from above.
+          */}
+          <div className="grid gap-4 sm:grid-cols-2">
             {pillars.map((pillar) => (
-              <div key={pillar.title} className="bg-[var(--surface)] p-7">
+              <div key={pillar.title} className="elev-1 rounded-[0.75rem] border border-line bg-[var(--surface-raised)] p-7">
                 <h3 className="font-medium text-balance">{pillar.title}</h3>
                 <p className="mt-3 text-sm leading-6 text-[var(--ink-muted)]">
                   {pillar.body}
@@ -172,10 +187,10 @@ export default function Home() {
           title="Three steps, then it is not your problem"
           lede="No image to build, no service to supervise. The daemon is already running by the time the sandbox exists."
         >
-          <ol className="grid gap-8 md:grid-cols-3">
+          <ol className="grid gap-6 md:grid-cols-3">
             {steps.map((step) => (
-              <li key={step.n}>
-                <p className="font-mono text-sm text-signal-dim">{step.n}</p>
+              <li key={step.n} className="elev-1 rounded-[0.75rem] border border-line bg-[var(--surface-raised)] p-7">
+                <p className="font-mono-tech text-sm text-signal-dim">{step.n}</p>
                 <h3 className="mt-3 font-medium text-balance">{step.title}</h3>
                 <p className="mt-3 text-sm leading-6 text-[var(--ink-muted)]">
                   {step.body}
@@ -192,7 +207,7 @@ export default function Home() {
           title="Two keys, because one cannot do both jobs"
           lede="A session cookie is the wrong shape for a machine that authenticates once and then runs for an hour. Both of these belong to the organisation, not to a person."
         >
-          <div className="overflow-x-auto rounded-xl border border-line">
+          <div className="elev-1 overflow-x-auto rounded-[0.75rem] border border-line">
             <table className="w-full border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-line bg-[var(--surface-raised)]">
@@ -205,11 +220,11 @@ export default function Home() {
                 {credentials.map((credential) => (
                   <tr
                     key={credential.name}
-                    className="border-b border-line last:border-0"
+                    className="border-b border-line bg-[var(--surface)] last:border-0"
                   >
                     <td className="px-5 py-4 align-top">
                       <span className="font-medium">{credential.name}</span>
-                      <code className="mt-1.5 block font-mono text-xs text-[var(--ink-faint)]">
+                      <code className="font-mono-tech mt-1.5 block text-xs text-[var(--ink-faint)]">
                         {credential.prefix}
                       </code>
                     </td>
@@ -242,11 +257,13 @@ export default function Home() {
                     aria-hidden="true"
                   />
                 )}
+                {/* Ringed rather than solid: a filled dot on a dark card is a
+                    hole, a ring with a lit core reads as a lit indicator. */}
                 <span
-                  className="absolute top-1.5 left-0 size-2 -translate-x-[3px] rounded-full bg-signal"
+                  className="absolute top-1.5 left-0 size-2.5 -translate-x-[5px] rounded-full border border-signal/40 bg-signal shadow-[0_0_12px_rgb(167_139_250/0.5)]"
                   aria-hidden="true"
                 />
-                <p className="font-mono text-sm text-signal-dim">{item.step}</p>
+                <p className="font-mono-tech text-sm text-signal-dim">{item.step}</p>
                 <p className="mt-3 text-sm leading-6 text-[var(--ink-muted)]">
                   {item.note}
                 </p>
@@ -256,9 +273,14 @@ export default function Home() {
         </Section>
 
         {/* Close. The last thing on the page is the thing you came for. */}
-        <section className="border-t border-line">
-          <div className="mx-auto w-full max-w-3xl px-6 py-24 text-center">
-            <h2 className="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
+        <section className="grain relative overflow-hidden border-t border-line">
+          {/* One orb, centred and low, so the CTA is lit from beneath. */}
+          <div
+            className="glow -bottom-40 left-1/2 size-[30rem] -translate-x-1/2 bg-[#a78bfa]/18"
+            aria-hidden="true"
+          />
+          <div className="relative mx-auto w-full max-w-3xl px-6 py-24 text-center">
+            <h2 className="tracking-display text-3xl font-semibold text-balance sm:text-4xl">
               Close the tab. Come back to finished work.
             </h2>
             <p className="mx-auto mt-5 max-w-xl text-[var(--ink-muted)] text-pretty">
@@ -268,8 +290,8 @@ export default function Home() {
             <div className="mt-9 flex flex-wrap justify-center gap-3">
               <Button
                 size="lg"
-                className="bg-signal text-[oklch(0.16_0.006_265)] hover:bg-signal/90"
-                render={<Link href="/sign-up" />}
+                className="elev-2 rounded-[0.75rem] border-signal bg-signal text-[#09090b] hover:bg-signal/90"
+                nativeButton={false} render={<Link href="/sign-up" />}
               >
                 Create your first agent
               </Button>
@@ -277,7 +299,7 @@ export default function Home() {
                 size="lg"
                 variant="outline"
                 className="border-line-strong bg-transparent hover:bg-[var(--surface-raised)] hover:text-[var(--ink)]"
-                render={<Link href="/sign-in" />}
+                nativeButton={false} render={<Link href="/sign-in" />}
               >
                 I have an account
               </Button>
@@ -293,12 +315,17 @@ export default function Home() {
 
 function SiteHeader() {
   return (
-    <header className="sticky top-0 z-50 border-b border-line bg-[color-mix(in_oklch,var(--surface)_85%,transparent)] backdrop-blur-md">
+    <header className="sticky top-0 z-50 border-b border-line bg-[color-mix(in_oklch,var(--surface)_72%,transparent)] backdrop-blur-xl backdrop-saturate-150">
       <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-6">
         <Link
           href="/"
           className="flex items-center gap-2.5 font-medium tracking-tight"
         >
+          {/* The mark glows: one signal light, not a flat dot. */}
+          <span
+            className="size-2 rounded-full bg-signal shadow-[0_0_12px_rgb(167_139_250/0.6)]"
+            aria-hidden="true"
+          />
           <span className="size-2 rounded-full bg-signal" aria-hidden="true" />
           Nah Cloud
         </Link>
@@ -319,7 +346,7 @@ function SiteHeader() {
           <Button
             size="sm"
             className="ml-2 bg-signal text-[oklch(0.16_0.006_265)] hover:bg-signal/90"
-            render={<Link href="/sign-up" />}
+            nativeButton={false} render={<Link href="/sign-up" />}
           >
             Get started
           </Button>
@@ -377,10 +404,8 @@ function Section({
   return (
     <section id={id} className="border-t border-line">
       <div className="mx-auto w-full max-w-6xl px-6 py-20 sm:py-24">
-        <p className="font-mono text-xs tracking-[0.18em] text-signal-dim uppercase">
-          {eyebrow}
-        </p>
-        <h2 className="mt-4 max-w-2xl text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
+        <p className="eyebrow">{eyebrow}</p>
+        <h2 className="tracking-display mt-4 max-w-2xl text-3xl font-semibold text-balance sm:text-4xl">
           {title}
         </h2>
         <p className="mt-4 max-w-2xl text-[var(--ink-muted)] text-pretty">
@@ -402,7 +427,7 @@ function Th({
   return (
     <th
       scope="col"
-      className={`px-5 py-3 text-xs font-medium tracking-wider text-[var(--ink-faint)] uppercase ${className ?? ""}`}
+      className={`px-5 py-3 font-mono-tech text-[9px] font-medium tracking-[0.16em] text-[var(--ink-faint)] uppercase ${className ?? ""}`}
     >
       {children}
     </th>

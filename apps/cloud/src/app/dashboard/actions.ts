@@ -7,9 +7,10 @@ import { and, eq, sql } from "drizzle-orm"
 
 import { getAuth } from "@/server/auth/better-auth"
 import { getDb } from "@/server/db/client"
-import { cancelRun, launchRun } from "@/server/runs/launcher"
+import { cancelRun, launchRun, LaunchRunError } from "@/server/runs/launcher"
 import { agents, conversations, githubConnections, messages, runs, sandboxes } from "@/server/db/schema"
 import { requireOrganization, requireViewer } from "@/server/session"
+import { getValidInstallationToken } from "@/server/github/installation-tokens"
 
 /**
  * Every mutation the dashboard makes.
@@ -108,9 +109,9 @@ export async function createRunAction(formData: FormData): Promise<void> {
  * action takes an `agentId` from a form, and without `eq(organizationId, ...)` any
  * signed-in user could launch another tenant's agent and be metered for it.
  *
- * On failure there is no redirect and no thrown error. The run row already exists
- * in `failed` with its error text, so revalidating is what surfaces the failure —
- * on the runs list, which is where a user looks to find out what happened.
+ * On failure there is no rethrown error: `launchRun` settles the run row with its
+ * error text before throwing, so revalidating is what surfaces the failure — on
+ * the runs list, which is where a user looks to find out what happened.
  */
 export async function launchRunAction(formData: FormData): Promise<void> {
   const viewer = await requireOrganization()
@@ -130,16 +131,26 @@ export async function launchRunAction(formData: FormData): Promise<void> {
     return
   }
 
-  const run = await launchRun({
-    organizationId: viewer.organizationId,
-    agentId,
-    prompt
-  })
-
-  revalidatePath("/dashboard/runs")
-  revalidatePath("/dashboard")
-  revalidatePath(`/dashboard/agents/${agentId}`)
-  redirect(`/dashboard/runs/${run.id}`)
+  try {
+    const run = await launchRun({
+      organizationId: viewer.organizationId,
+      agentId,
+      prompt
+    })
+    revalidatePath("/dashboard/runs")
+    revalidatePath("/dashboard")
+    revalidatePath(`/dashboard/agents/${agentId}`)
+    redirect(`/dashboard/runs/${run.id}`)
+  } catch (error) {
+    // Both branches revalidate rather than rethrow: a thrown error from an action
+    // becomes a 500 in the browser, and the run is already `failed` with its
+    // message in the database. The distinction only matters for logging.
+    if (!(error instanceof LaunchRunError)) {
+      console.error("launchRun failed:", error)
+    }
+    revalidatePath("/dashboard/runs")
+    revalidatePath(`/dashboard/agents/${agentId}`)
+  }
 }
 
 /**
@@ -188,6 +199,76 @@ export async function toggleAgentAction(formData: FormData): Promise<void> {
     .where(and(eq(agents.id, agentId), eq(agents.organizationId, viewer.organizationId)))
 
   revalidatePath(`/dashboard/agents/${agentId}`)
+}
+
+/**
+ * Save an agent's runtime: model and environment.
+ *
+ * Environment values are secrets and are never read back into the page — the form
+ * is prefilled with `KEY=` names only, and this action is where an empty value
+ * means "keep what is stored". Submitting a full replacement set is the rule:
+ * unlisted keys are removed, which is the only way to delete one.
+ */
+export async function updateAgentRuntimeAction(formData: FormData): Promise<void> {
+  const viewer = await requireOrganization()
+  const agentId = str(formData.get("agentId"))
+  if (!agentId) return
+
+  const model = str(formData.get("model"))
+  const envText = str(formData.get("env")) || ""
+
+  const db = getDb()
+  const [agent] = await db
+    .select({ config: agents.config })
+    .from(agents)
+    .where(and(eq(agents.id, agentId), eq(agents.organizationId, viewer.organizationId)))
+    .limit(1)
+  if (!agent) return
+
+  const config = (agent.config ?? {}) as Record<string, unknown>
+  const next: Record<string, unknown> = { ...config }
+
+  if (model) next.model = model
+  else delete next.model
+
+  // The textarea is prefilled with KEY= lines (no values), so every non-empty
+  // line is either a new secret or a kept one. Empty value = keep the stored
+  // secret; the stored value is never sent to the browser.
+  const parsed = parseEnvLines(envText)
+  if (Object.keys(parsed).length > 0 || envText.trim() === "") {
+    const env: Record<string, string> = { ...parsed }
+    for (const [key, value] of Object.entries(env)) {
+      if (value === "") {
+        const existing = (config.env ?? {}) as Record<string, string>
+        if (key in existing) env[key] = existing[key]
+        else delete env[key]
+      }
+    }
+    if (Object.keys(env).length > 0) next.env = env
+    else delete next.env
+  }
+
+  await db
+    .update(agents)
+    .set({ config: next, updatedAt: new Date() })
+    .where(and(eq(agents.id, agentId), eq(agents.organizationId, viewer.organizationId)))
+
+  revalidatePath(`/dashboard/agents/${agentId}`)
+}
+
+/** Parse `KEY=value` lines. Malformed lines are dropped rather than fatal. */
+const parseEnvLines = (text: string): Record<string, string> => {
+  const out: Record<string, string> = {}
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith("#")) continue
+    const eq = trimmed.indexOf("=")
+    if (eq < 0) continue
+    const key = trimmed.slice(0, eq).trim()
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key)) continue
+    out[key] = trimmed.slice(eq + 1).trim()
+  }
+  return out
 }
 
 /**
@@ -308,37 +389,47 @@ export async function sendChatMessageAction(formData: FormData): Promise<void> {
   // row of text. The prompt is the message alone: the runtime assembles the rest
   // of the context from the thread, and duplicating it here would give two
   // sources of truth for what the agent was asked.
-  const [run] = await db
-    .insert(runs)
-    .values({
-      agentId: thread.agentId,
+  //
+  // `launchRun` takes ownership of the run row — it inserts it `queued` and then
+  // drives the full startup sequence (sandbox acquisition, attach, start). Doing
+  // the insert separately here would leave a run stranded in `queued` forever.
+  try {
+    const run = await launchRun({
       organizationId: viewer.organizationId,
-      status: "queued",
+      agentId: thread.agentId,
       prompt: content
     })
-    .returning({ id: runs.id })
 
-  if (run) {
+    if (run) {
+      await db
+        .update(messages)
+        .set({ runId: run.id })
+        .where(eq(messages.id, message.id))
+    }
+
+    // First message names the thread. Derived rather than asked for — see the
+    // schema comment — and only on the first turn, so the title does not drift as
+    // the conversation develops. The guard is on the default value, so the first
+    // message wins and later ones never overwrite a title.
     await db
-      .update(messages)
-      .set({ runId: run.id })
-      .where(eq(messages.id, message.id))
-  }
-
-  // First message names the thread. Derived rather than asked for — see the
-  // schema comment — and only on the first turn, so the title does not drift as
-  // the conversation develops. The guard is on the default value, so the first
-  // message wins and later ones never overwrite a title.
-  await db
-    .update(conversations)
-    .set({ updatedAt: new Date(), title: content.slice(0, 60) })
-    .where(
-      and(
-        eq(conversations.id, conversationId),
-        eq(conversations.organizationId, viewer.organizationId),
-        eq(conversations.title, "New conversation")
+      .update(conversations)
+      .set({ updatedAt: new Date(), title: content.slice(0, 60) })
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.organizationId, viewer.organizationId),
+          eq(conversations.title, "New conversation")
+        )
       )
-    )
+  } catch (error) {
+    // The run already exists in `failed` with its message; the user message stays
+    // in the thread so the failed turn is still visible in context. A rethrow
+    // here would be a 500 for a failure the transcript can already explain.
+    if (!(error instanceof LaunchRunError)) {
+      console.error("sendChatMessage launchRun failed:", error)
+    }
+    revalidatePath(`/dashboard/agents/${thread.agentId}/chat/${conversationId}`)
+  }
 }
 
 /** What `createKeyAction` hands back to the form that called it. */
@@ -424,21 +515,46 @@ export async function revokeKeyAction(formData: FormData): Promise<void> {
  */
 export async function deleteGithubConnectionAction(formData: FormData): Promise<void> {
   const viewer = await requireOrganization()
-  const id = str(formData.get("id"))
-  if (!id) return
+  const organizationId = str(formData.get("organizationId"))
+  if (!organizationId) return
 
   const db = getDb()
 
-  // Tenancy check: only the owning org can delete this connection.
+  // Find the connection for this organization (tenancy check)
   const [conn] = await db
     .select()
     .from(githubConnections)
-    .where(
-      and(eq(githubConnections.id, id), eq(githubConnections.organizationId, viewer.organizationId))
-    )
+    .where(eq(githubConnections.organizationId, organizationId))
     .limit(1)
   if (!conn) return
 
-  await db.delete(githubConnections).where(eq(githubConnections.id, id))
+  await db.delete(githubConnections).where(eq(githubConnections.id, conn.id))
   revalidatePath("/dashboard/github")
+}
+
+/**
+ * List repositories accessible to the organisation's connected GitHub App.
+ *
+ * Returned as `{ id, name, full_name }` so the agent form dropdown can
+ * reference repos by full name. If no installation is connected the list is
+ * empty — the caller should prompt the user to connect first.
+ */
+export async function listGithubReposAction(): Promise<{
+  repos: Array<{ id: number; name: string; full_name: string }> | null
+}> {
+  const viewer = await requireOrganization()
+  const token = await getValidInstallationToken(viewer.organizationId)
+
+  if (!token) {
+    return { repos: null }
+  }
+
+  // The minted token returns exactly the repos the installation may access.
+  return {
+    repos: token.repositories.map((repo) => ({
+      id: repo.id,
+      name: repo.name,
+      full_name: repo.full_name
+    }))
+  }
 }

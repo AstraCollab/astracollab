@@ -39,8 +39,14 @@ const createAuth = () => {
     )
   }
 
-  const githubId = process.env.GITHUB_CLIENT_ID?.trim()
-  const githubSecret = process.env.GITHUB_CLIENT_SECRET?.trim()
+  // Accept GITHUB_CLIENT_ID and GITHUB_SECRET (the user-facing var names),
+  // with fallbacks for the longer forms used in docs.
+  const githubId =
+    process.env.GITHUB_CLIENT_ID?.trim() || process.env.github_client_id?.trim()
+  const githubSecret =
+    process.env.GITHUB_SECRET?.trim() ||
+    process.env.GITHUB_CLIENT_SECRET?.trim() ||
+    process.env.github_client_secret?.trim()
 
   return betterAuth({
     secret: configured || "nah-cloud-development-secret-do-not-use-in-production",
@@ -53,6 +59,12 @@ const createAuth = () => {
       enabled: true,
       requireEmailVerification: false,
       minPasswordLength: 12
+    },
+    account: {
+      accountLinking: {
+        enabled: true,
+        requireLocalEmailVerified: false,
+      }
     },
     session: {
       expiresIn: 60 * 60 * 24 * 30,
@@ -101,7 +113,10 @@ const createAuth = () => {
           defaultPrefix: "nah_run_",
           references: "organization",
           // A run is not allowed to fan out into other runs.
-          rateLimit: { enabled: true, timeWindow: 60_000, maxRequests: 120 }
+          rateLimit: { enabled: true, timeWindow: 60_000, maxRequests: 120 },
+          // Per-run keys self-expire in a day. A leaked key cannot be replayed
+          // forever, and keys-page copy that claims self-expiry stays truthful.
+          keyExpiration: { defaultExpiresIn: 86_400 }
         }
       ])
     ],
@@ -118,8 +133,13 @@ const createAuth = () => {
      */
     socialProviders: {
       github: {
-        clientId: process.env.GITHUB_CLIENT_ID!,
-        clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+        clientId: githubId!,
+        clientSecret: githubSecret!,
+        scopes: ["read:user", "user:email"],
+        linkAccount: true,
+        redirectURI: `${process.env.BETTER_AUTH_URL?.trim() || "http://localhost:3000"}/api/auth/callback/github`,
+        // Allow linking to existing accounts even if email doesn't match exactly
+        // (Better Auth uses email as the primary matching key)
       }
     }
   })

@@ -60,6 +60,25 @@ export const runs = table(
     prompt: text("prompt").notNull(),
     /** The Boat sandbox id, once one has been assigned. */
     sandboxId: text("sandbox_id"),
+    /**
+     * The per-run API key this run authenticates to the cloud with, once minted.
+     *
+     * Points at a Better Auth api-key row created with the `runner` config for
+     * this run alone. Storing the id rather than the key: the key itself is
+     * returned exactly once at creation and never recoverable, and the row is
+     * what lets a telemetry trace resolve back to its run.
+     */
+    runnerKeyId: text("runner_key_id"),
+    /** Boat's detached-process id for the `nah` execution, once started. */
+    commandId: integer("command_id"),
+    /**
+     * Bytes of the agent's stdout already turned into events.
+     *
+     * Persisted so a poller that dies mid-tick resumes where it left off instead
+     * of either replaying the transcript from byte 0 or silently skipping
+     * everything written while no process was watching.
+     */
+    stdoutOffset: integer("stdout_offset").notNull().default(0),
     /** Exit code of the agent process; null while it is still running. */
     exitCode: integer("exit_code"),
     /** Model tokens consumed, for the usage ledger and the cost estimate. */
@@ -162,7 +181,16 @@ export const usageLedger = table(
     storageBytes: integer("storage_bytes").notNull(),
     recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow()
   },
-  (t) => [index("usage_org_idx").on(t.organizationId, t.recordedAt)]
+  (t) => [
+    // Partial, not plain: `meterRun`'s `ON CONFLICT` must match this predicate
+    // exactly or Postgres rejects the insert. Must stay declared here — an index
+    // that exists only in a migration file gets dropped by the next
+    // `drizzle-kit generate`, which diffs against this schema (it did, in 0005).
+    uniqueIndex("usage_run_unique_idx")
+      .on(t.runId)
+      .where(sql`${t.runId} is not null`),
+    index("usage_org_idx").on(t.organizationId, t.recordedAt)
+  ]
 )
 
 /**
@@ -212,6 +240,8 @@ export const SANDBOX_STATUSES = [
  * are stored encrypted at rest and used to mint short-lived installation tokens
  * for agent runs.
  */
+import { encryptOrgTokens, decryptOrgTokens } from "@/server/crypto/github-token-crypto"
+
 export const githubConnections = table(
   "github_connections",
   {
@@ -219,8 +249,9 @@ export const githubConnections = table(
     organizationId: text("organization_id").notNull(),
     githubInstallationId: text("github_installation_id").notNull().unique(),
     githubAccountId: text("github_account_id").notNull(),
-    accessToken: text("access_token").notNull(),
-    refreshToken: text("refresh_token"),
+    // Tokens are stored encrypted at rest; see github-token-crypto.ts
+    accessToken: text("access_token_enc").notNull(),
+    refreshToken: text("refresh_token_enc"),
     tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
     selectedRepositories: text("selected_repositories"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
