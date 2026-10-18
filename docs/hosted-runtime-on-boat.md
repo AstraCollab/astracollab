@@ -27,9 +27,9 @@
 | `nah serve` | `packages/nah/src/args.ts:155` → `packages/nah/src/cli.ts:55` | **Already taken.** It is an alias for `/studio` — it starts the dashboard. It is not a runtime host. |
 | `--sandbox` | `packages/nah/src/args.ts:142` | Runs the agent loop *locally* against a **Blaxel** sandbox. A remote `ToolEnvironment`, but a local loop. |
 | Agent loop | `packages/not-another-harness/src/agent.ts`, `packages/agents/src/coding-agent.ts` | `createCodingAgentRun` returns a `HarnessRun`. |
-| Event stream | `not-another-harness/src/types.ts:124` | `HarnessEvent` union. This is the whole UI contract. |
-| Tool port | `not-another-harness/src/types.ts:167` | `ToolEnvironment` — `readFile`/`writeFile`/`deleteFile`/`exists`/`readdir`/`grep`/`glob`/`exec` + optional `snapshot`/`restoreSnapshot`. |
-| Run handle | `not-another-harness/src/types.ts:479` | `HarnessRun` = `events: AsyncIterable<HarnessEvent>`, `result`, `steer()`, `followUp()`, `interrupt()`, `pending()`. |
+| Event stream | `not-another-harness/src/types.ts:179` | `HarnessEvent` union. This is the whole UI contract. |
+| Tool port | `not-another-harness/src/types.ts:284` | `ToolEnvironment` — `readFile`/`writeFile`/`deleteFile`/`exists`/`readdir`/`grep`/`glob`/`exec` + optional `snapshot`/`restoreSnapshot`. |
+| Run handle | `not-another-harness/src/types.ts:753` | `HarnessRun` = `events: AsyncIterable<HarnessEvent>`, `result`, `steer()`, `followUp()`, `interrupt()`, `pending()`. |
 | Provider-neutral sandbox SDK | `packages/agent-sandbox/packages/agent-sandbox/` | `SandboxRuntime` (`types.ts:2`), `RepoSandboxFs` (`sandbox-fs/repo-fs-port.ts:12`), and a **NAH adapter** already written: `createNahToolEnvironment` (`adapters/nah/index.ts:65`). |
 | `cloudflare` | `agent-sandbox/src/types.ts:19` | Already a member of the `ProviderName` union. **Nothing implements it.** No Workers/wrangler code anywhere in the repo. |
 
@@ -166,6 +166,65 @@ that is ours regardless of provider, and the part that makes swapping Blaxel →
 a future DO trivial.
 
 ---
+
+### 1.2 The wire contract, verified against the spec
+
+Re-verified 2026-10-03 against the **full OpenAPI document**
+(`https://docs.boat.dev/openapi/boat-v1.yaml` — 210 KB; fetched whole rather than page
+by page, so this is the schemas and not a doc summary). Base URL
+`https://boat.dev/api/v1`, bearer auth. Five operations carry the whole design.
+
+| Call | Shape that matters |
+| --- | --- |
+| `POST /sandboxes` | `202` immediately, `state: provisioning`. Body: `type` (`small` = ½ rate, `large` = 2×; fork/resume can move a sandbox between sizes), `ttlSeconds` (default `3600`, `null` = never auto-stop), `noEnv`, `snapshots` (default `true`), `failFast`, `setupScript`, `env`, `environment`. |
+| `POST /sandboxes/{id}/commands` | `command`, `cwd`, `timeoutSeconds` (1–600, default 30), `detached`, `stream`. |
+| `GET /sandboxes/{id}/commands/{processId}` | `status: running \| exited \| **lost**`, `running`, `exitCode`, `oomKilled`, log tails, `tailBytes` cap (default 8 MiB). |
+| `GET`/`PUT /sandboxes/{id}/files` | Canonicalizes and rejects anything outside the jail with `400 invalid_path`. |
+| `GET /sandboxes/{id}/events` | Long-poll with `cursor` + `sort=asc`, plus `limit`, `type` and `conversation` filters. |
+
+**Four facts that change the client, and which §1.1 got wrong or missed entirely:**
+
+1. **`failFast: true` answers in ~1.5 s** — either the usual `202`, or `503
+   no_ready_machine` with *nothing created, billed, or counted against start limits*.
+   This is the whole "point the TUI at compute" UX: when there is no capacity, say so in
+   a millisecond instead of hanging on an unbounded create. Phase 2 should send
+   `failFast`, surface `no_ready_machine` as a first-class state, and preflight with
+   `GET /limits` (machine starts left, compute seconds, credits, concurrent capacity).
+2. **`Idempotency-Key` on `create` and `fork`** — retry a lost response without creating a
+   second billable sandbox. Any create path we wrap must propagate the key; otherwise a
+   flaky network charges the user twice for one sandbox.
+3. **Exec is never auto-retried, and the errors are typed with `retryable`.** The exact
+   states the TUI has to render:
+   - `409 boat_starting` — right after a `resume`; the call already waits up to 60 s, so
+     this is the *rare* case. `retryable: true`.
+   - `409 sandbox_not_ready` — `retryable: false`, and it carries the `state` at once.
+     Stop or resume first; do not retry.
+   - `502 boat_direct_failed` — **the command may already be running.** Not retryable.
+     Re-running it is the one thing that can double-apply a side effect, so no generic
+     retry wrapper may ever blind-retry this.
+   - `400 invalid_timeout` — only when `timeoutSeconds` is not an integer in 1–600.
+   - `oomKilled` — a real memory ceiling kills commands. A failure state to render, not
+     an empty result.
+4. **`stream: true` is an NDJSON frame contract, and `error.retryable` is precise.**
+   Frames are `started` → N × `stdout`/`stderr` → exactly one `exit` (the sync result
+   minus the output) or `error`. `error.retryable: true` means *provably never ran* — the
+   sandbox was still restoring its disk — so resending is safe. That is a materially
+   different guarantee from the `502` above; `SandboxRuntime.executeCommand` must honour
+   the distinction rather than collapsing both into "retry".
+
+**And one that simplifies Phase 4:** `setupScript` (≤64 KiB) runs on the sandbox after
+it is ready, and "ready" means ready to accept the user — the script runs *before* that.
+So the template no longer needs an scp-then-systemd dance from outside: create with a
+`setupScript` that fetches the binary, writes the unit and starts it. Keep scp as the
+fallback for an image you cannot rebuild.
+
+**Also confirmed for §3.4:** `noEnv: true` confines the sandbox so it cannot act on the
+account or on other sandboxes, and *a fork of a no-env sandbox is always no-env* — so the
+per-fork `env` invariant holds transitively, which is what makes the template safe to
+fork. SSH, SCP, desktop, snapshots and public URLs all still work under `noEnv`.
+`snapshots: false` is the cheaper ephemeral mode, at the cost of resume, fork and named
+snapshots. Credentials for Phase 6 are first-class: `POST /api-keys/scoped`, plus
+`rotateApiKey` and `apiKeyUsage` — use a scoped, rotatable key, not the account key.
 
 ## 2. Freeze two contracts before writing any transport
 
@@ -480,7 +539,20 @@ protocol, which is the whole point of freezing §2 first.
    *Test this in Phase 1 — a lost approval hangs the agent forever.*
 5. **EU latency for whoever is not in Europe.** Time one `exec` round-trip from your
    actual location in Phase 0 rather than assuming.
-6. **Stream latency, only if Phase 5 is ever used for agent events.** Our daemon
+6. **A retry bug that double-applies a side effect.** `502 boat_direct_failed` means the
+   command *may already be running*, and a flaky network produces it often. Any generic
+   retry wrapper — HTTP client, `SandboxRuntime` decorator, a DO's reconnect logic —
+   will turn it into a second `rm` or a second deploy. The API hands us the correct
+   signal (§1.2: `retryable`, and `retryable: true` on `error` meaning *provably never
+   ran*); the danger is discarding it by collapsing every failure into "retry". Test
+   this explicitly in Phase 2 rather than by inspection.
+7. **A detached process outliving the agent.** `commandStatus` can return
+   `status: "lost"` — the sandbox agent restarted and forgot the process, leaving
+   `running`/`exitCode` a best-effort probe and the logs read from disk. A TUI that
+   assumes a poll loop always terminates will hang on it, and anything that *re-runs* the
+   command on `lost` will double-apply it. `lost` is a terminal state, not a retry
+   signal.
+8. **Stream latency, only if Phase 5 is ever used for agent events.** Our daemon
    (Phase 4) holds a real socket, so the agent stream is **not** polling latency. This
    now applies only to the control-plane use in Phase 5, where `data.is_streaming`
    partials help. Measure the perceived text speed before assuming the daemon path is
@@ -488,16 +560,16 @@ protocol, which is the whole point of freezing §2 first.
 
 **Deferred to Phase 8 (the DO control plane), if we build it:**
 
-7. The Workers event loop is not a process. `setTimeout`-driven polling inside a
+9. The Workers event loop is not a process. `setTimeout`-driven polling inside a
    request is fragile once the request returns. Everything long-lived must hang off a
    WebSocket, a `waitUntil`, or an Alarm. *The #1 source of "works locally,
    mysteriously dead in prod".*
-8. The harness may not be Worker-clean — the same audit as risk 3, and strictly
-   harder on Workers than in a Boat VM (no `node:fs` at all). **Risk 3 does not
-   discharge this one**: being clean enough for a Linux sandbox is not being clean
-   enough for a Worker.
-9. Single-tenant DO = single point of failure, and a session is pinned to one region.
-   *Document rather than solve in v1.*
+10. The harness may not be Worker-clean — the same audit as risk 3, and strictly
+    harder on Workers than in a Boat VM (no `node:fs` at all). **Risk 3 does not
+    discharge this one**: being clean enough for a Linux sandbox is not being clean
+    enough for a Worker.
+11. Single-tenant DO = single point of failure, and a session is pinned to one region.
+    *Document rather than solve in v1.*
 
 ## 7. Open questions for you
 
@@ -536,3 +608,6 @@ independently verified. Their `/compare` figures are self-reported benchmarks.
 - https://docs.boat.dev/integrated-agents.md — harnesses, `/events`, steer/interrupt, BYO harness
 - https://docs.boat.dev/api/reference/agent/{list-sandbox-events,execute-sandbox-command,read-sandbox-file,write-sandbox-file}.md
 - https://docs.boat.dev/sdks/typescript.md — `@boatdev/sdk`
+- https://docs.boat.dev/openapi/boat-v1.yaml — the full OpenAPI 3.1 document, and the
+  actual source of §1.2. Fetch this rather than the reference pages: one request, and it
+  is the schemas instead of a summary of them.
