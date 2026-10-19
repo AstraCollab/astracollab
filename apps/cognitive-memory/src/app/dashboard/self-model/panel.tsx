@@ -38,7 +38,7 @@ import {
 
 const WEAK_BELOW = 0.75
 
-export function SelfModelPanel() {
+export function SelfModelPanel({ origin }: { origin: string }) {
   const { data, error, reload } = useResource<SelfModelResponse>("/api/dashboard/self-model")
   const [recording, setRecording] = useState(false)
 
@@ -113,7 +113,7 @@ export function SelfModelPanel() {
             can do it by hand too:
           </p>
           <Code className="mt-3 text-left">
-            {`curl -X POST localhost:3000/api/v1/self-model/outcome \\
+            {`curl -X POST ${origin}/api/v1/self-model/outcome \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
   -d '{"domain":"database","success":false,"failurePattern":"migrated without a backup"}'`}

@@ -5,6 +5,7 @@ import { toNextJsHandler } from "better-auth/next-js"
 
 import { authTables } from "../db/auth-tables"
 import { getDb } from "../db/client"
+import { resolveOrigin } from "./origin"
 
 /**
  * Better Auth owns the human half of identity: who someone is, their session,
@@ -31,7 +32,7 @@ import { getDb } from "../db/client"
  * let any instance mint a session for any other. Both failure modes are quiet,
  * which is exactly why they are prevented rather than documented.
  */
-const createAuth = () => {
+const createAuth = (baseURL: string) => {
   const configured = process.env.BETTER_AUTH_SECRET?.trim()
   if (!configured && process.env.NODE_ENV === "production") {
     throw new Error(
@@ -43,11 +44,18 @@ const createAuth = () => {
     // A fixed development value, so restarting `next dev` does not sign you out
     // and a second local instance can still verify your session.
     secret: configured || "cognitive-memory-development-secret-do-not-use-in-production",
-    baseURL: process.env.BETTER_AUTH_URL?.trim() || `http://localhost:${process.env.PORT ?? 3000}`,
+    baseURL,
     database: drizzleAdapter(getDb(), {
       provider: "sqlite",
       schema: authTables
     }),
+    advanced: {
+      // The session cookie is named after the scheme it was issued on, so the
+      // name must follow the origin this instance was built for and not the
+      // environment: a deployment served over TLS gets a `Secure` cookie, a
+      // developer on http does not.
+      useSecureCookies: baseURL.startsWith("https://")
+    },
     emailAndPassword: {
       enabled: true,
       // No verification step: requiring an email round-trip before someone can try
@@ -73,18 +81,32 @@ export type Auth = ReturnType<typeof createAuth>
 
 type AuthHandler = ReturnType<typeof toNextJsHandler>
 
-let cached: { auth: Auth; handler: AuthHandler } | null = null
+/**
+ * One Better Auth instance per origin.
+ *
+ * The origin decides the trusted origins and the base URL of every callback
+ * the instance builds, so an instance belongs to one host. A deployment
+ * normally has one; a preview and a custom domain served by the same process
+ * have two, and each gets the instance that matches the host it was asked on.
+ */
+const instances = new Map<string, { auth: Auth; handler: AuthHandler }>()
 
-const instance = () => {
-  cached ??= (() => {
-    const auth = createAuth()
-    return { auth, handler: toNextJsHandler(auth) }
-  })()
-  return cached
+const instanceFor = (baseURL: string): { auth: Auth; handler: AuthHandler } => {
+  const cached = instances.get(baseURL)
+  if (cached) return cached
+  const auth = createAuth(baseURL)
+  const created = { auth, handler: toNextJsHandler(auth) }
+  instances.set(baseURL, created)
+  return created
 }
 
-/** The configured Better Auth instance, built on first use. */
-export const getAuth = (): Auth => instance().auth
+/**
+ * The configured Better Auth instance, built on first use.
+ *
+ * `headers` are the headers of the request being served, when there is one:
+ * they are what says which host this deployment answers on.
+ */
+export const getAuth = (headers?: Headers): Auth => instanceFor(resolveOrigin(headers)).auth
 
 /**
  * Dispatch one Better Auth request.
@@ -96,7 +118,7 @@ export const getAuth = (): Auth => instance().auth
  */
 export const handleAuthRequest = (request: Request): Promise<Response> => {
   const verb = request.method.toUpperCase() as keyof AuthHandler
-  const handler = instance().handler[verb]
+  const handler = instanceFor(resolveOrigin(request.headers)).handler[verb]
   if (typeof handler !== "function") {
     return Promise.resolve(
       new Response(JSON.stringify({ error: "MethodNotAllowed" }), {

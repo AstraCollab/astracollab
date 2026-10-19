@@ -1,5 +1,6 @@
 import { FetchError, ofetch, type $Fetch } from "ofetch"
 
+import { resolveBaseUrl } from "./base-url"
 import { CognitiveMemoryError } from "./errors"
 import type { CognitiveMemoryConfig, CognitiveMemoryErrorBody } from "./types"
 
@@ -19,12 +20,16 @@ import type { CognitiveMemoryConfig, CognitiveMemoryErrorBody } from "./types"
 export function createHttpClient(config: CognitiveMemoryConfig): $Fetch {
   const {
     apiKey,
-    baseUrl = defaultBaseUrl(),
+    baseUrl: configuredBaseUrl,
     timeout = 30_000,
     retry = 2,
     debug = false,
     headers: extraHeaders = {}
   } = config
+
+  // Resolved once, here, so the client and the `Cogmem` that owns it can never
+  // disagree about which service they are talking to.
+  const baseUrl = resolveBaseUrl(configuredBaseUrl)
 
   if (typeof apiKey !== "string" || apiKey.trim() === "") {
     throw new Error(
@@ -95,11 +100,6 @@ export function createHttpClient(config: CognitiveMemoryConfig): $Fetch {
   }
 
   return wrap as unknown as $Fetch
-}
-
-function defaultBaseUrl(): string {
-  if (typeof window !== "undefined") return window.location.origin
-  return "http://localhost:3000"
 }
 
 export type HttpClient = ReturnType<typeof createHttpClient>

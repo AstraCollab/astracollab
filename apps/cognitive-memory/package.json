@@ -17,6 +17,7 @@
 		"auth:generate": "tsx scripts/generate-auth-schema.ts",
 		"smoke": "tsx scripts/smoke.ts",
 		"smoke:http": "tsx scripts/smoke-http.ts",
+		"verify:origin": "tsx scripts/verify-origin.ts",
 		"measure": "tsx scripts/measure.ts"
 	},
 	"dependencies": {

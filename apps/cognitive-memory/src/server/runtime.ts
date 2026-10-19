@@ -114,7 +114,9 @@ export const account = (
 export const currentSession = Effect.gen(function* () {
   const requestHeaders = yield* Effect.promise(() => headers())
   return yield* Effect.tryPromise({
-    try: () => getAuth().api.getSession({ headers: requestHeaders }),
+    // The headers say which host this deployment answers on, which is what
+    // the auth instance has to be built for.
+    try: () => getAuth(requestHeaders).api.getSession({ headers: requestHeaders }),
     // A failure here means no usable session, which is a 401 rather than a 500.
     catch: () => new Unauthorized({ message: "Could not read the session cookie." })
   })

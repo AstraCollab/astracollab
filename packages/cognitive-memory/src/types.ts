@@ -219,7 +219,14 @@ export interface DomainOutcomeRequest {
 
 export interface CognitiveMemoryConfig {
   apiKey: string
-  /** Defaults to the current origin in a browser, or localhost otherwise. */
+  /**
+   * Where the service is.
+   *
+   * Defaults to `COGNITIVE_MEMORY_URL`, then to the origin of the page in a
+   * browser, then to the hosted service — in that order. The default is the
+   * hosted service rather than `localhost`, because an agent that was not told
+   * a base URL was never going to find the service on its own machine.
+   */
   baseUrl?: string
   /** Per-request timeout in ms. */
   timeout?: number

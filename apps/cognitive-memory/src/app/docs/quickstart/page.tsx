@@ -91,7 +91,7 @@ const SECTIONS: readonly DocSectionSpec[] = [
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,
-  baseUrl: "http://localhost:3000"
+  baseUrl: process.env.COGNITIVE_MEMORY_URL ?? "https://cogmem.astracollab.app"
 })
 
 const { context, learning, learningSkipped } = await runTurn(
@@ -131,13 +131,13 @@ const { context, learning, learningSkipped } = await runTurn(
           runs, one after it finishes.
         </p>
         <CodeBlock language="sh">{`# what the agent should know before it answers
-curl -X POST localhost:3000/api/v1/context \\
+curl -X POST $COGNITIVE_MEMORY_URL/api/v1/context \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
   -d '{"userMessage":"deploy ZQ7X4M2K to staging"}'
 
 # what it should remember from the finished turn
-curl -X POST localhost:3000/api/v1/turns \\
+curl -X POST $COGNITIVE_MEMORY_URL/api/v1/turns \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
   -d '{"userMessage":"...","assistantResponse":"..."}'`}</CodeBlock>

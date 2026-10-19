@@ -135,7 +135,7 @@ const SECTIONS: readonly DocSectionSpec[] = [
           <code>stats:read</code>; narrow it to what the agent actually does.
         </p>
         <CodeBlock language="sh">{`# Session-authenticated: a cookie, not a key.
-curl -X POST localhost:3000/api/v1/keys \\
+curl -X POST $COGNITIVE_MEMORY_URL/api/v1/keys \\
   -H "content-type: application/json" \\
   -b "$SESSION_COOKIE" \\
   -d '{"name":"ci","scopes":["memories:read","memories:write"],"expiresInDays":30}'`}</CodeBlock>

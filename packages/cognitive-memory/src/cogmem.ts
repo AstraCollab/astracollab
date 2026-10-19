@@ -1,3 +1,4 @@
+import { resolveBaseUrl } from "./base-url"
 import { createHttpClient, type HttpClient } from "./client"
 import { ContextResource } from "./resources/context"
 import { MemoriesResource } from "./resources/memories"
@@ -39,7 +40,7 @@ export class Cogmem {
   readonly stats: StatsResource
 
   constructor(config: CognitiveMemoryConfig) {
-    this.baseUrl = (config.baseUrl ?? "http://localhost:3000").replace(/\/$/, "")
+    this.baseUrl = resolveBaseUrl(config.baseUrl)
     this.client = createHttpClient(config)
     this.memories = new MemoriesResource(this.client)
     this.context = new ContextResource(this.client)

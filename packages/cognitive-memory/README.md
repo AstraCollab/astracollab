@@ -42,12 +42,21 @@ import { createClient, runTurn } from "cogmemory"
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,
-  baseUrl: "http://localhost:3000",
   debug: process.env.DEBUG !== undefined
 })
 ```
 
 Get a key from the dashboard. It is shown once, because only a hash is stored.
+
+`baseUrl` is optional. It defaults to `COGNITIVE_MEMORY_URL`, then to the origin
+of the page in a browser, then to the hosted service at
+`https://cogmem.astracollab.app` — so an agent that was installed and given a
+key talks to the service, and a self-hosted deployment says where it is with
+one environment variable:
+
+```sh
+COGNITIVE_MEMORY_URL=https://memory.example.com
+```
 
 ## The two calls that matter
 

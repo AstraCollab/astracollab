@@ -98,11 +98,11 @@ const CALLS: ReadonlyArray<Call> = [
   }
 ]
 
-const SDK = `import { createClient, runTurn } from "cogmemory"
+const SDK = (origin: string) => `import { createClient, runTurn } from "cogmemory"
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,
-  baseUrl: "http://localhost:3000"
+  baseUrl: "${origin}"
 })
 
 // Before the model runs, and after it finishes.
@@ -119,9 +119,9 @@ const { context, learning } = await runTurn(
 console.log(context.text)          // exactly what was injected
 console.log(learning.counts)      // stored / merged / rejected, never silently`
 
-const curl = (path: string, body?: string): string =>
+const curl = (origin: string, path: string, body?: string): string =>
   [
-    `curl -X ${body === undefined ? "GET" : "POST"} localhost:3000${BASE}${path} \\`,
+    `curl -X ${body === undefined ? "GET" : "POST"} ${origin}${BASE}${path} \\`,
     `  -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\`,
     ...(body === undefined
       ? []
@@ -134,7 +134,7 @@ const curl = (path: string, body?: string): string =>
         ])
   ].join("\n")
 
-export function StartPanel() {
+export function StartPanel({ origin }: { origin: string }) {
   const [selected, setSelected] = useState(CALLS[2]!)
   const [body, setBody] = useState(selected.body ?? "")
   const [key, setKey] = useState("")
@@ -196,9 +196,9 @@ export function StartPanel() {
         title="2 · Point it at this service"
         hint="runTurn builds the context block, runs your callback with it, learns from the finished exchange, and records how the domain went — in that order."
       >
-        <Code>{SDK}</Code>
+        <Code>{SDK(origin)}</Code>
         <div className="mt-2 flex justify-end">
-          <CopyButton value={SDK} />
+          <CopyButton value={SDK(origin)} />
         </div>
       </Panel>
 
@@ -308,9 +308,11 @@ export function StartPanel() {
               <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">
                 the same thing in curl
               </span>
-              <CopyButton value={curl(selected.path, selected.method === "POST" ? body : undefined)} />
+              <CopyButton
+                value={curl(origin, selected.path, selected.method === "POST" ? body : undefined)}
+              />
             </div>
-            <Code>{curl(selected.path, selected.method === "POST" ? body : undefined)}</Code>
+            <Code>{curl(origin, selected.path, selected.method === "POST" ? body : undefined)}</Code>
           </div>
 
           {(response !== null || status !== null) && (

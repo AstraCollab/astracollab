@@ -23,6 +23,7 @@
 // ---------------------------------------------------------------------------
 export { Cogmem, createClient } from "./cogmem"
 export { createHttpClient, type HttpClient } from "./client"
+export { DEFAULT_BASE_URL, resolveBaseUrl } from "./base-url"
 export { CognitiveMemoryError } from "./errors"
 
 // Helpers — the workflows that encode best practice

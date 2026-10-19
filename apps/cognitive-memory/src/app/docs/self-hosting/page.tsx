@@ -76,7 +76,16 @@ const CONFIG: ReadonlyArray<readonly [string, string, string]> = [
     "—",
     "Required in production. Generate with openssl rand -base64 32."
   ],
-  ["BETTER_AUTH_URL", "http://localhost:3000", ""]
+  [
+    "BETTER_AUTH_URL",
+    "the host of the request",
+    "The URL this deployment is served from. Set it when the app is reached on a different name than the request carries."
+  ],
+  [
+    "NEXT_PUBLIC_COGNITIVE_MEMORY_URL",
+    "the origin that served the page",
+    "Only for a dashboard on a different host than its auth server."
+  ]
 ]
 
 const SECTIONS: readonly DocSectionSpec[] = [
@@ -99,6 +108,41 @@ pnpm --filter cognitive-memory dev`}</CodeBlock>
           required in production.
         </p>
         <CodeBlock language="sh">{"cp .env.example .env.local"}</CodeBlock>
+      </>
+    )
+  },
+  {
+    id: "proxy",
+    title: "Behind a proxy",
+    body: (
+      <>
+        <p>
+          A browser asks for <code>https://memory.example.com</code>. Your proxy
+          asks the app for <code>http://localhost:3000</code>. The app therefore
+          has to be told which of the two is its public name, or the session
+          cookie loses its <code>Secure</code> flag and sign-ins are rejected as
+          an invalid origin.
+        </p>
+        <p>
+          The proxy says so in two headers. Forward both, and the app works out
+          its own public origin:
+        </p>
+        <CodeBlock language="sh">{`proxy_set_header Host              $host;
+proxy_set_header X-Forwarded-Host   $host;
+proxy_set_header X-Forwarded-Proto  $scheme;`}</CodeBlock>
+        <p>
+          Next.js fills <code>X-Forwarded-Proto</code> in itself when no proxy
+          sent one, and what it fills in is the scheme of the internal hop — so
+          a proxy that terminates TLS and forwards only the host leaves the app
+          thinking it is served over http. Set <code>BETTER_AUTH_URL</code> to
+          the public URL in that case; it wins over everything the request says.
+        </p>
+        <Callout>
+          One deployment, one origin. A build that serves several hostnames —
+          a preview and a custom domain — reads the right one per request, and
+          the session cookie is named after the scheme it was issued on, so
+          switching schemes signs everyone out once.
+        </Callout>
       </>
     )
   },

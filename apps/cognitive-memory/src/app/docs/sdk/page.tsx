@@ -63,11 +63,12 @@ const SECTIONS: readonly DocSectionSpec[] = [
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,
-  baseUrl: "http://localhost:3000"
+  baseUrl: process.env.COGNITIVE_MEMORY_URL ?? "https://cogmem.astracollab.app"
 })`}</CodeBlock>
         <p>
           <code>apiKey</code> is the only required field. <code>baseUrl</code>{" "}
-          defaults to the current origin in a browser and localhost otherwise;{" "}
+          defaults to <code>COGNITIVE_MEMORY_URL</code>, then to the current origin
+          in a browser, then to the hosted service;{" "}
           <code>timeout</code>, <code>retry</code>, <code>headers</code> and{" "}
           <code>debug</code> are optional.
         </p>
@@ -99,7 +100,7 @@ const memory = createClient({
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,
-  baseUrl: "http://localhost:3000"
+  baseUrl: process.env.COGNITIVE_MEMORY_URL ?? "https://cogmem.astracollab.app"
 })
 
 const { context, learning, learningSkipped } = await runTurn(

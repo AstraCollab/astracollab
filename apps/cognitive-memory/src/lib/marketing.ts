@@ -425,7 +425,7 @@ export const TURN_SAMPLE = `import { createClient, runTurn } from "cogmemory"
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,
-  baseUrl: "http://localhost:3000",
+  baseUrl: "https://cogmem.astracollab.app",
 })
 
 // context before the model, learning after it
@@ -440,13 +440,13 @@ context.entries       // every line, with its reason
 learning?.counts      // stored, merged, rejected, tensions`
 
 export const HTTP_SAMPLE = `# what the agent should know before it answers
-curl -X POST localhost:3000/api/v1/context \\
+curl -X POST https://cogmem.astracollab.app/api/v1/context \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
   -d '{"userMessage":"deploy ZQ7X4M2K to staging"}'
 
 # what it should remember from the finished turn
-curl -X POST localhost:3000/api/v1/turns \\
+curl -X POST https://cogmem.astracollab.app/api/v1/turns \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
   -d '{"userMessage":"...","assistantResponse":"..."}'`

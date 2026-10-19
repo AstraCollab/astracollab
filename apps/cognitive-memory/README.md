@@ -204,11 +204,26 @@ deployment again. Every value is optional in development; see
 | `COGNITIVE_MEMORY_MODEL_NAME` | from the provider | Overrides the provider's default model |
 | `COGNITIVE_MEMORY_ENV` | `dev` / `prod` | The segment of a minted key |
 | `BETTER_AUTH_SECRET` | dev fallback | **Required in production** |
-| `BETTER_AUTH_URL` | `http://localhost:3000` | |
+| `BETTER_AUTH_URL` | the host of the request | The URL this deployment is served from |
+| `NEXT_PUBLIC_COGNITIVE_MEMORY_URL` | the origin that served the page | Only for a dashboard on a different host than its auth server |
 
 An unusable value is reported by `/api/v1/health` and on the dashboard's overview
 rather than thrown during module load, which would take down `next build` instead
 of the one request that needed the setting.
+
+### The public origin
+
+The app has to know the URL it is served from: the trusted-origin check and the
+`Secure` flag on the session cookie are both decided by it, and both fail
+quietly when it is wrong. Nothing is hardcoded any more — the origin is read
+from `BETTER_AUTH_URL` when it is set, and otherwise from the host the request
+was addressed to, which behind a proxy is the forwarded host rather than the
+internal URL Next.js was reached on.
+
+A proxy in front of the app should forward `X-Forwarded-Host` and
+`X-Forwarded-Proto`. Without the latter, Next.js fills it in with the scheme of
+the internal hop, and the app believes it is served over http; `BETTER_AUTH_URL`
+overrides that, and is worth setting in production.
 
 ### Choosing a provider
 

@@ -72,7 +72,7 @@ const SECTIONS: readonly DocSectionSpec[] = [
 
 const memory = createClient({
   apiKey: process.env.COGNITIVE_MEMORY_KEY!,
-  baseUrl: process.env.COGNITIVE_MEMORY_URL ?? "http://localhost:3000"
+  baseUrl: process.env.COGNITIVE_MEMORY_URL ?? "https://cogmem.astracollab.app"
 })
 
 export async function handleTurn(userMessage: string, sessionId: string) {

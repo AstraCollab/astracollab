@@ -44,7 +44,7 @@ const SECTIONS: readonly DocSectionSpec[] = [
           <code>Authorization: Bearer &lt;key&gt;</code>. There is no versioning
           negotiation and no envelope — the response body is the resource.
         </p>
-        <CodeBlock language="sh">{`curl -X POST localhost:3000/api/v1/context \\
+        <CodeBlock language="sh">{`curl -X POST $COGNITIVE_MEMORY_URL/api/v1/context \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
   -d '{"userMessage":"deploy ZQ7X4M2K to staging"}'`}</CodeBlock>
@@ -161,7 +161,7 @@ const SECTIONS: readonly DocSectionSpec[] = [
 
 // text goes in front of your system prompt.
 // entries accounts for every line in it.`}
-          curl={`curl -X POST localhost:3000/api/v1/context \\
+          curl={`curl -X POST $COGNITIVE_MEMORY_URL/api/v1/context \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
   -d '{"userMessage":"deploy ZQ7X4M2K to staging"}'`}
@@ -216,7 +216,7 @@ const SECTIONS: readonly DocSectionSpec[] = [
 
 result.counts    // { stored, merged, rejected, tensions, promoted }
 result.rejected  // [{ content, reason }] — never silent`}
-          curl={`curl -X POST localhost:3000/api/v1/turns \\
+          curl={`curl -X POST $COGNITIVE_MEMORY_URL/api/v1/turns \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
   -d '{"userMessage":"we deploy on Fridays","assistantResponse":"Noted."}'`}
@@ -265,7 +265,7 @@ result.rejected  // [{ content, reason }] — never silent`}
 })
 
 if (empty) return "If you were not told, say so rather than guessing."`}
-          curl={`curl -X POST localhost:3000/api/v1/recall \\
+          curl={`curl -X POST $COGNITIVE_MEMORY_URL/api/v1/recall \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
   -d '{"query":"where do we deploy","limit":8}'`}
@@ -312,7 +312,7 @@ if (empty) return "If you were not told, say so rather than guessing."`}
   success: false,
   failurePattern: "migrated the schema without a dry run"
 })`}
-          curl={`curl -X POST localhost:3000/api/v1/self-model/outcome \\
+          curl={`curl -X POST $COGNITIVE_MEMORY_URL/api/v1/self-model/outcome \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
   -d '{"domain":"database","success":false,"failurePattern":"migrated without a dry run"}'`}
@@ -434,13 +434,13 @@ if (empty) return "If you were not told, say so rather than guessing."`}
           context before the model runs; record the turn after it finishes.
         </p>
         <CodeBlock language="sh">{`# what the agent should know before it answers
-curl -X POST localhost:3000/api/v1/context \\
+curl -X POST $COGNITIVE_MEMORY_URL/api/v1/context \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
   -d '{"userMessage":"deploy ZQ7X4M2K to staging"}'
 
 # what it should remember from the finished turn
-curl -X POST localhost:3000/api/v1/turns \\
+curl -X POST $COGNITIVE_MEMORY_URL/api/v1/turns \\
   -H "Authorization: Bearer $COGNITIVE_MEMORY_KEY" \\
   -H "content-type: application/json" \\
   -d '{"userMessage":"...","assistantResponse":"..."}'`}</CodeBlock>
