@@ -1,51 +1,54 @@
 import { existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
-import BetterSqlite3 from "better-sqlite3"
-import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3"
-import { migrate } from "drizzle-orm/better-sqlite3/migrator"
+import { createClient, type Client } from "@libsql/client"
+import { drizzle, type LibSQLDatabase } from "drizzle-orm/libsql"
+import { migrate } from "drizzle-orm/libsql/migrator"
 
 import { readCognitiveMemorySettings } from "../config"
+import { isRemoteDatabaseUrl, localDatabasePath, toDatabaseUrl } from "./database-url"
 import { schema } from "./schema"
 
 /**
- * The one SQLite connection.
+ * The one database connection.
  *
  * A module-level singleton rather than a per-request one, because there are two
  * consumers that must agree: Better Auth, which is constructed at module scope,
- * and the Effect services below it. Two connections to the same file would mean
- * two sets of prepared statements and two chances to deadlock on a write.
+ * and the Effect services below it. Two connections to the same database would
+ * mean two sets of prepared statements and two chances to deadlock on a write.
  *
- * Migrations run here, synchronously, the first time the connection is built —
- * not in a service initialiser. Better Auth's endpoints are reachable without
- * ever touching an Effect service, so a migration that waited for one would let
- * the very first request of a fresh deployment be `sign-up`, which fails with
- * "no such table: user" and looks like a broken app rather than an unrun
- * migration.
+ * The driver is `@libsql/client`, which speaks to a local file and to a remote
+ * Turso database over the same interface. That matters because the two are not
+ * interchangeable at the call site: a local file is opened synchronously by the
+ * old driver, a Turso database is not opened at all, it is asked over HTTP. One
+ * driver means the query surface is written once and works in both places.
+ *
+ * Everything that touches the database is therefore asynchronous, and the
+ * schema is applied by `prepareDb` — see the note there for why that is not
+ * done while the connection is built.
  */
 
-export type CognitiveMemoryDatabase = BetterSQLite3Database<typeof schema>
+export type CognitiveMemoryDatabase = LibSQLDatabase<typeof schema>
 
-let client: BetterSqlite3.Database | null = null
+let client: Client | null = null
 let database: CognitiveMemoryDatabase | null = null
-let migrationWarning: string | null = null
+let preparation: Promise<void> | null = null
+let preparationWarning: string | null = null
 
-const openClient = (): BetterSqlite3.Database => {
-  const { databasePath } = readCognitiveMemorySettings()
-  if (databasePath !== ":memory:") {
-    // A fresh clone has no `.cognitive-memory/`, and better-sqlite3 creates the file, not
-    // the directory holding it.
-    mkdirSync(dirname(databasePath), { recursive: true })
-  }
-  const opened = new BetterSqlite3(databasePath)
-  // WAL keeps a reader from blocking the writer, which matters as soon as two
-  // agents share an organisation.
-  if (databasePath !== ":memory:") opened.pragma("journal_mode = WAL")
-  opened.pragma("foreign_keys = ON")
-  opened.pragma("busy_timeout = 5000")
-  return opened
+const openClient = (): Client => {
+  const { databaseUrl, databaseAuthToken } = readCognitiveMemorySettings()
+  // The client creates the file, not the directory holding it.
+  const path = localDatabasePath(databaseUrl)
+  if (path !== null) mkdirSync(dirname(path), { recursive: true })
+  return createClient({
+    url: databaseUrl,
+    // A remote database needs one; a local file must not be handed a token.
+    ...(databaseAuthToken !== null && isRemoteDatabaseUrl(databaseUrl)
+      ? { authToken: databaseAuthToken }
+      : {})
+  })
 }
 
-export const getClient = (): BetterSqlite3.Database => {
+export const getClient = (): Client => {
   client ??= openClient()
   return client
 }
@@ -72,34 +75,77 @@ export const migrationsFolder = (): string => {
   )
 }
 
+export const getDb = (): CognitiveMemoryDatabase => {
+  if (database === null) {
+    database = drizzle(getClient(), { schema })
+  }
+  return database
+}
+
 /**
- * Apply pending migrations. Idempotent: drizzle skips whatever the
- * `__drizzle_migrations` table already records, so this costs one read on a warm
- * database.
+ * Prepare the connection: pragmas first, then the pending migrations.
+ *
+ * This used to happen while the connection was built, which was safe when the
+ * database was a file and the driver was synchronous. It is not safe now: a
+ * Turso database is asked over HTTP, so the migration is a promise, and Better
+ * Auth's endpoints are reachable without ever touching an Effect service. A
+ * migration that waited for a service initialiser would let the very first
+ * request of a fresh deployment be `sign-up`, which fails with "no such table:
+ * user" and looks like a broken app rather than an unrun migration.
+ *
+ * So the work is done here, awaited by everything that can reach the database:
+ * the startup hook, the Effect layer, and the auth handler. The promise is
+ * memoised, so it runs once per process however many of those ask.
  */
-const applyMigrations = (db: BetterSQLite3Database<typeof schema>): void => {
+export const prepareDb = (): Promise<void> => {
+  preparation ??= applyPragmasAndMigrations(false)
+  return preparation
+}
+
+/**
+ * Apply the pending migrations, and fail if they do not apply.
+ *
+ * `prepareDb` is the forgiving version: a build on a read-only filesystem still
+ * builds, and the first writable process migrates on startup. A migration run
+ * on purpose — `pnpm db:migrate` — is not that. It either applies the schema or
+ * it says why it could not.
+ */
+export const migrateDb = async (): Promise<void> => {
+  // The memoised attempt may have failed and been swallowed; a deliberate run
+  // gets its own try.
+  preparation = null
+  await applyPragmasAndMigrations(true)
+}
+
+const applyPragmasAndMigrations = async (strict: boolean): Promise<void> => {
+  const { databaseUrl } = readCognitiveMemorySettings()
   try {
-    migrate(db, { migrationsFolder: migrationsFolder() })
+    if (!isRemoteDatabaseUrl(databaseUrl)) {
+      const opened = getClient()
+      // WAL keeps a reader from blocking the writer, which matters as soon as
+      // two agents share an organisation.
+      await opened.execute("PRAGMA journal_mode = WAL")
+      // Foreign keys are off by default in SQLite. The migrator turns them off
+      // around its own transaction and back on afterwards, but a database that
+      // has never been migrated still has to enforce them.
+      await opened.execute("PRAGMA foreign_keys = ON")
+    }
+    // Idempotent: drizzle skips whatever the `__drizzle_migrations` table
+    // already records, so this costs one read on a warm database.
+    await migrate(getDb(), { migrationsFolder: migrationsFolder() })
   } catch (error) {
     // Worth surviving: a read-only filesystem at build time should still produce
     // a build, and the next writable process migrates on startup. Loud, because
     // the alternative is a confusing "no such table" on the first request.
+    if (strict) throw error
     const message = error instanceof Error ? error.message : String(error)
-    if (migrationWarning !== message) {
-      migrationWarning = message
+    if (preparationWarning !== message) {
+      preparationWarning = message
       process.emitWarning(
-        `cognitive-memory: could not apply migrations (${message}). The database must be migrated before serving.`
+        `cognitive-memory: could not prepare the database (${message}). The database must be migrated before serving.`
       )
     }
   }
-}
-
-export const getDb = (): CognitiveMemoryDatabase => {
-  if (database === null) {
-    database = drizzle(getClient(), { schema })
-    applyMigrations(database)
-  }
-  return database
 }
 
 /**
@@ -110,15 +156,16 @@ export const getDb = (): CognitiveMemoryDatabase => {
  * path: a test that runs against an empty schema fails for a reason that has
  * nothing to do with what it is testing.
  */
-export const openMigratedDb = (filename: string): BetterSQLite3Database<typeof schema> => {
-  const db = drizzle(new BetterSqlite3(filename), { schema })
-  migrate(db, { migrationsFolder: migrationsFolder() })
-  return db
+export const openMigratedDb = async (filename = ":memory:"): Promise<CognitiveMemoryDatabase> => {
+  const opened = drizzle(createClient({ url: toDatabaseUrl(filename) }), { schema })
+  await migrate(opened, { migrationsFolder: migrationsFolder() })
+  return opened
 }
 
-/** Drop the connection. Used by tests, and by anything that swaps the path. */
+/** Drop the connection. Used by tests, and by anything that swaps the database. */
 export const closeDb = (): void => {
   client?.close()
   client = null
   database = null
+  preparation = null
 }

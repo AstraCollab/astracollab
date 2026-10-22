@@ -1,6 +1,7 @@
 import { Cause, Effect, Exit, Result } from "effect"
 
 import { getAuth } from "../src/server/auth/better-auth"
+import { prepareDb } from "../src/server/db/client"
 import { MemoryEngine } from "../src/server/engine/memory-engine"
 import { Keys, Scope } from "../src/server/services/keys"
 import { MemoryStore } from "../src/server/services/memory-store"
@@ -24,6 +25,9 @@ const email = `smoke-${stamp}@example.test`
 const password = "smoke-test-password-1234"
 
 const signUpAndCreateOrganization = async (): Promise<{ organizationId: string; cookie: string }> => {
+  // The schema is applied by a promise now, so it has to be awaited before
+  // Better Auth touches the database.
+  await prepareDb()
   const signup = await getAuth().api.signUpEmail({
     body: { email, password, name: "Smoke" },
     asResponse: true

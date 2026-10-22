@@ -290,7 +290,7 @@ export interface SettingsResponse {
   }
   requestedExtraction: "auto" | "rules"
   deployment: {
-    databasePath: string
+    databaseUrl: string
     modelName: string
     modelProvider: string
     modelConfigured: boolean

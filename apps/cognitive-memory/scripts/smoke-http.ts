@@ -1,4 +1,5 @@
 import { getAuth } from "../src/server/auth/better-auth"
+import { prepareDb } from "../src/server/db/client"
 
 /**
  * End-to-end check of the HTTP surface, against a throwaway database.
@@ -78,6 +79,9 @@ const call = async (
 }
 
 async function main(): Promise<void> {
+  // The schema is applied by a promise now, so it has to be awaited before
+  // Better Auth touches the database.
+  await prepareDb()
   const stamp = Date.now().toString(36)
   const password = "smoke-test-password-1234"
 

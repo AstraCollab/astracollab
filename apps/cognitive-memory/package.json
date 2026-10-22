@@ -23,6 +23,7 @@
 	"dependencies": {
 		"@effect/ai-anthropic": "4.0.0",
 		"@effect/ai-openai": "4.0.0",
+		"@libsql/client": "0.15.15",
 		"@wnstn/canopy": "0.0.1-beta.1",
 		"@wnstn/canopy-nextjs": "0.0.1-beta",
 		"better-auth": "1.7.7",

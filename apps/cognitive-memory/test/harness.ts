@@ -58,8 +58,8 @@ export const makeTestRuntime = () => {
  */
 export const seedOrganization = Effect.fnUntraced(function* (id: string) {
   const db = yield* Database
-  yield* db.run("test.seedOrganization", () => {
-    db.db
+  yield* db.run("test.seedOrganization", async () => {
+    await db.db
       .insert(organization)
       .values({ id, name: "Test Org", slug: `test-${id}`, createdAt: new Date() })
       .onConflictDoNothing()

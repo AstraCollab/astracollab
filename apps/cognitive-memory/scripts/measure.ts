@@ -1,4 +1,5 @@
 import { getAuth } from "../src/server/auth/better-auth"
+import { prepareDb } from "../src/server/db/client"
 import { MemoryEngine } from "../src/server/engine/memory-engine"
 import { Keys, Scope } from "../src/server/services/keys"
 import { runtime } from "../src/server/runtime"
@@ -25,6 +26,9 @@ const percentiles = (samples: Array<number>): Record<string, number> => {
 const run = runtime.runPromise
 
 async function measure(): Promise<void> {
+  // The schema is applied by a promise now, so it has to be awaited before
+  // Better Auth touches the database.
+  await prepareDb()
   const stamp = Date.now().toString(36)
   const signup = await getAuth().api.signUpEmail({
     body: {

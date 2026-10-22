@@ -38,7 +38,18 @@ const CONFIG: ReadonlyArray<readonly [string, string, string]> = [
   [
     "COGNITIVE_MEMORY_DATABASE_PATH",
     ".cognitive-memory/cognitive-memory.sqlite",
-    "SQLite file. The directory is created on first connection."
+    "SQLite file, used when no URL is set. The directory is created on first connection."
+  ],
+  [
+    "COGNITIVE_MEMORY_DATABASE_URL",
+    "—",
+    "A remote database, e.g. libsql://your-database.your-region.turso.io. Wins over DATABASE_URL."
+  ],
+  ["DATABASE_URL", "—", "A remote database, when COGNITIVE_MEMORY_DATABASE_URL is not set."],
+  [
+    "TURSO_AUTH_TOKEN",
+    "—",
+    "The token a remote database is reached with. Also read as COGNITIVE_MEMORY_DATABASE_AUTH_TOKEN or DATABASE_AUTH_TOKEN."
   ],
   [
     "COGNITIVE_MEMORY_MAX_TOTAL_TOKENS",
@@ -108,6 +119,35 @@ pnpm --filter cognitive-memory dev`}</CodeBlock>
           required in production.
         </p>
         <CodeBlock language="sh">{"cp .env.example .env.local"}</CodeBlock>
+      </>
+    )
+  },
+  {
+    id: "serverless",
+    title: "On a serverless deployment",
+    body: (
+      <>
+        <p>
+          A serverless function has no filesystem worth writing to: the bundle
+          is read-only and the local disk is gone between invocations. The
+          database is therefore a remote one, reached over HTTP — a Turso
+          database, for instance — and the address of that database is a URL
+          rather than a path.
+        </p>
+        <CodeBlock language="sh">{`COGNITIVE_MEMORY_DATABASE_URL=libsql://your-database.your-region.turso.io
+TURSO_AUTH_TOKEN=…`}</CodeBlock>
+        <p>
+          The token is the one Turso issued for the database. Without it every
+          query comes back unauthorised, and the health endpoint says so rather
+          than leaving it to fail on the first request.
+        </p>
+        <p>
+          The schema is applied at startup, before the first request is served,
+          so a fresh database does not answer <code>sign-up</code> with{" "}
+          <code>no such table: user</code>. <code>pnpm db:migrate</code> applies
+          the same migrations by hand, and fails loudly where the startup path
+          only warns.
+        </p>
       </>
     )
   },
@@ -264,7 +304,10 @@ proxy_set_header X-Forwarded-Proto  $scheme;`}</CodeBlock>
               <b key="b">Effect 4</b>,
               "Services, layers, typed error channel, ManagedRuntime at the HTTP boundary"
             ],
-            [<b key="c">Drizzle</b>, "Schema, migrations, synchronous queries over better-sqlite3"],
+            [
+              <b key="c">Drizzle</b>,
+              "Schema, migrations, a local SQLite file or a remote Turso database over HTTP"
+            ],
             [<b key="d">Better Auth</b>, "Users, sessions, organisations"],
             [<b key="e">effect/ai</b>, "Optional model-backed extraction and reconciliation"]
           ]}

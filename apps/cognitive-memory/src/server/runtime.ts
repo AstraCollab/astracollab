@@ -3,6 +3,7 @@ import { Effect, Layer, ManagedRuntime } from "effect"
 
 import { getAuth } from "./auth/better-auth"
 import { CognitiveMemorySettings } from "./config"
+import { prepareDb } from "./db/client"
 import { Database } from "./db/database"
 import { Forbidden, Unauthorized, type CognitiveMemoryError } from "./domain/errors"
 import { MemoryEngine, engineLayer } from "./engine/memory-engine"
@@ -113,6 +114,9 @@ export const account = (
 /** The signed-in user, from the session cookie. */
 export const currentSession = Effect.gen(function* () {
   const requestHeaders = yield* Effect.promise(() => headers())
+  // The session is read from the user and session tables, so the schema has to
+  // be in place first; see `./db/client`.
+  yield* Effect.promise(() => prepareDb())
   return yield* Effect.tryPromise({
     // The headers say which host this deployment answers on, which is what
     // the auth instance has to be built for.

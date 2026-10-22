@@ -4,7 +4,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle"
 import { toNextJsHandler } from "better-auth/next-js"
 
 import { authTables } from "../db/auth-tables"
-import { getDb } from "../db/client"
+import { getDb, prepareDb } from "../db/client"
 import { resolveOrigin } from "./origin"
 
 /**
@@ -116,17 +116,19 @@ export const getAuth = (headers?: Headers): Auth => instanceFor(resolveOrigin(he
  * 405 with an `Allow` header instead of Better Auth's own handling, which would
  * be a 404 and read like a wrong URL.
  */
-export const handleAuthRequest = (request: Request): Promise<Response> => {
+export const handleAuthRequest = async (request: Request): Promise<Response> => {
   const verb = request.method.toUpperCase() as keyof AuthHandler
   const handler = instanceFor(resolveOrigin(request.headers)).handler[verb]
   if (typeof handler !== "function") {
-    return Promise.resolve(
-      new Response(JSON.stringify({ error: "MethodNotAllowed" }), {
-        status: 405,
-        headers: { "content-type": "application/json", allow: "GET, POST, PATCH, PUT, DELETE" }
-      })
-    )
+    return new Response(JSON.stringify({ error: "MethodNotAllowed" }), {
+      status: 405,
+      headers: { "content-type": "application/json", allow: "GET, POST, PATCH, PUT, DELETE" }
+    })
   }
+  // Better Auth reads the user and session tables the moment it handles a
+  // request, so the schema has to be in place first. The startup hook has
+  // usually done it already; this covers the paths it does not run on.
+  await prepareDb()
   return handler(request)
 }
 

@@ -1,15 +1,14 @@
 import { Context, Effect, Layer } from "effect"
 
-import { getDb, openMigratedDb, type CognitiveMemoryDatabase } from "./client"
+import { getDb, openMigratedDb, prepareDb, type CognitiveMemoryDatabase } from "./client"
 import { StorageFailure } from "../domain/errors"
 
 /**
  * The database, as an Effect service.
  *
- * better-sqlite3 is synchronous, so every call is wrapped in `Effect.try`
- * rather than `Effect.tryPromise`: there is no promise to await, and a thrown
- * driver error becomes a typed `StorageFailure` at the call site instead of an
- * unhandled rejection inside a route handler.
+ * Every query is a promise, because the database may be a Turso database
+ * reached over HTTP. A driver error becomes a typed `StorageFailure` at the
+ * call site instead of an unhandled rejection inside a route handler.
  *
  * The connection itself lives in `./client` because Better Auth needs it too,
  * before any Effect program runs.
@@ -17,21 +16,23 @@ import { StorageFailure } from "../domain/errors"
 
 export interface DatabaseService {
   readonly db: CognitiveMemoryDatabase
-  /** Run a synchronous query, mapping a driver throw to a typed failure. */
-  readonly run: <A>(operation: string, query: () => A) => Effect.Effect<A, StorageFailure>
+  /** Run a query, mapping a driver failure to a typed failure. */
+  readonly run: <A>(operation: string, query: () => A | Promise<A>) => Effect.Effect<A, StorageFailure>
 }
 
 export class Database extends Context.Service<Database, DatabaseService>()("cognitive-memory/Database") {
   static readonly layer = Layer.effect(
     Database,
     Effect.gen(function* () {
-      // Migrations were already applied when the connection was built; see
-      // `./client` for why that happens here rather than in this initialiser.
-      yield* Effect.sync(() => getDb())
+      // The schema is applied before anything is served; see `./client` for why
+      // that happens there rather than in this initialiser.
+      yield* Effect.promise(() => prepareDb())
 
-      const run = <A>(operation: string, query: () => A): Effect.Effect<A, StorageFailure> =>
-        Effect.try({
-          try: query,
+      const run = <A>(operation: string, query: () => A | Promise<A>): Effect.Effect<A, StorageFailure> =>
+        Effect.tryPromise({
+          // `async` rather than `Promise.resolve(query())`: a query that throws
+          // before it returns a promise has to be caught here too.
+          try: async () => (await query()) as A,
           catch: (cause) => new StorageFailure({ operation, cause })
         })
 
@@ -41,13 +42,16 @@ export class Database extends Context.Service<Database, DatabaseService>()("cogn
 
   /** An isolated, migrated in-memory database. Used by the tests. */
   static readonly testLayer = (filename = ":memory:") =>
-    Layer.sync(Database, () => {
-      const db = openMigratedDb(filename)
-      const run = <A>(operation: string, query: () => A): Effect.Effect<A, StorageFailure> =>
-        Effect.try({
-          try: query,
-          catch: (cause) => new StorageFailure({ operation, cause })
-        })
-      return Database.of({ db, run })
-    })
+    Layer.effect(
+      Database,
+      Effect.gen(function* () {
+        const db = yield* Effect.promise(() => openMigratedDb(filename))
+        const run = <A>(operation: string, query: () => A | Promise<A>): Effect.Effect<A, StorageFailure> =>
+          Effect.tryPromise({
+            try: async () => (await query()) as A,
+            catch: (cause) => new StorageFailure({ operation, cause })
+          })
+        return Database.of({ db, run })
+      })
+    )
 }

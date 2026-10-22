@@ -160,7 +160,7 @@ organisation. Every read is filtered by organisation id in one auditable layer
 | --- | --- |
 | Next.js 16 | App Router, route handlers, Turbopack |
 | Effect 4 | Services, layers, typed error channel, `ManagedRuntime` at the HTTP boundary |
-| Drizzle + better-sqlite3 | Schema, migrations, synchronous queries |
+| Drizzle + @libsql/client | Schema, migrations, a local SQLite file or a remote Turso database over HTTP |
 | Better Auth | Users, sessions, organisations |
 | effect/ai | Optional model-backed extraction and reconciliation |
 
@@ -194,7 +194,10 @@ deployment again. Every value is optional in development; see
 
 | Variable | Default | |
 | --- | --- | --- |
-| `COGNITIVE_MEMORY_DATABASE_PATH` | `.cognitive-memory/cognitive-memory.sqlite` | SQLite file |
+| `COGNITIVE_MEMORY_DATABASE_PATH` | `.cognitive-memory/cognitive-memory.sqlite` | SQLite file, used when no URL is set |
+| `COGNITIVE_MEMORY_DATABASE_URL` | — | A remote database: `libsql://…`. Wins over `DATABASE_URL` |
+| `DATABASE_URL` | — | A remote database, when `COGNITIVE_MEMORY_DATABASE_URL` is not set |
+| `TURSO_AUTH_TOKEN` | — | The token a remote database is reached with |
 | `COGNITIVE_MEMORY_MAX_TOTAL_TOKENS` | `2000` | Injection ceiling per prompt |
 | `COGNITIVE_MEMORY_MAX_INDEX_ITEMS` | `60` | Index lines per prompt |
 | `COGNITIVE_MEMORY_DEFAULT_RECALL_LIMIT` | `8` | Default results for a recall |
@@ -210,6 +213,41 @@ deployment again. Every value is optional in development; see
 An unusable value is reported by `/api/v1/health` and on the dashboard's overview
 rather than thrown during module load, which would take down `next build` instead
 of the one request that needed the setting.
+
+### Where the database lives
+
+A local SQLite file, or a remote Turso database reached over HTTP. The address
+is one variable, and its *shape* decides what happens to it:
+
+| Value | What it is |
+| --- | --- |
+| `COGNITIVE_MEMORY_DATABASE_PATH=.cognitive-memory/cognitive-memory.sqlite` | A local file. The directory is created on first connection. |
+| `COGNITIVE_MEMORY_DATABASE_URL=libsql://cogmem-helixhex.aws-us-west-2.turso.io` | A remote database. |
+| `DATABASE_URL=libsql://…` | The same, when `COGNITIVE_MEMORY_DATABASE_URL` is not set. |
+
+A URL always wins over a path, whichever name it comes under: a path left over
+from a copied `.env.local` must not quietly send a deployment back to a file it
+cannot write.
+
+A remote database also needs a token: `TURSO_AUTH_TOKEN`, or
+`COGNITIVE_MEMORY_DATABASE_AUTH_TOKEN`, or `DATABASE_AUTH_TOKEN`. Without one
+every query comes back unauthorised, so a missing token is reported as a problem
+by `/api/v1/health` rather than left to fail on the first request.
+
+**On Vercel** there is no filesystem worth writing to — the bundle is read-only
+and the local disk is gone between invocations — so a deployment has to point at
+a remote database:
+
+```sh
+vercel env add COGNITIVE_MEMORY_DATABASE_URL production   # libsql://…
+vercel env add TURSO_AUTH_TOKEN production
+vercel env add BETTER_AUTH_SECRET production
+```
+
+The schema is applied at startup, before the first request is served, so a fresh
+database does not answer `sign-up` with "no such table: user". `pnpm db:migrate`
+applies the same migrations against the remote database, and is worth running
+before the first deploy — it fails loudly where the startup path only warns.
 
 ### The public origin
 

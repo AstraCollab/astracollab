@@ -402,7 +402,7 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
       const { db, run } = yield* Database
 
       const listMemories: StoreService["listMemories"] = (organizationId, options = {}) =>
-        run("MemoryStore.listMemories", () => {
+        run("MemoryStore.listMemories", async () => {
           const limit = Math.min(Math.max(options.limit ?? 100, 1), 500)
           const conditions = [eq(memories.organizationId, organizationId)]
           if (options.tiers && options.tiers.length > 0) {
@@ -411,46 +411,46 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
           if (options.sessionId) {
             conditions.push(eq(memories.sourceSessionId, options.sessionId))
           }
-          return db
+          return (await db
             .select()
             .from(memories)
             .where(and(...conditions))
             .orderBy(desc(memories.lastAccessedAt))
             .limit(limit)
-            .all()
+            .all())
             .map(toItem)
         })
 
       const activeMemories: StoreService["activeMemories"] = (organizationId, limit) =>
-        run("MemoryStore.activeMemories", () => {
+        run("MemoryStore.activeMemories", async () => {
           // L1 first (pre-staged, always relevant), then the warmest of the rest.
-          return db
+          return (await db
             .select()
             .from(memories)
             .where(eq(memories.organizationId, organizationId))
             .orderBy(desc(sql`CASE WHEN ${memories.tier} = 'L1' THEN 1 ELSE 0 END`), desc(memories.lastAccessedAt))
             .limit(Math.max(1, Math.min(limit, 500)))
-            .all()
+            .all())
             .map(toItem)
         })
 
       const getMemory: StoreService["getMemory"] = (organizationId, id) =>
         Effect.gen(function*() {
-          const row = yield* run("MemoryStore.getMemory", () =>
-            db
+          const row = yield* run("MemoryStore.getMemory", async () =>
+            (await db
               .select()
               .from(memories)
               .where(and(eq(memories.id, id), eq(memories.organizationId, organizationId)))
-              .get()
+              .get())
           )
           if (!row) return yield* new NotFound({ resource: "memory", id })
           return toItem(row)
         })
 
       const insertMemory: StoreService["insertMemory"] = (organizationId, input) =>
-        run("MemoryStore.insertMemory", () => {
+        run("MemoryStore.insertMemory", async () => {
           const timestamp = isoOf(input.now)
-          const row = db
+          const row = (await db
             .insert(memories)
             .values({
               id: input.id,
@@ -468,39 +468,39 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
               updatedAt: timestamp
             })
             .returning()
-            .get()
+            .get())
           return toItem(row!)
         })
 
       const updateContent: StoreService["updateContent"] = (organizationId, id, content, bookmark, now) =>
-        run("MemoryStore.updateContent", () => {
-          db.update(memories)
+        run("MemoryStore.updateContent", async () => {
+          (await db.update(memories)
             .set({ content, bookmark, updatedAt: isoOf(now), lastAccessedAt: isoOf(now) })
             .where(and(eq(memories.id, id), eq(memories.organizationId, organizationId)))
-            .run()
+            .run())
         })
 
       const setTier: StoreService["setTier"] = (organizationId, id, tier) =>
-        run("MemoryStore.setTier", () => {
-          db.update(memories).set({ tier }).where(and(eq(memories.id, id), eq(memories.organizationId, organizationId))).run()
+        run("MemoryStore.setTier", async () => {
+          (await db.update(memories).set({ tier }).where(and(eq(memories.id, id), eq(memories.organizationId, organizationId))).run())
         })
 
       const touch: StoreService["touch"] = (organizationId, id, now) =>
-        run("MemoryStore.touch", () => {
-          db.update(memories)
+        run("MemoryStore.touch", async () => {
+          (await db.update(memories)
             .set({
               accessCount: sql`${memories.accessCount} + 1`,
               lastAccessedAt: isoOf(now)
             })
             .where(and(eq(memories.id, id), eq(memories.organizationId, organizationId)))
-            .run()
+            .run())
         })
 
       const touchMany: StoreService["touchMany"] = (organizationId, ids, now) =>
-        run("MemoryStore.touchMany", () => {
+        run("MemoryStore.touchMany", async () => {
           const target = [...new Set(ids)].slice(0, 200)
           if (target.length === 0) return 0
-          return db
+          return (await db
             .update(memories)
             .set({
               accessCount: sql`${memories.accessCount} + 1`,
@@ -508,62 +508,65 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
             })
             .where(and(eq(memories.organizationId, organizationId), inArray(memories.id, target)))
             .returning({ id: memories.id })
-            .all().length
+            .all()).length
         })
 
       const deleteMemory: StoreService["deleteMemory"] = (organizationId, id) =>
-        run("MemoryStore.deleteMemory", () => {
-          const removed = db
+        run("MemoryStore.deleteMemory", async () => {
+          const removed = (await db
             .delete(memories)
             .where(and(eq(memories.id, id), eq(memories.organizationId, organizationId)))
             .returning({ id: memories.id })
-            .all()
+            .all())
           return removed.length > 0
         })
 
       const deleteByContent: StoreService["deleteByContent"] = (organizationId, contents) =>
-        run("MemoryStore.deleteByContent", () => {
+        run("MemoryStore.deleteByContent", async () => {
           if (contents.length === 0) return 0
           const normalised = contents.map((c) => c.trim().toLowerCase())
-          const rows = db.select().from(memories).where(eq(memories.organizationId, organizationId)).all()
+          const rows = (await db.select().from(memories).where(eq(memories.organizationId, organizationId)).all())
           const doomed = rows
             .filter((row) => normalised.includes(row.content.trim().toLowerCase()))
             .map((row) => row.id)
           if (doomed.length === 0) return 0
-          db.delete(memories).where(and(eq(memories.organizationId, organizationId), inArray(memories.id, doomed))).run()
+          await db
+            .delete(memories)
+            .where(and(eq(memories.organizationId, organizationId), inArray(memories.id, doomed)))
+            .run()
           return doomed.length
         })
 
       const findByContent: StoreService["findByContent"] = (organizationId, contents) =>
-        run("MemoryStore.findByContent", () => {
+        run("MemoryStore.findByContent", async () => {
           if (contents.length === 0) return []
           const normalised = new Set(contents.map((c) => c.trim().toLowerCase()))
-          return db
+          return (await db
             .select()
             .from(memories)
             .where(eq(memories.organizationId, organizationId))
-            .all()
+            .all())
             .filter((row) => normalised.has(row.content.trim().toLowerCase()))
             .map(toItem)
         })
 
       const listTensions: StoreService["listTensions"] = (organizationId, status) =>
-        run("MemoryStore.listTensions", () => {
+        run("MemoryStore.listTensions", async () => {
           const conditions = [eq(tensions.organizationId, organizationId)]
           if (status) conditions.push(eq(tensions.status, status))
-          return db
+          return (await db
             .select()
             .from(tensions)
             .where(and(...conditions))
             .orderBy(desc(tensions.updatedAt))
-            .all()
+            .all())
             .map(toTension)
         })
 
       const upsertTension: StoreService["upsertTension"] = (tension, now) =>
-        run("MemoryStore.upsertTension", () => {
+        run("MemoryStore.upsertTension", async () => {
           const timestamp = isoOf(now)
-          const row = db
+          const row = (await db
             .insert(tensions)
             .values({
               id: tension.id,
@@ -589,37 +592,37 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
               }
             })
             .returning()
-            .get()
+            .get())
           return toTension(row!)
         })
 
       const resolveTension: StoreService["resolveTension"] = (organizationId, id, resolution) =>
         Effect.gen(function*() {
-          const row = yield* run("MemoryStore.resolveTension", () =>
-            db
+          const row = yield* run("MemoryStore.resolveTension", async () =>
+            (await db
               .update(tensions)
               .set({ status: "resolved", resolution, updatedAt: isoOf(resolution.resolvedAt) })
               .where(and(eq(tensions.id, id), eq(tensions.organizationId, organizationId)))
               .returning()
-              .get()
+              .get())
           )
           if (!row) return yield* new NotFound({ resource: "tension", id })
           return toTension(row)
         })
 
       const deleteTension: StoreService["deleteTension"] = (organizationId, id) =>
-        run("MemoryStore.deleteTension", () => {
-          const removed = db
+        run("MemoryStore.deleteTension", async () => {
+          const removed = (await db
             .delete(tensions)
             .where(and(eq(tensions.id, id), eq(tensions.organizationId, organizationId)))
             .returning({ id: tensions.id })
-            .all()
+            .all())
           return removed.length > 0
         })
 
       const getSelfModel: StoreService["getSelfModel"] = (organizationId) =>
-        run("MemoryStore.getSelfModel", () => {
-          const row = db.select().from(selfModels).where(eq(selfModels.organizationId, organizationId)).get()
+        run("MemoryStore.getSelfModel", async () => {
+          const row = (await db.select().from(selfModels).where(eq(selfModels.organizationId, organizationId)).get())
           if (!row) {
             return new ProprioceptiveSelfModel({ domains: {}, calibrationFactor: 1, activeDomains: [] })
           }
@@ -646,7 +649,7 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
         })
 
       const putSelfModel: StoreService["putSelfModel"] = (organizationId, model, now) =>
-        run("MemoryStore.putSelfModel", () => {
+        run("MemoryStore.putSelfModel", async () => {
           const timestamp = isoOf(now)
           // Plain objects, not schema instances: this column is serialised to JSON
           // and a class instance would carry its prototype into the row.
@@ -659,7 +662,7 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
               recommendedStrategies: [...capability.recommendedStrategies]
             }
           }
-          db.insert(selfModels)
+          (await db.insert(selfModels)
             .values({
               organizationId,
               domains,
@@ -672,12 +675,12 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
               target: selfModels.organizationId,
               set: { domains, calibrationFactor: model.calibrationFactor, activeDomains: [...model.activeDomains], updatedAt: timestamp }
             })
-            .run()
+            .run())
         })
 
       const findKeyByPrefix: StoreService["findKeyByPrefix"] = (prefix) =>
-        run("MemoryStore.findKeyByPrefix", () => {
-          const row = db.select().from(apiKeys).where(eq(apiKeys.prefix, prefix)).get()
+        run("MemoryStore.findKeyByPrefix", async () => {
+          const row = (await db.select().from(apiKeys).where(eq(apiKeys.prefix, prefix)).get())
           if (!row) return null
           return {
             id: row.id,
@@ -690,9 +693,10 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
         })
 
       const createKey: StoreService["createKey"] = (input) =>
-        run("MemoryStore.createKey", () => {
+        run("MemoryStore.createKey", async () => {
           const timestamp = isoOf(input.now)
-          db.insert(apiKeys)
+          await db
+            .insert(apiKeys)
             .values({
               id: input.id,
               organizationId: input.organizationId,
@@ -710,8 +714,8 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
         })
 
       const listKeys: StoreService["listKeys"] = (organizationId) =>
-        run("MemoryStore.listKeys", () =>
-          db
+        run("MemoryStore.listKeys", async () =>
+          (await db
             .select({
               id: apiKeys.id,
               name: apiKeys.name,
@@ -725,28 +729,28 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
             .from(apiKeys)
             .where(eq(apiKeys.organizationId, organizationId))
             .orderBy(desc(apiKeys.createdAt))
-            .all()
+            .all())
         )
 
       const revokeKey: StoreService["revokeKey"] = (organizationId, id, now) =>
-        run("MemoryStore.revokeKey", () => {
-          const removed = db
+        run("MemoryStore.revokeKey", async () => {
+          const removed = (await db
             .update(apiKeys)
             .set({ revokedAt: isoOf(now), updatedAt: isoOf(now) })
             .where(and(eq(apiKeys.id, id), eq(apiKeys.organizationId, organizationId)))
             .returning({ id: apiKeys.id })
-            .all()
+            .all())
           return removed.length > 0
         })
 
       const markKeyUsed: StoreService["markKeyUsed"] = (id, now) =>
-        run("MemoryStore.markKeyUsed", () => {
-          db.update(apiKeys).set({ lastUsedAt: isoOf(now) }).where(eq(apiKeys.id, id)).run()
+        run("MemoryStore.markKeyUsed", async () => {
+          (await db.update(apiKeys).set({ lastUsedAt: isoOf(now) }).where(eq(apiKeys.id, id)).run())
         })
 
       const recordUsage: StoreService["recordUsage"] = (input) =>
-        run("MemoryStore.recordUsage", () => {
-          db.insert(usageEvents)
+        run("MemoryStore.recordUsage", async () => {
+          (await db.insert(usageEvents)
             .values({
               id: input.id,
               organizationId: input.organizationId,
@@ -755,12 +759,12 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
               injectedTokens: input.injectedTokens,
               createdAt: isoOf(input.now)
             })
-            .run()
+            .run())
         })
 
       const stats: StoreService["stats"] = (organizationId) =>
-        run("MemoryStore.stats", () => {
-          const rows = db
+        run("MemoryStore.stats", async () => {
+          const rows = (await db
             .select({
               tier: memories.tier,
               total: count(),
@@ -771,7 +775,7 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
             .from(memories)
             .where(eq(memories.organizationId, organizationId))
             .groupBy(memories.tier)
-            .all()
+            .all())
 
           const byTier: Record<string, number> = { L0: 0, L1: 0, L2: 0, L3: 0 }
           let total = 0
@@ -788,11 +792,11 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
             if (accessed > latest) latest = accessed
           }
 
-          const tensionRows = db
+          const tensionRows = (await db
             .select({ total: count() })
             .from(tensions)
             .where(and(eq(tensions.organizationId, organizationId), eq(tensions.status, "active")))
-            .all()
+            .all())
 
           return {
             total,
@@ -812,7 +816,7 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
        * a literal search, which is what a filter box means.
        */
       const memoryPage: StoreService["memoryPage"] = (organizationId, query) =>
-        run("MemoryStore.memoryPage", () => {
+        run("MemoryStore.memoryPage", async () => {
           const conditions = [eq(memories.organizationId, organizationId)]
           const needle = query.text?.trim().toLowerCase()
           if (needle !== undefined && needle !== "") {
@@ -853,31 +857,31 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
           const limit = Math.min(Math.max(query.limit ?? 50, 1), 200)
           const offset = Math.max(query.offset ?? 0, 0)
 
-          const rows = db
+          const rows = (await db
             .select()
             .from(memories)
             .where(and(...conditions))
             .orderBy(order)
             .limit(limit)
             .offset(offset)
-            .all()
+            .all())
             .map(toItem)
 
-          const total = db
+          const total = (await db
             .select({ total: count() })
             .from(memories)
             .where(and(...conditions))
-            .get()?.total ?? 0
+            .get())?.total ?? 0
 
           // Facets over the tenant rather than over the current filter, so the
           // counts answer "how many would I get if I clicked this" instead of
           // collapsing to the one row already selected.
-          const grouped = db
+          const grouped = (await db
             .select({ tier: memories.tier, source: memories.source, total: count() })
             .from(memories)
             .where(eq(memories.organizationId, organizationId))
             .groupBy(memories.tier, memories.source)
-            .all()
+            .all())
 
           const tiers: Record<string, number> = {}
           const sources: Record<string, number> = {}
@@ -887,7 +891,7 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
           }
 
           const domainCounts = new Map<string, number>()
-          for (const row of db
+          for (const row of await db
             .select({ domains: memories.domains })
             .from(memories)
             .where(eq(memories.organizationId, organizationId))
@@ -914,8 +918,8 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
 
       const editMemory: StoreService["editMemory"] = (organizationId, id, patch, now) =>
         Effect.gen(function* () {
-          const row = yield* run("MemoryStore.editMemory", () =>
-            db
+          const row = yield* run("MemoryStore.editMemory", async () =>
+            (await db
               .update(memories)
               .set({
                 ...(patch.content === undefined
@@ -927,60 +931,60 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
               })
               .where(and(eq(memories.id, id), eq(memories.organizationId, organizationId)))
               .returning()
-              .get()
+              .get())
           )
           if (!row) return yield* new NotFound({ resource: "memory", id })
           return toItem(row)
         })
 
       const applyToMemories: StoreService["applyToMemories"] = (organizationId, ids, action) =>
-        run("MemoryStore.applyToMemories", () => {
+        run("MemoryStore.applyToMemories", async () => {
           // Bounded because the `IN` list is inlined into the statement; a
           // select-all over a large store would build a query nobody wants.
           const target = ids.slice(0, 500)
           if (target.length === 0) return 0
           const scoped = and(eq(memories.organizationId, organizationId), inArray(memories.id, target))
           if (action === "forget") {
-            return db.delete(memories).where(scoped).returning({ id: memories.id }).all().length
+            return (await db.delete(memories).where(scoped).returning({ id: memories.id }).all()).length
           }
-          return db
+          return (await db
             .update(memories)
             .set({ tier: action.tier })
             .where(scoped)
             .returning({ id: memories.id })
-            .all().length
+            .all()).length
         })
 
       const deleteEveryMemory: StoreService["deleteEveryMemory"] = (organizationId) =>
-        run("MemoryStore.deleteEveryMemory", () =>
-          db
+        run("MemoryStore.deleteEveryMemory", async () =>
+          (await db
             .delete(memories)
             .where(eq(memories.organizationId, organizationId))
             .returning({ id: memories.id })
-            .all().length
+            .all()).length
         )
 
       const setTensionStatus: StoreService["setTensionStatus"] = (organizationId, id, status) =>
         Effect.gen(function* () {
-          const row = yield* run("MemoryStore.setTensionStatus", () =>
-            db
+          const row = yield* run("MemoryStore.setTensionStatus", async () =>
+            (await db
               .update(tensions)
               .set({ status, updatedAt: new Date().toISOString() })
               .where(and(eq(tensions.id, id), eq(tensions.organizationId, organizationId)))
               .returning()
-              .get()
+              .get())
           )
           if (!row) return yield* new NotFound({ resource: "tension", id })
           return toTension(row)
         })
 
       const getSettings: StoreService["getSettings"] = (organizationId) =>
-        run("MemoryStore.getSettings", () => {
-          const row = db
+        run("MemoryStore.getSettings", async () => {
+          const row = (await db
             .select()
             .from(organizationSettings)
             .where(eq(organizationSettings.organizationId, organizationId))
-            .get()
+            .get())
           if (!row) return null
           return {
             organizationId: row.organizationId,
@@ -993,12 +997,12 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
         })
 
       const putSettings: StoreService["putSettings"] = (organizationId, patch) =>
-        run("MemoryStore.putSettings", () => {
-          const current = db
+        run("MemoryStore.putSettings", async () => {
+          const current = (await db
             .select()
             .from(organizationSettings)
             .where(eq(organizationSettings.organizationId, organizationId))
-            .get()
+            .get())
           // Read-modify-write rather than an update of only the named columns:
           // the difference between "not supplied" and "set back to the default"
           // is a nullable column, and only a read can tell them apart.
@@ -1023,7 +1027,8 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
             retentionDays: next.retentionDays,
             extraction: next.extraction
           }
-          db.insert(organizationSettings)
+          await db
+            .insert(organizationSettings)
             .values(values)
             .onConflictDoUpdate({ target: organizationSettings.organizationId, set: values })
             .run()
@@ -1031,8 +1036,8 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
         })
 
       const recordInjection: StoreService["recordInjection"] = (input) =>
-        run("MemoryStore.recordInjection", () => {
-          db.insert(injectionLogs)
+        run("MemoryStore.recordInjection", async () => {
+          (await db.insert(injectionLogs)
             .values({
               id: input.id,
               organizationId: input.organizationId,
@@ -1047,21 +1052,21 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
               text: input.text,
               createdAt: isoOf(input.now)
             })
-            .run()
+            .run())
         })
 
       const listInjections: StoreService["listInjections"] = (organizationId, options = {}) =>
-        run("MemoryStore.listInjections", () => {
+        run("MemoryStore.listInjections", async () => {
           const conditions = [eq(injectionLogs.organizationId, organizationId)]
           if (options.before) conditions.push(lt(injectionLogs.createdAt, options.before))
           if (options.keyId) conditions.push(eq(injectionLogs.apiKeyId, options.keyId))
-          return db
+          return (await db
             .select()
             .from(injectionLogs)
             .where(and(...conditions))
             .orderBy(desc(injectionLogs.createdAt))
             .limit(Math.min(Math.max(options.limit ?? 25, 1), 100))
-            .all()
+            .all())
             .map((row) => ({
               id: row.id,
               tokens: row.tokens,
@@ -1087,13 +1092,13 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
        * SQL stay there.
        */
       const analytics: StoreService["analytics"] = (organizationId, range) =>
-        run("MemoryStore.analytics", () => {
+        run("MemoryStore.analytics", async () => {
           const fromIso = isoOf(range.from)
           const toIso = isoOf(range.to)
           const inRange = (value: string | null): boolean =>
             value !== null && value >= fromIso && value <= toIso
 
-          const injections = db
+          const injections = (await db
             .select()
             .from(injectionLogs)
             .where(
@@ -1103,9 +1108,9 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
                 sql`${injectionLogs.createdAt} <= ${toIso}`
               )
             )
-            .all()
+            .all())
 
-          const usage = db
+          const usage = (await db
             .select({
               route: usageEvents.route,
               apiKeyId: usageEvents.apiKeyId,
@@ -1119,9 +1124,9 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
                 sql`${usageEvents.createdAt} <= ${toIso}`
               )
             )
-            .all()
+            .all())
 
-          const keyRows = db
+          const keyRows = (await db
             .select({
               id: apiKeys.id,
               name: apiKeys.name,
@@ -1131,9 +1136,9 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
             })
             .from(apiKeys)
             .where(eq(apiKeys.organizationId, organizationId))
-            .all()
+            .all())
 
-          const stored = db
+          const stored = (await db
             .select({
               tier: memories.tier,
               source: memories.source,
@@ -1142,20 +1147,20 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
             })
             .from(memories)
             .where(eq(memories.organizationId, organizationId))
-            .all()
+            .all())
 
-          const tensionRows = db
+          const tensionRows = (await db
             .select({ status: tensions.status, total: count() })
             .from(tensions)
             .where(eq(tensions.organizationId, organizationId))
             .groupBy(tensions.status)
-            .all()
+            .all())
 
-          const selfModel = db
+          const selfModel = (await db
             .select({ domains: selfModels.domains })
             .from(selfModels)
             .where(eq(selfModels.organizationId, organizationId))
-            .get()
+            .get())
 
           /* ---- daily series, one bucket per day whether or not anything happened */
 
@@ -1318,8 +1323,8 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
         })
 
       const recordOutcome: StoreService["recordOutcome"] = (input) =>
-        run("MemoryStore.recordOutcome", () => {
-          db.insert(domainOutcomes)
+        run("MemoryStore.recordOutcome", async () => {
+          (await db.insert(domainOutcomes)
             .values({
               id: input.id,
               organizationId: input.organizationId,
@@ -1329,20 +1334,20 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
               strategy: input.strategy ?? null,
               createdAt: isoOf(input.now)
             })
-            .run()
+            .run())
         })
 
       const listOutcomes: StoreService["listOutcomes"] = (organizationId, options = {}) =>
-        run("MemoryStore.listOutcomes", () => {
+        run("MemoryStore.listOutcomes", async () => {
           const conditions = [eq(domainOutcomes.organizationId, organizationId)]
           if (options.domain) conditions.push(eq(domainOutcomes.domain, options.domain))
-          return db
+          return (await db
             .select()
             .from(domainOutcomes)
             .where(and(...conditions))
             .orderBy(desc(domainOutcomes.createdAt))
             .limit(Math.min(Math.max(options.limit ?? 50, 1), 200))
-            .all()
+            .all())
             .map((row) => ({
               id: row.id,
               domain: row.domain,
@@ -1354,47 +1359,47 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
         })
 
       const deleteOutcomeHistory: StoreService["deleteOutcomeHistory"] = (organizationId, domain) =>
-        run("MemoryStore.deleteOutcomeHistory", () =>
-          db
+        run("MemoryStore.deleteOutcomeHistory", async () =>
+          (await db
             .delete(domainOutcomes)
             .where(and(eq(domainOutcomes.organizationId, organizationId), eq(domainOutcomes.domain, domain)))
             .returning({ id: domainOutcomes.id })
-            .all().length
+            .all()).length
         )
 
       const pruneHistory: StoreService["pruneHistory"] = (organizationId, retentionDays, now) =>
-        run("MemoryStore.pruneHistory", () => {
+        run("MemoryStore.pruneHistory", async () => {
           // 0 means keep everything, which is a real choice rather than an
           // accident: an audit trail someone needs should not silently vanish.
           if (retentionDays <= 0) return { usage: 0, injections: 0, outcomes: 0 }
           const cutoff = isoOf(now - retentionDays * 86_400_000)
-          const usage = db
+          const usage = (await db
             .delete(usageEvents)
             .where(and(eq(usageEvents.organizationId, organizationId), lt(usageEvents.createdAt, cutoff)))
             .returning({ id: usageEvents.id })
-            .all().length
-          const injections = db
+            .all()).length
+          const injections = (await db
             .delete(injectionLogs)
             .where(and(eq(injectionLogs.organizationId, organizationId), lt(injectionLogs.createdAt, cutoff)))
             .returning({ id: injectionLogs.id })
-            .all().length
-          const outcomes = db
+            .all()).length
+          const outcomes = (await db
             .delete(domainOutcomes)
             .where(and(eq(domainOutcomes.organizationId, organizationId), lt(domainOutcomes.createdAt, cutoff)))
             .returning({ id: domainOutcomes.id })
-            .all().length
+            .all()).length
           return { usage, injections, outcomes }
         })
 
       const revokeEveryKey: StoreService["revokeEveryKey"] = (organizationId, now) =>
-        run("MemoryStore.revokeEveryKey", () => {
+        run("MemoryStore.revokeEveryKey", async () => {
           const timestamp = isoOf(now)
-          return db
+          return (await db
             .update(apiKeys)
             .set({ revokedAt: timestamp, updatedAt: timestamp })
             .where(and(eq(apiKeys.organizationId, organizationId), sql`${apiKeys.revokedAt} IS NULL`))
             .returning({ id: apiKeys.id })
-            .all().length
+            .all()).length
         })
 
       return MemoryStore.of({

@@ -1,5 +1,12 @@
 import { Context, Effect } from "effect"
 
+import {
+  DEFAULT_DATABASE_PATH,
+  isRemoteDatabaseUrl,
+  readDatabaseAuthToken,
+  toDatabaseUrl
+} from "./db/database-url"
+
 /**
  * Where Effect meets the framework.
  *
@@ -14,8 +21,16 @@ import { Context, Effect } from "effect"
  */
 
 export interface CognitiveMemorySettingsValue {
-  /** SQLite file. ":memory:" is useful for tests. */
-  readonly databasePath: string
+  /**
+   * Where the database is.
+   *
+   * A Turso URL (`libsql://…`), a `file:` URL, or a local SQLite path. Read
+   * `COGNITIVE_MEMORY_DATABASE_URL`, then `DATABASE_URL`, then
+   * `COGNITIVE_MEMORY_DATABASE_PATH`; a bare path is kept as a path.
+   */
+  readonly databaseUrl: string
+  /** The token a remote database is reached with. Null for a local file. */
+  readonly databaseAuthToken: string | null
   /** Ceiling on everything injected into one prompt, index and bodies together. */
   readonly maxTotalTokens: number
   /** Upper bound on index lines, so a large store cannot fill the window. */
@@ -140,8 +155,30 @@ export const readCognitiveMemorySettings = (): CognitiveMemorySettingsValue => {
     )
   }
 
+  // The order matters. A URL wins over a path, whichever name it comes under:
+  // `DATABASE_URL` is how a platform says "this deployment has a remote
+  // database", and it must not lose to a local path left over from a copied
+  // `.env.local`. Only when no URL is set at all does the path apply, and only
+  // then is the default file used.
+  const databaseUrl = toDatabaseUrl(
+    env.COGNITIVE_MEMORY_DATABASE_URL?.trim() ||
+      env.DATABASE_URL?.trim() ||
+      env.COGNITIVE_MEMORY_DATABASE_PATH?.trim() ||
+      DEFAULT_DATABASE_PATH
+  )
+  const databaseAuthToken = readDatabaseAuthToken(env)
+  // A remote database is asked over HTTP with a token, and without one every
+  // query comes back unauthorised. Saying so here is a great deal kinder than
+  // a 401 from the middle of a sign-in.
+  if (isRemoteDatabaseUrl(databaseUrl) && databaseAuthToken === null) {
+    problems.push(
+      `The database is remote (${databaseUrl}) but no auth token was found; set TURSO_AUTH_TOKEN, COGNITIVE_MEMORY_DATABASE_AUTH_TOKEN or DATABASE_AUTH_TOKEN.`
+    )
+  }
+
   return {
-    databasePath: env.COGNITIVE_MEMORY_DATABASE_PATH?.trim() || ".cognitive-memory/cognitive-memory.sqlite",
+    databaseUrl,
+    databaseAuthToken,
     maxTotalTokens: int(env.COGNITIVE_MEMORY_MAX_TOTAL_TOKENS, 2000, "COGNITIVE_MEMORY_MAX_TOTAL_TOKENS", problems),
     maxIndexItems: int(env.COGNITIVE_MEMORY_MAX_INDEX_ITEMS, 60, "COGNITIVE_MEMORY_MAX_INDEX_ITEMS", problems),
     defaultRecallLimit: int(env.COGNITIVE_MEMORY_DEFAULT_RECALL_LIMIT, 8, "COGNITIVE_MEMORY_DEFAULT_RECALL_LIMIT", problems),

@@ -47,7 +47,7 @@ const read = Effect.gen(function* () {
     },
     requestedExtraction: overrides?.extraction ?? "auto",
     deployment: {
-      databasePath: config.databasePath,
+      databaseUrl: config.databaseUrl,
       modelName: config.modelName,
       // The provider, not just the model name: `gpt-4o-mini` is served by more
       // than one gateway, and the page is the only place an operator sees
