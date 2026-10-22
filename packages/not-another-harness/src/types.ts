@@ -186,8 +186,14 @@ export type WorkspaceRestoreResult = {
 	conflicts: string[];
 };
 
-/** How a mid-run user message is delivered into the transcript. */
-export type HarnessSteerDelivery = "steer" | "follow-up";
+/**
+ * How a mid-run user message is delivered into the transcript.
+ *
+ * `continuation` is the harness's own: a message written when the model stopped
+ * and the caller said the task is not done. It is not steering — no human typed
+ * it — and a renderer that labels it "steering" reports a message nobody sent.
+ */
+export type HarnessSteerDelivery = "steer" | "follow-up" | "continuation";
 
 /** Streaming events emitted while the agent loop runs. */
 export type HarnessEvent =
@@ -541,6 +547,28 @@ export type HarnessRunOptions = {
 	 */
 	shouldStop?: ShouldStop;
 	/**
+	 * Keep the run going when this returns true and the model stopped on its own.
+	 *
+	 * The mirror of `shouldStop`, for the opposite failure. A step that ends with
+	 * no tool calls reads as a final answer, and for a long-running agent that is
+	 * the most common way a working run dies: the model narrates the next move,
+	 * emits no call for it, and the loop reports "completed" over a task the
+	 * caller can see is half done. The caller knows that — the harness cannot —
+	 * so it is asked here, at the exact moment the run would end.
+	 *
+	 * Returning true appends a user-role instruction to continue and grants a
+	 * fresh step window, the same arithmetic a steer gets. The hook is skipped
+	 * while a wrap-up is armed, because that request exists to hand off, not to
+	 * reopen the work a rail just closed.
+	 *
+	 * Guarding against a loop is the caller's job: the harness will ask as many
+	 * times as the hook says yes. The honest signal for "going in circles" is
+	 * *no progress between stops*, which only the caller can measure against its
+	 * own task state — `mutations` is supplied so that comparison is possible
+	 * without re-reading the transcript.
+	 */
+	shouldContinue?: ShouldContinue;
+	/**
 	 * Tool choice for every step.
 	 *
 	 * Overridden per step by `prepareStep`. Left undefined, the provider default
@@ -714,6 +742,15 @@ export type HarnessRunResult = {
 	messages: ModelMessage[];
 	/** Number of compactions performed during the run. */
 	compactions: number;
+	/**
+	 * How many times the run was continued past a model-initiated stop.
+	 *
+	 * Zero unless `shouldContinue` was supplied and answered yes. A caller that
+	 * finished the task never sees this; a caller whose run stopped anyway with
+	 * work outstanding can use it to say *why* the stops stopped — the loop only
+	 * declines when the caller's own progress gate says so.
+	 */
+	continuations: number;
 	/** True when the run was ended by a wrap-up step rather than cut off. */
 	wrappedUp: boolean;
 	/**
@@ -923,6 +960,36 @@ export type PrepareStep = (
  */
 export type ShouldStop = (
 	context: PrepareStepContext,
+) => boolean | undefined | Promise<boolean | undefined>;
+
+/** The context {@link ShouldContinue} receives: a step's view, plus the run's mutations. */
+export type ShouldContinueContext = PrepareStepContext & {
+	/**
+	 * Mutating tool calls (`edit`, `write`, `bash`, …) made so far this run.
+	 *
+	 * A read-only stretch teaches the model things without touching the tree, so
+	 * "has anything changed" is not the whole question — but between two stops,
+	 * *zero* further mutations and no task movement is the signature of a run
+	 * going in circles rather than working.
+	 */
+	mutations: number;
+};
+
+/**
+ * Decide whether a self-terminated run should be talked back into working.
+ *
+ * Called only when the model ended a step with no tool calls — the moment the
+ * run would otherwise report `completed`. Returning `true` appends a
+ * continuation instruction and runs on with a fresh step window; returning
+ * nothing respects the model's answer and ends the run.
+ *
+ * The context is {@link PrepareStepContext} plus `mutations`, so a caller can
+ * judge "did anything happen since the last time I said continue" from the same
+ * vocabulary the stop hook uses. Like `shouldStop`, throwing fails the run
+ * rather than silently doing nothing.
+ */
+export type ShouldContinue = (
+	context: ShouldContinueContext,
 ) => boolean | undefined | Promise<boolean | undefined>;
 
 export type HarnessRun = {

@@ -16,9 +16,15 @@ import { c, formatFileChange, formatWorkspaceDiff, renderWelcome, toolLabel, usa
 import { renderCommandHelp } from "./commands.js";
 import { listSessionIds, resolveSessionFile } from "./context.js";
 import { handleCogmemCommand } from "./cogmem-command.js";
-import { adoptUsage, flushStopNotice, resetUsage, resolveInjection, runTurn, type SessionState, type StepRecovery } from "./session.js";
+import { adoptUsage, flushStopNotice, providerTokenTotals, resetUsage, resolveInjection, runTurn, type SessionState, type StepRecovery } from "./session.js";
 import { runStudioCommand, confirmOnStdout } from "./studio-command.js";
-import { attachStudio, detachStudio, setTelemetryState, telemetryState } from "./telemetry-export.js";
+import {
+  adoptSessionIdentity,
+  attachStudio,
+  detachStudio,
+  setTelemetryState,
+  telemetryState,
+} from "./telemetry-export.js";
 import { formatTaskLedger } from "./task-ledger.js";
 import { saveLastModel } from "./model-preferences.js";
 import { lookupRates } from "./rates.js";
@@ -193,6 +199,14 @@ export const renderTurn = async (
   };
 
   const iterator = events[Symbol.asyncIterator]();
+  /**
+   * Cached prompt tokens seen so far in this run.
+   *
+   * The harness reports only the uncached remainder of a prompt, because that
+   * is the part billed at the full rate. The provider counts the whole prompt,
+   * so the printed line has to add the cache back to match it.
+   */
+  let cachedTokens = 0;
   let nextEvent = iterator.next();
   while (true) {
     const outcome = await Promise.race([
@@ -250,12 +264,37 @@ export const renderTurn = async (
         );
         break;
       case "step-finish":
-        break; // per-step usage stays quiet; /stats has the totals
+        // Per-step usage stays quiet; /stats has the totals. The cache is
+        // accumulated anyway: it is the difference between the printed token
+        // count and the provider's.
+        cachedTokens +=
+          (e.request?.cachedInputTokens ?? 0) + (e.request?.cacheCreationInputTokens ?? 0);
+        break;
+      case "user-message":
+        // The one message nobody typed: a continuation. Without a line here the
+        // transcript shows the model stop and then keep working, for no visible
+        // reason — which reads as a glitch rather than the task ledger saying
+        // the work is not done.
+        if (e.delivery === "continuation" && e.phase === "delivered") {
+          nl();
+          writeIndented(`${c.magenta("  ↳")} ${c.dim("auto-continue: task still open, resuming")}\n`);
+        }
+        break;
       case "finish":
         nl();
         flushRepeats();
         spinnerLabel = "";
-        writeIndented(`${c.dim(`  ${usageLine(e.usage)}${e.reason === "completed" ? "" : ` · ${e.reason}`}`)}\n`);
+        {
+          // The provider's count: the whole prompt, cache included.
+          const prompt = (e.usage?.inputTokens ?? 0) + cachedTokens;
+          const output = e.usage?.outputTokens ?? 0;
+          const line = usageLine({
+            promptTokens: prompt,
+            outputTokens: output,
+            totalTokens: prompt + output,
+          });
+          writeIndented(`${c.dim(`  ${line}${e.reason === "completed" ? "" : ` · ${e.reason}`}`)}\n`);
+        }
         break;
       case "error":
         nl();
@@ -321,10 +360,16 @@ const renderStatusPrompt = (state: SessionState): string => {
   const providerModel = state.model
     ? `${state.model.provider} · ${state.model.modelId}`
     : "model not configured";
+  /**
+   * The provider's count: the prompt includes the cached prefix, so these
+   * figures line up with the provider's dashboard instead of counting only the
+   * uncached remainder the harness bills at the full rate.
+   */
+  const tokens = providerTokenTotals(state);
   const statusParts = [
-    c.dim(`↑${format(state.totalUsage.inputTokens)} ↓${format(state.totalUsage.outputTokens)} tokens`),
+    c.dim(`↑${format(tokens.promptTokens)} ↓${format(tokens.outputTokens)} tokens`),
     c.dim(`ctx ${state.contextUsageEstimated ? "~" : ""}${format(state.contextUsedTokens)} used`),
-    c.dim(`usage ${format(state.totalUsage.totalTokens)} total`),
+    c.dim(`usage ${format(tokens.totalTokens)} total`),
     c.cyan(providerModel),
     c.magenta(`mode ${state.permissions} · interactive`),
   ];
@@ -511,7 +556,7 @@ export const handleSlashCommand = async (
     case "stats":
       out.write(
         c.dim(
-          `${state.turns} turns · ${usageLine(state.totalUsage)} · ${state.messages.length} messages`,
+          `${state.turns} turns · ${usageLine(providerTokenTotals(state))} · ${state.messages.length} messages`,
         ) + "\n",
       );
       return "handled";
@@ -941,6 +986,8 @@ export const handleSlashCommand = async (
         state.taskLedger = null;
         state.undoHistory = [];
         await resetUsage(state);
+        // A new session is a new agent: the Studio's list is a list of sessions.
+        await adoptSessionIdentity(state);
         out.write(c.dim(`new session → ${p}\n`));
         state.onSessionSwitch?.(state.messages);
         return "handled";
@@ -984,6 +1031,9 @@ export const handleSlashCommand = async (
         // previous session's totals over made /stats describe a session that
         // was no longer on screen.
         await adoptUsage(state);
+        // The session changed, so the identity does too: this turn belongs to
+        // the one just loaded, and the Studio files turns by session.
+        await adoptSessionIdentity(state);
         const loaded = messages.length === 0
           ? c.dim("(that session is empty)")
           : c.dim(`${messages.length} message${messages.length === 1 ? "" : "s"} restored`);

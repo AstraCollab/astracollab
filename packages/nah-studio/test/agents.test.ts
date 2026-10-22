@@ -75,6 +75,18 @@ describe("registering an agent", () => {
 		expect(db.listAgents()).toHaveLength(2);
 	});
 
+	it("brings a row back to life when the session that had it is resumed", () => {
+		const db = store();
+		db.registerAgent({ id: "ag_1", cwd: "/repo", pid: 1, status: "running" });
+		db.setAgentState("ag_1", { status: "exited", exitCode: 0 });
+		// The session is resumed: the same id, a new process, and a sign of life.
+		// The dashboard must show one row that is running again, not two rows.
+		const resumed = db.registerAgent({ id: "ag_1", cwd: "/repo", pid: 2, status: "running" });
+		expect(db.listAgents()).toHaveLength(1);
+		expect(resumed.status).toBe("running");
+		expect(resumed.exitCode).toBeNull();
+	});
+
 	it("takes the name the studio gave a launched agent", () => {
 		const db = store();
 		const agent = db.registerAgent({

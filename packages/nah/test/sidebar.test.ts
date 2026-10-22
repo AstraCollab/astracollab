@@ -94,10 +94,10 @@ const DATA: SidebarData = {
   modelId: "stealth/space-bunny-alpha",
   contextUsedTokens: 12_400,
   contextEstimated: true,
-  inputTokens: 84_200,
+  inputTokens: 308_200,
   outputTokens: 3_100,
-  totalTokens: 87_300,
-  cacheReadTokens: 1_840_000,
+  totalTokens: 311_300,
+  cacheReadTokens: 184_000,
   cacheWriteTokens: 40_000,
   cacheHitRate: 0.94,
   spendUsd: 0.61,
@@ -214,9 +214,27 @@ describe("formatSidebar", () => {
   it("shows the context and token figures", () => {
     const rendered = text();
     expect(rendered).toContain("~12.4k used");
-    expect(rendered).toContain("↑84.2k in");
+    expect(rendered).toContain("↑308.2k in");
     expect(rendered).toContain("↓3.1k out");
-    expect(rendered).toContain("87.3k total");
+    expect(rendered).toContain("311.3k total");
+  });
+
+  it("counts the whole prompt, cached prefix included", () => {
+    // 84.2k of uncached input, plus 184k read back from the cache and 40k
+    // written to it: the provider counts all 308.2k as prompt tokens, and so
+    // does the panel.
+    const rendered = text({
+      inputTokens: 84_200 + 184_000 + 40_000,
+      totalTokens: 84_200 + 184_000 + 40_000 + 3_100,
+    });
+    expect(rendered).toContain("↑308.2k in");
+    expect(rendered).toContain("311.3k total");
+  });
+
+  it("shows the cached share of the prompt", () => {
+    // The number that explains the rest: what the cache served is billed at a
+    // fraction of the rate, and it is why "in" is larger than the remainder.
+    expect(text()).toContain("cache 94% · 224.0k cached");
   });
 
   it("omits the estimate marker when the figure was reported", () => {

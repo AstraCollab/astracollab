@@ -717,16 +717,16 @@ export const ToolsView = () => {
 	}> | null>(null);
 	const [error, setError] = useState<string | null>(null);
 
-	const { selectedAgentId, traceVersion } = useStudio();
+	const { scope, traceVersion } = useStudio();
 
 	const load = useCallback(async () => {
 		try {
-			setTools(await api.tools(selectedAgentId));
+			setTools(await api.tools(scope));
 			setError(null);
 		} catch (caught) {
 			setError(caught instanceof Error ? caught.message : String(caught));
 		}
-	}, [selectedAgentId]);
+	}, [scope]);
 
 	useEffect(() => {
 		void load();

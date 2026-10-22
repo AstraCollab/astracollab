@@ -277,3 +277,82 @@ describe("an explore child hands back a bounded answer", () => {
     expect(perChild.reduce((n, a) => n + a.length, 0)).toBe(6 * 8_000);
   });
 });
+
+describe("a question without a label is still a question", () => {
+  /**
+   * The failure this closes.
+   *
+   * A model handed `delegate_explores` a batch of well-formed questions and no
+   * titles. The provider rejected the arguments before the tool ran, so the
+   * parent got an invalid-input error instead of an answer and spent a turn
+   * retrying the same work. The title is a label for the transcript; the
+   * question is the request, and a missing label must not cost one.
+   */
+  const questionsWithoutTitles = [
+    {
+      question:
+        "Find where the database connection string is read and passed to the client, and show the options it is constructed with.",
+      depth: "thorough" as const,
+    },
+    {
+      question: "List every file that references the client, the environment variable, or the schema.",
+      depth: "quick" as const,
+    },
+  ];
+
+  const child = (title: string) => ({
+    title,
+    status: "done" as const,
+    steps: 1,
+    toolCalls: 1,
+    durationMs: 1,
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, estimated: false },
+    text: "found it",
+  });
+
+  it("accepts a batch whose questions carry no title", () => {
+    const t = createDelegationTools({
+      orchestrator: { run: async () => child("x"), runAll: async () => [] } as unknown as Orchestrator,
+      approve: async () => true,
+    });
+    const parsed = t.delegate_explores!.inputSchema.safeParse({ questions: questionsWithoutTitles });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("gives the child a label derived from the question when none was sent", async () => {
+    const seen: string[] = [];
+    const t = createDelegationTools({
+      orchestrator: {
+        run: async (spec: { title: string }) => child(spec.title),
+        runAll: async (specs: { title: string }[]) => {
+          seen.push(...specs.map((s) => s.title));
+          return specs.map((s) => child(s.title));
+        },
+      } as unknown as Orchestrator,
+      approve: async () => true,
+    });
+    await t.delegate_explores!.execute!({ questions: questionsWithoutTitles }, {} as never);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toContain("Find where the database connection string is read");
+    expect(seen[1]).toContain("List every file that references the client");
+  });
+
+  it("keeps a title the model did send", async () => {
+    const seen: string[] = [];
+    const t = createDelegationTools({
+      orchestrator: {
+        run: async (spec: { title: string }) => child(spec.title),
+        runAll: async (specs: { title: string }[]) => {
+          seen.push(...specs.map((s) => s.title));
+          return specs.map((s) => child(s.title));
+        },
+      } as unknown as Orchestrator,
+      approve: async () => true,
+    });
+    await t.delegate_explores!.execute!(
+      { questions: [{ title: "the loader", ...questionsWithoutTitles[0] }] },
+      {} as never,
+    );
+    expect(seen[0]).toBe("the loader");
+  });
+});

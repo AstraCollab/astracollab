@@ -145,7 +145,13 @@ export const makeState = async (opts: {
     studio:
       opts.telemetry === false
         ? null
-        : await connectStudio({ cwd: opts.cwd, model: model?.spec ?? null }),
+        : await connectStudio({
+            cwd: opts.cwd,
+            model: model?.spec ?? null,
+            // The session's own file decides the id, so a session that is
+            // resumed lands on the row the session it resumes already has.
+            sessionPath: opts.sessionPath ?? null,
+          }),
   };
   model?.setStatusHandler((status) => { state.providerStatus = status; });
   const approve = createApprover(() => state.permissions);
@@ -171,6 +177,16 @@ export const makeState = async (opts: {
           state.totalUsage.inputTokens += usage.inputTokens;
           state.totalUsage.outputTokens += usage.outputTokens;
           state.totalUsage.totalTokens += usage.totalTokens;
+          /**
+           * The child's cached tokens belong to the session's counters too.
+           *
+           * A child's prompt is as much of this session's prompt as the
+           * parent's own, and most of it is read back from the cache. Leaving
+           * them out made the session's token total exclude the cache, which
+           * is the figure the panel shows.
+           */
+          state.cacheReadTokens += usage.cachedInputTokens ?? 0;
+          state.cacheWriteTokens += usage.cacheCreationInputTokens ?? 0;
         },
       });
   state.orchestrator = orchestrator;

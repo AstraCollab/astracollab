@@ -174,6 +174,21 @@ Hand off cleanly. Do exactly this, in order:
 Be accurate over complete. Do not claim a step is finished unless you verified it. Do not start new work now.`;
 
 /**
+ * The instruction that turns a model-initiated stop back into work.
+ *
+ * A text-only step reads as a final answer, and long coding tasks end on them
+ * constantly without being finished: the model narrates its next move, emits no
+ * call for it, and the loop winds up over a task the caller can see is mid-flight.
+ * A long-running agent keeps such a run alive the same way — a message in front
+ * of the model saying the work is not done — and this is that message.
+ *
+ * It is written by the harness rather than the caller so the tone is one voice,
+ * but *whether* it is sent is entirely the caller's, via `shouldContinue`.
+ */
+const CONTINUE_INSTRUCTION = `You stopped, but the task is not finished. Resume where you left off and work until it is genuinely done.
+Do not restate progress, do not ask whether to continue, and do not summarize: act on what remains. If something truly blocks you, name the exact blocker and what would clear it, then stop.`;
+
+/**
  * Step at which a run that has changed nothing gets told so, once.
  *
  * The prompt already says to plan the edit list and then edit, and a prompt
@@ -819,6 +834,8 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 
 		const usage = emptyUsage();
 		let compactions = 0;
+		/** Times the caller talked a self-terminated run back into working. */
+		let continuations = 0;
 		let steps = 0;
 		let wrappedUp = false;
 		let streamedText = "";
@@ -2206,6 +2223,46 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 						stepLimit = step + maxSteps;
 						continue;
 					}
+					/**
+					 * The caller may know the task is not done, even though the model
+					 * stopped on its own. Checked before `completed` is reported, and
+					 * after the wrap-up guard: an armed wrap-up exists to hand off a run
+					 * a rail stopped, and a continuation would reopen exactly the work
+					 * that wind-down is closing.
+					 *
+					 * Consulted from the first step, unlike `shouldStop`. That hook is
+					 * skipped there because a rule reading step history has nothing to
+					 * read on step 1; a continuation is the opposite question — "is this
+					 * really the end?" — and the caller answers it from its own state,
+					 * which is not this run's history. A model whose first answer is a
+					 * preamble is the case that needs it.
+					 */
+					if (options.shouldContinue && !wrappedUp) {
+						const wantsMore = await options.shouldContinue({
+							stepNumber: step,
+							messages: [...messages],
+							steps: toolCallsByStep.map((entry) => ({
+								step: entry.step,
+								toolNames: [...entry.toolNames],
+							})),
+							mutations,
+						});
+						if (wantsMore) {
+							continuations += 1;
+							messages.push({ role: "user", content: CONTINUE_INSTRUCTION });
+							events.push({
+								type: "user-message",
+								text: CONTINUE_INSTRUCTION,
+								delivery: "continuation",
+								phase: "delivered",
+							});
+							// A fresh window, on the same arithmetic a steer gets: the model
+							// was just handed more to do, so the caller's step ceiling —
+							// an unattended-run bound — must not drop the message.
+							stepLimit = step + maxSteps;
+							continue;
+						}
+					}
 					reason = "completed";
 					break;
 				}
@@ -2283,6 +2340,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 					usage,
 					messages,
 					compactions,
+					continuations,
 					wrappedUp,
 					pendingSuspensions: [...pendingSuspensions],
 					// An abort can land mid-step, after a request part already asked for
@@ -2317,6 +2375,7 @@ export const runAgent = (options: HarnessRunOptions): HarnessRun => {
 			usage,
 			messages,
 			compactions,
+			continuations,
 			wrappedUp,
 			pendingApprovals: [...pendingApprovals],
 			pendingSuspensions: [...pendingSuspensions],

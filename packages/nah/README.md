@@ -13,7 +13,7 @@ NAH (Not Another Harness) is a terminal coding agent that works in your current 
 ## Install
 
 ```sh
-npm install --global @astracollab/nah
+npm install --global nah-ai
 nah --help
 ```
 
@@ -135,6 +135,30 @@ land on the line you are typing. `Ctrl-C` aborts the running turn (and exits whe
 This layout requires an alternate-screen TUI, so it is used only when stdin and stdout
 are both a TTY. Pipes, CI, and dumb terminals keep the line-oriented renderer, as does
 `--no-tui`.
+
+## Long tasks
+
+A task that spans many files ends in a step where the model says what it will do next
+and then does not do it. Left alone, that reads as a finished answer, the turn ends, and
+the only way forward is typing "continue" — which is a thing an agent should not need.
+
+So a turn that stops with the task plan still open is continued automatically: the model
+is told the work is not done, and it keeps going. The plan is the thing that decides
+this, and it is the plan the agent maintains itself through `task_ledger` — a step
+marked in progress, or an acceptance check that has not passed, means the task is not
+finished, whatever the model said.
+
+Continuation is not unconditional. A model that answers in prose again instead of
+working is going in circles, so it is allowed to stop, and the turn says why:
+
+```
+Stopped with the plan unfinished — 1 step and 1 acceptance check still open. The model
+answered in prose instead of working, so auto-continue let it stop. Send a message to
+resume.
+```
+
+A turn that only answered a question is not continued — nothing in it was work, and
+nothing in it was unfinished.
 
 ## Commands
 
@@ -422,8 +446,8 @@ export NAH_APP_URL=https://your-host.example
 ```sh
 pnpm install
 pnpm --filter not-another-harness build
-pnpm --filter @astracollab/nah build
-pnpm --filter @astracollab/nah exec nah --help
+pnpm --filter nah-ai build
+pnpm --filter nah-ai exec nah --help
 ```
 
-The executable package is `@astracollab/nah`; the SDK runtime is documented separately in [`not-another-harness`](../not-another-harness/README.md).
+The executable package is `nah-ai`, and the command it installs is `nah`; the SDK runtime is documented separately in [`not-another-harness`](../not-another-harness/README.md).

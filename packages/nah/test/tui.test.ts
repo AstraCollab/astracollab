@@ -607,6 +607,12 @@ describe("alternate-screen host layout", () => {
     // otherwise decide what this test asserts.
     const previousHome = process.env.HOME;
     process.env.HOME = mkdtempSync(join(tmpdir(), "nah-tui-studio-"));
+    // The Studio is also looked for on `PATH`, and a machine that has it
+    // installed globally would answer "already installed" and start it — so the
+    // test would wait for a message that never comes. An empty `PATH` is the
+    // honest way to say "nothing is installed here".
+    const previousPath = process.env.PATH;
+    process.env.PATH = mkdtempSync(join(tmpdir(), "nah-tui-studio-path-"));
     const host = startTuiHost({ state, terminal });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -623,6 +629,8 @@ describe("alternate-screen host layout", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
     }
 
     host.then(() => undefined);

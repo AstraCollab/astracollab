@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
+import { AgentTable } from "../components/AgentTable";
 import {
 	Badge,
 	Button,
@@ -9,6 +10,7 @@ import {
 	Panel,
 	Stat,
 } from "../components/primitives";
+import { directoryName, groupAgentsByDirectory } from "../lib/agents";
 import { duration, percent, tokens, usd } from "../lib/format";
 import { useStudio } from "../store";
 
@@ -18,23 +20,38 @@ import { useStudio } from "../store";
  * Deliberately five figures. A dashboard that answers twelve questions answers
  * none, and the four questions that always come up are: is it running, is it
  * erroring, what does it cost, and is it getting slower.
+ *
+ * The header's scope decides what those figures are about. A directory is the
+ * scope that matters here: the numbers are every agent that worked in that
+ * directory, together, because a project is measured as a project.
  */
 export const OverviewView = ({
 	onOpenTraces,
-}: { onOpenTraces: () => void }) => {
+	onOpenAgent,
+}: {
+	onOpenTraces: () => void;
+	onOpenAgent: (agentId: string) => void;
+}) => {
 	const [overview, setOverview] = useState<Awaited<
 		ReturnType<typeof api.overview>
 	> | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	// Whatever the header is scoped to, these numbers are. A summary of everything
 	// shown next to a filter that says otherwise is how a dashboard starts lying.
-	const { selectedAgentId, traceVersion } = useStudio();
+	const {
+		agents,
+		selectedAgentId,
+		selectedAgent,
+		selectedDirectory,
+		scope,
+		traceVersion,
+	} = useStudio();
 
 	useEffect(() => {
 		let cancelled = false;
 		const load = async () => {
 			try {
-				const next = await api.overview(24, selectedAgentId);
+				const next = await api.overview(24, scope);
 				if (!cancelled) {
 					setOverview(next);
 					setError(null);
@@ -53,7 +70,15 @@ export const OverviewView = ({
 			cancelled = true;
 			clearInterval(timer);
 		};
-	}, [selectedAgentId, traceVersion]);
+	}, [scope, traceVersion]);
+
+	// The agents of the place being looked at: the chosen directory, or the
+	// directory of the chosen agent, or every agent there is.
+	const groups = useMemo(() => groupAgentsByDirectory(agents), [agents]);
+	const scopedPath = selectedDirectory ?? selectedAgent?.cwd ?? null;
+	const scopedGroups = scopedPath
+		? groups.filter((group) => group.path === scopedPath)
+		: groups;
 
 	if (error)
 		return <ErrorNote error={error} onRetry={() => window.location.reload()} />;
@@ -164,6 +189,41 @@ export const OverviewView = ({
 					</dl>
 				</Panel>
 			</div>
+
+			{/*
+			 * The agents behind the numbers above. A directory is measured as a
+			 * whole, so the agents in it are listed here rather than being a
+			 * separate trip to the agents list.
+			 */}
+			<Panel
+				title={
+					scopedPath
+						? `agents in ${directoryName(scopedPath)}`
+						: "agents by directory"
+				}
+				action={
+					<span className="eyebrow">
+						{scopedGroups.reduce(
+							(sum, group) => sum + group.agents.length,
+							0,
+						)}{" "}
+						agents
+					</span>
+				}
+			>
+				{scopedGroups.length === 0 ? (
+					<Empty
+						title="No agents here yet"
+						hint="An agent appears in this list as soon as it reports a directory."
+					/>
+				) : (
+					<AgentTable
+						groups={scopedGroups}
+						selectedAgentId={selectedAgentId}
+						onOpenAgent={onOpenAgent}
+					/>
+				)}
+			</Panel>
 		</div>
 	);
 };

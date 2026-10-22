@@ -205,6 +205,7 @@ const routes: Record<string, Handler> = {
 			...(query.get("status") ? { status: query.get("status")! } : {}),
 			...(query.get("tag") ? { tag: query.get("tag")! } : {}),
 			...(query.get("agentId") ? { agentId: query.get("agentId")! } : {}),
+			...(query.get("cwd") ? { cwd: query.get("cwd")! } : {}),
 			...(query.get("since") ? { since: Number(query.get("since")) } : {}),
 			...(query.get("until") ? { until: Number(query.get("until")) } : {}),
 			...(query.get("sort")
@@ -651,9 +652,13 @@ const routes: Record<string, Handler> = {
  * next to a chart of every agent is the kind of mismatch nobody notices until a
  * number is wrong.
  */
-const agentScope = (query: URLSearchParams): { agentId?: string } => {
+const agentScope = (query: URLSearchParams): { agentId?: string; cwd?: string } => {
 	const agentId = query.get("agentId");
-	return agentId ? { agentId } : {};
+	const cwd = query.get("cwd");
+	return {
+		...(agentId ? { agentId } : {}),
+		...(cwd ? { cwd } : {}),
+	};
 };
 
 /** Opt-in scorers, resolved from the store by id. */

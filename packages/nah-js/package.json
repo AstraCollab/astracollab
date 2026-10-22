@@ -1,0 +1,84 @@
+{
+	"name": "nah-js",
+	"version": "0.0.1-beta.10",
+	"description": "The standalone name for not-another-harness/js: a Web runtime for building agents in your own application. Mount the harness on any Request -> Response handler, stream its events over SSE, and let a paused turn resume on the next request.",
+	"type": "module",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"require": "./dist/index.cjs"
+		},
+		"./client": {
+			"types": "./dist/client.d.ts",
+			"import": "./dist/client.js",
+			"require": "./dist/client.cjs"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist",
+		"src",
+		"LICENSE"
+	],
+	"sideEffects": false,
+	"publishConfig": {
+		"access": "public",
+		"provenance": false
+	},
+	"license": "MIT",
+	"author": "AstraCollab",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/astracollab/astracollab.git",
+		"directory": "packages/nah-js"
+	},
+	"keywords": [
+		"agent",
+		"harness",
+		"web",
+		"http",
+		"route-handler",
+		"nextjs",
+		"sse",
+		"streaming",
+		"ai-sdk",
+		"nah"
+	],
+	"scripts": {
+		"build": "vite build",
+		"dev": "vite build --watch",
+		"test": "vitest run",
+		"lint": "tsc --noEmit",
+		"verify:install": "bash scripts/verify-install.sh"
+	},
+	"peerDependencies": {
+		"ai": "^7.0.0",
+		"not-another-harness": "^0.0.1-beta.10",
+		"react": ">=18"
+	},
+	"peerDependenciesMeta": {
+		"react": {
+			"optional": true
+		}
+	},
+	"devDependencies": {
+		"@ai-sdk/provider": "^4.0.21",
+		"@types/node": "^22.19.0",
+		"@types/react": "^19",
+		"ai": "^7.0.127",
+		"not-another-harness": "workspace:*",
+		"react": "^19",
+		"typescript": "^5.6.3",
+		"vite": "^5.4.10",
+		"vite-plugin-dts": "^4.3.0",
+		"vitest": "^3.2.4",
+		"zod": "^4.3.6"
+	},
+	"engines": {
+		"node": ">=22.0.0"
+	}
+}

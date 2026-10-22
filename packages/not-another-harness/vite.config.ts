@@ -11,6 +11,8 @@ export default defineConfig({
 			entry: {
 				index: resolve(__dirname, "src/index.ts"),
 				node: resolve(__dirname, "src/node.ts"),
+				js: resolve(__dirname, "src/js/index.ts"),
+				"js/client": resolve(__dirname, "src/js/client.ts"),
 			},
 			formats: ["es", "cjs"],
 			fileName: (format, entryName) =>
@@ -52,7 +54,15 @@ export default defineConfig({
 			 * asserts against the built artifact — that it converts HTML, that it
 			 * loads as both module formats, and that it is not carrying a DOM.
 			 */
-			external: ["ai", /^ai\//, "zod", /^node:/, "turndown"],
+			external: [
+				"ai",
+				/^ai\//,
+				"zod",
+				/^node:/,
+				"turndown",
+				"react",
+				"react-dom",
+			],
 		},
 	},
 	plugins: [

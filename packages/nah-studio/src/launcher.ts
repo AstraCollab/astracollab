@@ -124,6 +124,9 @@ export const launchAgent = async (
 	const env = {
 		...process.env,
 		NAH_AGENT_NAME: store.getAgent(agentId)?.name ?? basename(request.cwd),
+		// The row this launch already made. Without it the agent registers
+		// under an id of its own, and the dashboard shows the one task twice.
+		NAH_AGENT_ID: agentId,
 		NAH_TELEMETRY: "on",
 	};
 

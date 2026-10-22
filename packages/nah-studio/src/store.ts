@@ -650,6 +650,8 @@ export class StudioStore {
 			until?: number;
 			/** One agent, or every agent. */
 			agentId?: string;
+			/** One directory — every agent that worked there. */
+			cwd?: string;
 			sort?: "startTime" | "name" | "costUsd";
 			order?: "asc" | "desc";
 			/** Age out runs that never reported an ending. Off when omitted. */
@@ -677,6 +679,11 @@ export class StudioStore {
 		if (filter.agentId) {
 			clauses.push("agent_id = ?");
 			params.push(filter.agentId);
+		} else if (filter.cwd) {
+			// A directory is a set of agents, so it is a subquery rather than a
+			// second copy of the same filter.
+			clauses.push("agent_id IN (SELECT id FROM agents WHERE cwd = ?)");
+			params.push(filter.cwd);
 		}
 		const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
 		// Whitelisted, never interpolated from the request: the sort column is the one
@@ -785,7 +792,7 @@ export class StudioStore {
 	 */
 	timeseries(
 		buckets = 24,
-		filter: { agentId?: string } = {},
+		filter: { agentId?: string; cwd?: string } = {},
 	): Array<{
 		t: number;
 		traces: number;
@@ -796,14 +803,14 @@ export class StudioStore {
 		// Scoped by a join rather than a subquery over `traces` alone, because the
 		// per-agent chart is the same chart over a different set of runs.
 		const rows = (
-			filter.agentId
+			filter.agentId || filter.cwd
 				? this.db
 						.prepare(
 							`SELECT t.start_time, t.status, t.cost_usd, t.end_time
                FROM traces t JOIN agents a ON a.id = t.agent_id
-               WHERE a.id = ? ORDER BY t.start_time ASC`,
+               WHERE ${filter.agentId ? "a.id = ?" : "a.cwd = ?"} ORDER BY t.start_time ASC`,
 						)
-						.all(filter.agentId)
+						.all(filter.agentId ?? filter.cwd!)
 				: this.db
 						.prepare(
 							"SELECT start_time, status, cost_usd, end_time FROM traces ORDER BY start_time ASC",
@@ -859,7 +866,7 @@ export class StudioStore {
 	 * "Which tool is slow or failing" is a question about the whole history, not
 	 * about one run, so it is answered in SQL rather than by loading spans.
 	 */
-	toolStats(filter: { agentId?: string } = {}): Array<{
+	toolStats(filter: { agentId?: string; cwd?: string } = {}): Array<{
 		tool: string;
 		calls: number;
 		errors: number;
@@ -880,8 +887,14 @@ export class StudioStore {
 		// per-agent view has to join to find out who called this tool.
 		const scope = filter.agentId
 			? "AND s.trace_id IN (SELECT id FROM traces WHERE agent_id = ?)"
-			: "";
-		const scoped = filter.agentId ? [filter.agentId] : [];
+			: filter.cwd
+				? "AND s.trace_id IN (SELECT id FROM traces WHERE agent_id IN (SELECT id FROM agents WHERE cwd = ?))"
+				: "";
+		const scoped = filter.agentId
+			? [filter.agentId]
+			: filter.cwd
+				? [filter.cwd]
+				: [];
 		const rows = this.db
 			.prepare(
 				`SELECT substr(s.name, 7) AS tool,
@@ -932,7 +945,7 @@ export class StudioStore {
 	}
 
 	/** Totals for the dashboard. One pass, so it stays cheap as the table grows. */
-	overview(filter: { agentId?: string } = {}): {
+	overview(filter: { agentId?: string; cwd?: string } = {}): {
 		traces: number;
 		errors: number;
 		costUsd: number;
@@ -940,8 +953,18 @@ export class StudioStore {
 		outputTokens: number;
 		medianDurationMs: number;
 	} {
-		const scope = filter.agentId ? "WHERE agent_id = ?" : "";
-		const scoped = filter.agentId ? [filter.agentId] : [];
+		// A directory is a set of agents, so it becomes a subquery over `agents`
+		// rather than a second copy of this filter in four places.
+		const clause = filter.agentId
+			? "agent_id = ?"
+			: filter.cwd
+				? "agent_id IN (SELECT id FROM agents WHERE cwd = ?)"
+				: "";
+		const scoped = filter.agentId
+			? [filter.agentId]
+			: filter.cwd
+				? [filter.cwd]
+				: [];
 		const totals = this.db
 			.prepare(
 				`SELECT COUNT(*) AS n,
@@ -949,7 +972,7 @@ export class StudioStore {
                 SUM(COALESCE(cost_usd, 0)) AS cost,
                 SUM(COALESCE(input_tokens, 0)) AS input_tokens,
                 SUM(COALESCE(output_tokens, 0)) AS output_tokens
-         FROM traces ${scope}`,
+         FROM traces ${clause ? `WHERE ${clause}` : ""}`,
 			)
 			.get(...scoped) as {
 			n: number;
@@ -962,7 +985,7 @@ export class StudioStore {
 			this.db
 				.prepare(
 					`SELECT end_time - start_time AS ms FROM traces
-           WHERE end_time IS NOT NULL ${filter.agentId ? "AND agent_id = ?" : ""}
+           WHERE end_time IS NOT NULL ${clause ? `AND ${clause}` : ""}
            ORDER BY start_time DESC LIMIT 500`,
 				)
 				.all(...scoped) as Array<{ ms: number }>

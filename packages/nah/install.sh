@@ -5,7 +5,7 @@
 set -eu
 
 REPO="astracollab/astracollab"
-PKG="@astracollab/nah"
+PKG="nah-ai"
 BIN_NAME="nah"
 VERSION="${NAH_VERSION:-latest}"
 

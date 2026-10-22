@@ -1,6 +1,6 @@
 {
   "name": "not-another-harness",
-  "version": "0.0.1-beta.9",
+  "version": "0.0.1-beta.11",
   "description": "not another harness \u2014 a small, transparent coding-agent harness. Pi-style minimal capped tools, a manual agent loop with streaming events, token budgets, mid-run compaction, and JSONL sessions. Bring any AI SDK v5 model.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -16,6 +16,16 @@
       "types": "./dist/node.d.ts",
       "import": "./dist/node.js",
       "require": "./dist/node.cjs"
+    },
+    "./js": {
+      "types": "./dist/js/index.d.ts",
+      "import": "./dist/js.js",
+      "require": "./dist/js.cjs"
+    },
+    "./js/client": {
+      "types": "./dist/js/client.d.ts",
+      "import": "./dist/js/client.js",
+      "require": "./dist/js/client.cjs"
     },
     "./package.json": "./package.json"
   },
@@ -52,13 +62,21 @@
   },
   "peerDependencies": {
     "ai": "^7.0.0",
+    "react": ">=18",
     "zod": "^3.25.76 || ^4.1.8"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@ai-sdk/provider": "^2.0.5",
     "@types/node": "^22.19.0",
+    "@types/react": "^19",
     "@types/turndown": "^5.0.6",
     "ai": "^5.0.0",
+    "react": "^19",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
     "vite-plugin-dts": "^4.3.0",

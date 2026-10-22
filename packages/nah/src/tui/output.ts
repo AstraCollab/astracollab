@@ -195,6 +195,14 @@ export class TurnOutput implements Component {
   /** Cache composition of the last request, which is what billing turns on. */
   private lastHitRate = 0;
   private lastCachedTokens = 0;
+  /**
+   * Cached prompt tokens across the whole run.
+   *
+   * The harness counts only the uncached remainder of a prompt, because that
+   * is the part billed at the full rate. The provider counts the whole prompt,
+   * so the run's token total has to add the cache back to match it.
+   */
+  private cachedTotal = 0;
 
   constructor(
     private readonly getFileChanges: () => RenderableFileChange[] = () => [],
@@ -339,7 +347,12 @@ export class TurnOutput implements Component {
         return;
       }
       case "user-message": {
-        const label = event.delivery === "steer" ? "steering" : "follow-up";
+        const label =
+          event.delivery === "steer"
+            ? "steering"
+            : event.delivery === "continuation"
+              ? "auto-continue"
+              : "follow-up";
         if (event.phase === "delivered") {
           this.addLine(`  ${c.magenta("↳")} ${c.dim(`${label} delivered`)}`);
         }
@@ -358,6 +371,8 @@ export class TurnOutput implements Component {
         this.lastRequestTokens = event.request?.totalInputTokens ?? 0;
         this.lastHitRate = event.request?.hitRate ?? 0;
         this.lastCachedTokens = event.request?.cachedInputTokens ?? 0;
+        this.cachedTotal +=
+          (event.request?.cachedInputTokens ?? 0) + (event.request?.cacheCreationInputTokens ?? 0);
         this.flushFileChanges();
         return;
       case "finish":
@@ -384,7 +399,7 @@ export class TurnOutput implements Component {
             : "";
         this.addLine(
           c.dim(
-            `  ${event.reason} · ${formatTokens(event.usage.totalTokens)} processed${request}${cache}${
+            `  ${event.reason} · ${formatTokens(event.usage.totalTokens + this.cachedTotal)} processed${request}${cache}${
               event.usage.estimated ? " (estimated)" : ""
             }`,
           ),

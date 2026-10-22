@@ -299,6 +299,35 @@ it is a gradient, not a cliff, and retrieval degrades well before 1M — so a
 high trigger with cheap elision underneath beats a low trigger with lossy
 summarization on top.
 
+## The other way a long run dies
+
+Every rail in this document is about *ending* a run. There is a second failure,
+and it is the more common one: the run ends when nobody stops it.
+
+A step that ends with no tool calls is a final answer, and the loop believes
+it. But a model working through a plan ends steps like that constantly — it
+narrates the next move and then, instead of making the call, stops:
+
+```
+◆ read resolvewise/app/dashboard/settings/General.tsx
+◆ plan · step-5 → in_progress
+◆ write resolvewise/app/dashboard/settings/SettingsAPIKeys.tsx
+Now let me update the API routes to filter by siteId…
+◆ edit resolvewise/app/api/api-keys/route.ts
+◆ read resolvewise/app/api/api-keys/route.ts:104
+  completed · 1.5m processed · 76.1k in last request
+```
+
+`completed` over a task that is visibly half done, with the only way forward
+being a human typing "please continue". The harness cannot see that the work
+is unfinished — the transcript looks the same as a finished task — but the
+caller can, and `shouldContinue` is where it says so.
+
+The check is deliberately narrow. The caller answers from its own state (nah's
+task ledger), and the harness's own guards keep counting across a continuation,
+because a continuation is the same run: repeated identical calls and results
+the run has already seen are still caught.
+
 ## What is deliberately not here
 
 - **Sub-agent delegation.** Already present (`delegate_task`), already bounded
@@ -311,7 +340,9 @@ summarization on top.
   verification. This harness has `task_ledger`, and it is close. Making it
   authoritative — rather than something the model is asked to keep updated — is
   the natural next piece of work, and it is a product decision rather than a
-  harness one.
+  harness one. The ledger is already authoritative about one thing, though: a
+  run cannot end while it holds open work, because `shouldContinue` reads it
+  (see below).
 - **Server-side compaction (`compact_20260112`).** Available in the installed
   SDK and a better fit than client-side summarization, since the API owns the
   summary and the signatures. Not wired up here because it is Anthropic-only

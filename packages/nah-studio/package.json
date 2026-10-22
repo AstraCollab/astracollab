@@ -1,6 +1,6 @@
 {
 	"name": "nah-studio",
-	"version": "0.0.1-beta.10",
+	"version": "0.0.1-beta.11",
 	"description": "The nah Studio: a dashboard for watching agents, with traces, evaluations and chat. Started by `nah` with /studio.",
 	"type": "module",
 	"bin": {

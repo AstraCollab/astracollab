@@ -25,8 +25,17 @@ export type SidebarData = {
   contextUsedTokens: number;
   /** True when that figure is derived rather than reported. */
   contextEstimated: boolean;
+  /**
+   * Prompt tokens for the session, cache included — the provider's count.
+   *
+   * Not the uncached remainder the harness reports: a panel built on that
+   * under-reports every request by the size of its cache, which is what made
+   * these figures disagree with the provider's own dashboard.
+   */
   inputTokens: number;
+  /** Completion tokens for the session. */
   outputTokens: number;
+  /** Prompt plus completion, on the provider's count. */
   totalTokens: number;
   /** Cumulative prompt-cache read tokens. */
   cacheReadTokens: number;
@@ -111,6 +120,16 @@ export const formatSidebar = (data: SidebarData, width: number): string[] => {
   section("context");
   // `~` marks the figure as derived, the same convention as the status line.
   row(`${data.contextEstimated ? "~" : ""}${formatTokens(data.contextUsedTokens)} used`);
+
+  /**
+   * The session's tokens, on the provider's count.
+   *
+   * A section of their own, because these answer a different question from the
+   * context above: "12.4k used" is the prompt in the window, "308.2k in" is
+   * everything the session has sent so far. Under one heading the two look
+   * like they contradict each other.
+   */
+  section("tokens");
   /**
    * The hit rate is the diagnostic that matters most here: below ~80% the run is
    * rewriting its prefix instead of reading it back, which costs roughly 10x on
@@ -122,18 +141,28 @@ export const formatSidebar = (data: SidebarData, width: number): string[] => {
    */
   const cacheRead = finite(data.cacheReadTokens);
   const cacheWrite = finite(data.cacheWriteTokens);
-  const freshInput = finite(data.inputTokens);
+  /**
+   * The whole prompt, cached prefix included.
+   *
+   * The provider counts it this way, and the panel has to agree with it: the
+   * uncached remainder alone leaves out every token read back from the cache,
+   * which on a well-cached run is nearly all of them.
+   */
+  const promptTokens = finite(data.inputTokens);
   const hitRate = Number.isFinite(data.cacheHitRate) ? Math.min(1, Math.max(0, data.cacheHitRate)) : 0;
-  const inputTotal = cacheRead + cacheWrite + freshInput;
+  const ratePercent = `${Math.round(hitRate * 100)}%`;
   const rate =
-    inputTotal >= CACHE_RATE_MIN_TOKENS && hitRate > 0 ? `${Math.round(hitRate * 100)}% cached` : null;
-  row(c.dim(`↑${formatTokens(freshInput)} in${rate ? ` · ${rate}` : ""}`));
+    promptTokens >= CACHE_RATE_MIN_TOKENS && hitRate > 0 ? `${ratePercent} cached` : null;
+  row(c.dim(`↑${formatTokens(promptTokens)} in${rate ? ` · ${rate}` : ""}`));
   row(c.dim(`↓${formatTokens(data.outputTokens)} out`));
-  row(c.dim(`${formatTokens(data.totalTokens)} total`));
+  row(c.dim(`${formatTokens(finite(data.totalTokens))} total`));
   if (rate) {
     // Colour only once it is a real signal, for the same reason as the threshold.
     const tone = hitRate >= HEALTHY_HIT_RATE ? c.dim : hitRate >= POOR_HIT_RATE ? c.yellow : c.red;
-    row(tone(`cache ${rate}`));
+    // The cached share of the session's prompt: the tokens a provider bills at
+    // a fraction of the rate, and the reason "in" is larger than the remainder.
+    const cached = cacheRead + cacheWrite;
+    row(tone(`cache ${ratePercent}${cached > 0 ? ` · ${formatTokens(cached)} cached` : ""}`));
   }
   /**
    * Spend, with a denominator only when the user set one.

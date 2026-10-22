@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import type { HarnessEvent } from "not-another-harness";
 import {
+  adoptSessionIdentity,
   connectStudio,
   createStudioSink,
   describeAgent,
@@ -398,7 +399,10 @@ describe("a run still in progress", () => {
 
 describe("announcing an agent", () => {
   /** A home directory with a Studio published in it, i.e. a session that can report. */
-  const withStudio = async (fetchImpl: typeof fetch): Promise<string> => {
+  const withStudio = async (
+    fetchImpl: typeof fetch,
+    options: { sessionPath?: string } = {},
+  ): Promise<string> => {
     const home = tempHome();
     mkdirSync(join(home, ".nah"), { recursive: true });
     writeFileSync(
@@ -408,7 +412,13 @@ describe("announcing an agent", () => {
     const previous = process.env.HOME;
     process.env.HOME = home;
     try {
-      await connectStudio({ cwd: "/repo", env: process.env, model: "openai:gpt-5", fetchImpl });
+      await connectStudio({
+        cwd: "/repo",
+        env: process.env,
+        model: "openai:gpt-5",
+        fetchImpl,
+        ...(options.sessionPath === undefined ? {} : { sessionPath: options.sessionPath }),
+      });
     } finally {
       if (previous === undefined) delete process.env.HOME;
       else process.env.HOME = previous;
@@ -431,6 +441,28 @@ describe("announcing an agent", () => {
     expect(registration!.body).toMatchObject({ name: "repo", cwd: "/repo", model: "openai:gpt-5", source: "session" });
   });
 
+  it("registers under the session's own id, so a resumed session keeps its row", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    await withStudio(
+      (async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown> });
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch,
+      { sessionPath: "/sessions/a.jsonl" },
+    );
+
+    const registration = calls.find((call) => call.url.endsWith("/api/agents"));
+    // The id comes from the session's file, so the row this session already has
+    // is the row it comes back to. A dashboard that gave a resumed session a
+    // second row would count the same work twice.
+    expect(registration!.body).toMatchObject({
+      id: describeAgent({ cwd: "/repo", env: {}, sessionPath: "/sessions/a.jsonl" }).id,
+      // Alive: the process that held this session before has long since exited,
+      // and the session it is now is running again.
+      status: "running",
+    });
+  });
+
   it("does not care whether the Studio answers", async () => {
     // A session must not fail to start because a dashboard is not listening, and
     // must not print an error about it either: the endpoint file said there was
@@ -440,6 +472,86 @@ describe("announcing an agent", () => {
         throw new Error("ECONNREFUSED");
       }) as typeof fetch),
     ).resolves.toBeDefined();
+  });
+});
+
+describe("the identity a session reports under", () => {
+  it("is the same whoever resumes it", () => {
+    // The id comes from the session's own file, so it does not care which
+    // process is holding the session now.
+    const first = describeAgent({ cwd: "/repo", env: {}, sessionPath: "/sessions/a.jsonl" });
+    const resumed = describeAgent({ cwd: "/repo", env: {}, sessionPath: "/sessions/a.jsonl" });
+    expect(resumed.id).toBe(first.id);
+  });
+
+  it("separates two sessions in the same directory", () => {
+    // Two sessions in one repository are two agents: a dashboard that merged
+    // them could not answer "is anything running right now".
+    const one = describeAgent({ cwd: "/repo", env: {}, sessionPath: "/sessions/a.jsonl" });
+    const other = describeAgent({ cwd: "/repo", env: {}, sessionPath: "/sessions/b.jsonl" });
+    expect(other.id).not.toBe(one.id);
+  });
+
+  it("is the row the Studio made for an agent it started", () => {
+    // The Studio makes the row before the process exists, so the agent has to
+    // land on that row rather than make a second one for the same work.
+    const launched = describeAgent({
+      cwd: "/repo",
+      env: { NAH_AGENT_ID: "ag_row" },
+      sessionPath: "/sessions/a.jsonl",
+    });
+    expect(launched.id).toBe("ag_row");
+  });
+});
+
+describe("changing which session a process is on", () => {
+  it("files the next turn under the session it belongs to", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown> });
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+
+    const home = tempHome();
+    mkdirSync(join(home, ".nah"), { recursive: true });
+    writeFileSync(
+      join(home, ".nah", "studio.json"),
+      JSON.stringify({ url: "http://127.0.0.1:4111", pid: process.pid, startedAt: 1, version: "1.0.0" }),
+    );
+    const previous = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const telemetry = await connectStudio({
+        cwd: "/repo",
+        env: process.env,
+        model: "openai:gpt-5",
+        fetchImpl,
+        sessionPath: "/sessions/a.jsonl",
+      });
+      const before = telemetry!.agent.id;
+
+      await adoptSessionIdentity({ studio: telemetry, sessionBasePath: "/sessions/b.jsonl" }, { fetchImpl });
+
+      // The identity followed the session...
+      expect(telemetry!.agent.id).not.toBe(before);
+      expect(telemetry!.agent.id).toBe(
+        describeAgent({ cwd: "/repo", env: {}, sessionPath: "/sessions/b.jsonl" }).id,
+      );
+      // ...and the Studio was told, so the row exists before the next trace.
+      const announcement = calls.filter((call) => call.url.endsWith("/api/agents")).at(-1);
+      expect(announcement!.body).toMatchObject({ id: telemetry!.agent.id });
+    } finally {
+      if (previous === undefined) delete process.env.HOME;
+      else process.env.HOME = previous;
+    }
+  });
+
+  it("says nothing when there is no Studio to say it to", async () => {
+    // A session with telemetry off must not reach for the network because the
+    // session it is on changed.
+    await expect(
+      adoptSessionIdentity({ studio: null, sessionBasePath: "/sessions/b.jsonl" }),
+    ).resolves.toBeUndefined();
   });
 });
 

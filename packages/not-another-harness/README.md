@@ -1,6 +1,6 @@
 # Not Another Harness
 
-`not-another-harness` is a small, explicit coding-agent runtime built on the Vercel AI SDK. It owns the agent loop, streamed events, spend and context budgets, prompt caching, and transcript compaction; you provide the model and decide how tools are approved and displayed.
+`not-another-harness` is a small, explicit coding-agent runtime built on the Vercel AI SDK. It owns the agent loop, streamed events, spend and context budgets, prompt caching, and transcript compaction; you provide the model and decide how tools are approved and displayed. The same package carries the Web half — `not-another-harness/js` — which serves a turn to an application as an event stream over `Request` and `Response`.
 
 ## Install
 
@@ -59,6 +59,55 @@ console.error(`\n${result.reason}; ${result.usage.totalTokens} tokens`);
 
 `web_fetch` is in that list for a different reason than the other three. They change something, so the question is "may I change this". It changes nothing, and asks anyway, because the question it raises is another one: a fetched page is untrusted text that lands in the context, and a URL assembled out of something just read out of the repository is a way to send that repository to somebody. Key your approval on the URL and "allow this exact call" becomes a scope that means something on a tool called with a new URL each time.
 
+## Put it in your app
+
+The loop above runs a turn inside your process. To serve that turn over HTTP — a chat in a web app, an agent behind an API — mount it on a handler. `not-another-harness/js` is that half: it takes a `Request`, returns a `Response`, and streams the run's events as server-sent events.
+
+The Web half ships in `not-another-harness@0.0.1-beta.10`; the newest version on npm is `0.0.1-beta.9`, which has no `not-another-harness/js` subpath. Publish `0.0.1-beta.10` before installing it from a registry, or use it from a workspace checkout.
+
+```ts
+// app/api/nah/route.ts — Next.js
+import { createNahHandler } from "not-another-harness/js";
+import { anthropic } from "@ai-sdk/anthropic";
+
+export const { GET, POST } = createNahHandler({
+  agent: ({ sessionId }) => ({
+    model: anthropic("claude-sonnet-4-5"),
+    system: "You are a helpful assistant.",
+    tools: {},
+  }),
+});
+```
+
+`POST` runs a turn — or steers or stops a run that is in flight — and answers with an event stream. `GET` replays the frames a client missed and then follows along live. The browser half is a separate entry point, `not-another-harness/js/client`, so React never reaches a server bundle:
+
+```tsx
+"use client";
+import { useNahChat } from "not-another-harness/js/client";
+
+export function Chat() {
+  const chat = useNahChat();
+
+  return (
+    <div>
+      {chat.messages.map((message) => (
+        <p key={message.id}>
+          {message.role}: {message.text}
+        </p>
+      ))}
+
+      <button onClick={() => chat.send("hello")}>Send</button>
+    </div>
+  );
+}
+```
+
+The contract names no framework. A route handler, a Hono app, a SvelteKit endpoint and a Cloudflare Worker all already speak `Request` → `Response`, so the same runtime mounts in all of them. Next.js is the example above because it is common, not because it is required.
+
+Two seams decide where the state lives, and both are yours to fill: `session`, where transcripts live between requests, and `events`, where frames are recorded so a reconnect can be answered. Both default to in-memory implementations — right for one long-lived server, wrong for serverless, where each request may land on a different instance.
+
+`nah-js` is this runtime under a shorter name. It re-exports the same entry point and holds no code of its own, so an application may depend on `nah-js` instead of on a subpath of the SDK.
+
 ## What the runtime provides
 
 - `runAgent` performs one model round trip per step and emits typed run, step, text, tool-call, tool-result, compaction, finish, and error events.
@@ -68,6 +117,7 @@ console.error(`\n${result.reason}; ${result.usage.totalTokens} tokens`);
 - `createJsonlSessionStore` persists messages and branches as JSONL. The CLI uses this store for resumable sessions.
 - `Orchestrator` runs bounded subtasks as isolated child agents and returns their work as a reviewable diff.
 - `createNodeEnvironment(root)` provides local filesystem and shell access rooted at a workspace directory, plus optional snapshots and restore operations.
+- `not-another-harness/js` mounts the harness on any `Request` → `Response` handler and streams its events as server-sent events; `not-another-harness/js/client` is the browser half.
 
 The Node environment is a workspace adapter, not an operating-system sandbox. In particular, shell commands can have effects beyond files the adapter can snapshot. Apply your own process, network, and approval restrictions where required.
 
@@ -325,6 +375,39 @@ first step, where there is no history to inspect.
 
 `@astracollab/agents` ships `createAntiLoopStop`, which is five such rules for a
 coding agent, wired to this.
+
+## Keeping a run going: `shouldContinue`
+
+The mirror of `shouldStop`, for the opposite failure. A step that ends with no
+tool calls reads as a final answer — and for a long-running agent that is the
+most common way a working run dies. The model narrates its next move ("Now let
+me update the API routes…"), emits no call for it, and the loop reports
+`completed` over a task that is visibly half done. The caller knows that; the
+harness cannot, so it asks.
+
+```ts
+runAgent({
+  ...,
+  shouldContinue: ({ steps, mutations }) => planHasOpenWork() && actedSinceLastStop(steps),
+});
+```
+
+Returning `true` appends a user-role instruction to continue and grants a fresh
+step window — the same arithmetic a steer gets, so a step ceiling cannot drop a
+message the caller deliberately sent. The hook is skipped while a wrap-up is
+armed: that request exists to hand off, not to reopen the work a rail just
+closed.
+
+The context is `prepareStep`'s shape plus `mutations` — the mutating calls made
+so far this run — so "did anything happen since the last time I said continue"
+can be answered without re-reading the transcript.
+
+The loop guard is the caller's: the harness asks as many times as the hook says
+yes. The honest signal for going in circles is *no progress between stops*, and
+only the caller can measure that against its own task state. `nah` wires this to
+its task ledger — a plan with open steps is a task that is not finished, and a
+model that answers in prose instead of working is a run that is going in
+circles.
 
 ## Tool execution
 
@@ -877,6 +960,54 @@ step above calls a real sub-agent — one that *waits* for a concurrency slot in
 of throwing, because a sequence's own queue is already the orchestrator's.
 `orchestrator.pendingWorkflows()` is how a caller finds runs stopped on a question
 only it can answer. Workflow steps share the caller's workspace; a sub-agent gets
+its own, which is the real difference between nesting a workflow and delegating one.
+
+## Cognitive Memory Cache
+
+`not-another-harness` includes an intelligent 4-tier cache layer (`CognitiveMemory`):
+- **L0 (Registers)**: Always injected into the prompt. Stores the agent's per-domain reliability record (scores, failure patterns) and any unresolved contradiction.
+- **L1 (Hot Cache)**: Pre-staged prompt context prepared asynchronously at the end of the previous turn.
+- **L2 (Warm Store)**: Indexed memories ready for promotion by the Arbiter.
+- **L3 (Cold Archive)**: Persistent memory store.
+- **Fast Heuristic Gate**: Sub-5ms regex scanner detecting immediate user corrections/contradictions without blocking streaming.
+- **Zero Added TTFT**: Memory arbitration executes asynchronously post-turn; prompt context concatenation takes `<1ms`.
+
+```ts
+import { CognitiveMemory, createModelArbiter } from "not-another-harness";
+
+const memory = new CognitiveMemory({
+  maxL0Tokens: 2000,
+  maxL1Tokens: 8000,
+  // Optional: supply a fast arbiter model (Gemini Flash, Haiku, GPT-4o-mini)
+  arbiter: createModelArbiter({ model: arbiterModel }),
+});
+
+// Pre-turn: get context in <1ms (0 added TTFT)
+const memoryPrompt = memory.getPromptContext(userPrompt);
+
+// Post-turn: run async arbitration in the background
+await memory.postTurnAsync({
+  userMessage: userPrompt,
+  assistantResponse: replyText,
+});
+```
+
+## Package exports
+
+- `not-another-harness`: agent loop, orchestrator, workflows, tools, prompt builder, caps, compaction, session store, CognitiveMemory, and types.
+- `not-another-harness/node`: local Node.js workspace environment.
+- `not-another-harness/js`: the Web runtime — a handler that serves a turn as an event stream, with a runtime for callers that want the frames themselves.
+- `not-another-harness/js/client`: the browser half — the `useNahChat` hook, kept out of the server bundle.
+
+## Develop in this monorepo
+
+```sh
+pnpm install
+pnpm --filter not-another-harness build
+pnpm --filter not-another-harness lint
+pnpm --filter not-another-harness test
+```
+ Workflow steps share the caller's workspace; a sub-agent gets
 its own, which is the real difference between nesting a workflow and delegating one.
 
 ## Cognitive Memory Cache

@@ -13,8 +13,8 @@
  */
 import { traceRun, type HarnessEvent, type Span, type Trace } from "not-another-harness";
 import { hostname } from "node:os";
-import { basename } from "node:path";
-import { randomUUID } from "node:crypto";
+import { basename, resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 
 import { liveEndpoint, type StudioEndpoint } from "./studio-endpoint.js";
 import { readConfig, updateConfig } from "./nah-config.js";
@@ -36,11 +36,45 @@ export type AgentIdentity = {
 };
 
 /**
+ * The id a session reports under.
+ *
+ * Derived from the session's own file, so it outlives the process that made it.
+ * A session that is picked up again is the same session, and a dashboard that
+ * gave it a second row every time it was resumed would count one piece of work
+ * twice — and leave two rows to say so.
+ */
+export const agentIdForSession = (sessionPath: string): string =>
+  `ag_${createHash("sha1").update(resolve(sessionPath)).digest("hex").slice(0, 16)}`;
+
+/**
+ * The id this process reports under.
+ *
+ * Three sources, in the order a person would expect them to apply: an explicit
+ * id, then the one the Studio hands to an agent it started, then the session's
+ * own file. The last of those is what makes a resumed session land on the row
+ * the session it resumes already has.
+ */
+export const agentIdFor = (options: {
+  env?: NodeJS.ProcessEnv;
+  id?: string;
+  sessionPath?: string | null;
+}): string => {
+  const env = options.env ?? process.env;
+  const explicit = options.id ?? env.NAH_AGENT_ID?.trim();
+  if (explicit) return explicit;
+  if (options.sessionPath) return agentIdForSession(options.sessionPath);
+  // Nothing to derive it from: a run with no session of its own is identified by
+  // the process, because there is nothing else that says which one it is.
+  return `ag_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+};
+
+/**
  * Identity for this process.
  *
- * The id is per-process on purpose: two `nah` sessions in one repository are two
- * agents, and a dashboard that cannot tell them apart cannot answer "is anything
- * running right now". `name` is the grouping key, and it defaults to the
+ * The id belongs to the session rather than to the process: two `nah` sessions
+ * in one repository are two agents, and a dashboard that cannot tell them apart
+ * cannot answer "is anything running right now" — but one session, resumed, is
+ * still one agent. `name` is the grouping key, and it defaults to the
  * directory's name because a list of paths is not a list of agents.
  */
 export const describeAgent = (options: {
@@ -48,10 +82,12 @@ export const describeAgent = (options: {
   model?: string | null;
   env?: NodeJS.ProcessEnv;
   id?: string;
+  /** The session this process is running. Its file decides the id. */
+  sessionPath?: string | null;
 }): AgentIdentity => {
   const env = options.env ?? process.env;
   return {
-    id: options.id ?? `ag_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+    id: agentIdFor({ env, id: options.id, sessionPath: options.sessionPath }),
     // `NAH_AGENT_NAME` is what the Studio sets when it launches an agent, so a
     // launched agent is named for the row the dashboard already has.
     name: env.NAH_AGENT_NAME?.trim() || basename(options.cwd) || "nah",
@@ -534,12 +570,19 @@ export const connectStudio = async (options: {
   model?: string | null;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
+  /** The session this process is running. Its file decides the agent id. */
+  sessionPath?: string | null;
 }): Promise<StudioTelemetry | null> => {
   const env = options.env ?? process.env;
   if ((await telemetryState(env)) === "off") return null;
   const endpoint = await liveEndpoint();
   if (!endpoint) return null;
-  const agent = describeAgent({ cwd: options.cwd, model: options.model ?? null, env });
+  const agent = describeAgent({
+    cwd: options.cwd,
+    model: options.model ?? null,
+    env,
+    sessionPath: options.sessionPath ?? null,
+  });
   const sink = createStudioSink(endpoint, agent, {
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
   });
@@ -586,6 +629,10 @@ const registerWithStudio = async (
         model: agent.model,
         version: agent.version,
         source: "session",
+        // A registration is a sign of life, so it brings a row that had ended
+        // back to life: a session that is resumed is running again, even
+        // though the process that last held it has long since exited.
+        status: "running",
       }),
       signal: AbortSignal.timeout(5_000),
     });
@@ -603,18 +650,53 @@ const registerWithStudio = async (
  * quit and re-run to make a tool work is how a tool goes unused.
  */
 export const attachStudio = async (
-  state: { cwd: string; model?: { spec?: string } | null; studio?: StudioTelemetry | null },
+  state: {
+    cwd: string;
+    model?: { spec?: string } | null;
+    studio?: StudioTelemetry | null;
+    /** The session this process is running. Its file decides the agent id. */
+    sessionBasePath?: string | null;
+  },
   options: { env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch } = {},
 ): Promise<StudioTelemetry | null> => {
   if (state.studio) return state.studio;
   const telemetry = await connectStudio({
     cwd: state.cwd,
     model: state.model?.spec ?? null,
+    // The same session the process started with, so a session that attaches a
+    // Studio halfway through is the same agent it was before.
+    sessionPath: state.sessionBasePath ?? null,
     ...(options.env === undefined ? {} : { env: options.env }),
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
   });
   state.studio = telemetry;
   return telemetry;
+};
+
+/**
+ * Keep the reported identity in step with the session on disk.
+ *
+ * A running process can change which session it is on — `/session <id>` switches,
+ * `/session new` starts one — and the Studio's list is a list of sessions. When
+ * the session changes the identity changes with it, and the new row is announced
+ * before the next trace arrives, so a turn is never filed under the session it
+ * did not come from.
+ */
+export const adoptSessionIdentity = async (
+  state: {
+    studio?: StudioTelemetry | null;
+    sessionBasePath?: string | null;
+  },
+  options: { fetchImpl?: typeof fetch } = {},
+): Promise<void> => {
+  const telemetry = state.studio;
+  if (!telemetry) return;
+  const path = state.sessionBasePath;
+  if (!path) return;
+  const id = agentIdFor({ sessionPath: path });
+  if (id === telemetry.agent.id) return;
+  telemetry.agent.id = id;
+  void registerWithStudio(telemetry.endpoint, telemetry.agent, options.fetchImpl);
 };
 
 /** Stop reporting without ending the session. */

@@ -31,6 +31,21 @@ export type StudioState = {
 	selectedAgentId: string | null;
 	selectedAgent: AgentSummary | null;
 	setSelectedAgentId: (id: string | null) => void;
+	/**
+	 * The directory the other views are scoped to, or null for every directory.
+	 *
+	 * A broader scope than one agent: picking a place scopes every view to all
+	 * the agents that worked there.
+	 */
+	selectedDirectory: string | null;
+	setSelectedDirectory: (path: string | null) => void;
+	/**
+	 * What the API calls are scoped to.
+	 *
+	 * An agent if one is picked, otherwise a directory, otherwise everything —
+	 * the narrowest thing you have chosen, which is the one the numbers mean.
+	 */
+	scope: Scope;
 	/** False until the stream opens; a monitoring dashboard should admit when it is blind. */
 	connected: boolean;
 	/** Bumped when a trace arrives. Views include it in their fetch dependencies. */
@@ -40,6 +55,9 @@ export type StudioState = {
 	/** What this server is: version, directory, whether it can start agents. */
 	info: StudioInfo | null;
 };
+
+/** The scope the server understands: one agent, one directory, or everything. */
+export type Scope = { agentId?: string; cwd?: string };
 
 export type StudioInfo = {
 	service: string;
@@ -64,6 +82,9 @@ const StudioContext = createContext<StudioState | null>(null);
 export const StudioProvider = ({ children }: { children: ReactNode }) => {
 	const [agents, setAgents] = useState<AgentSummary[]>([]);
 	const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+	const [selectedDirectory, setSelectedDirectoryState] = useState<string | null>(
+		null,
+	);
 	const [connected, setConnected] = useState(false);
 	const [traceVersion, setTraceVersion] = useState(0);
 	const [agentVersion, setAgentVersion] = useState(0);
@@ -169,12 +190,41 @@ export const StudioProvider = ({ children }: { children: ReactNode }) => {
 		[agents, selectedAgentId],
 	);
 
+	/**
+	 * Picking a directory is a move to a broader place, so it gives up the
+	 * agent scope: the narrowest thing you have chosen is the one the numbers
+	 * mean, and a stale agent inside the new directory would be neither.
+	 */
+	const setSelectedDirectory = useCallback((path: string | null) => {
+		setSelectedDirectoryState(path);
+		if (path) setSelectedAgentId(null);
+	}, []);
+
+	/**
+	 * The scope every number on screen is about.
+	 *
+	 * An agent if one is picked — it is the narrower of the two — otherwise the
+	 * directory, otherwise everything.
+	 */
+	const scope = useMemo<Scope>(
+		() =>
+			selectedAgentId
+				? { agentId: selectedAgentId }
+				: selectedDirectory
+					? { cwd: selectedDirectory }
+					: {},
+		[selectedAgentId, selectedDirectory],
+	);
+
 	const value = useMemo<StudioState>(
 		() => ({
 			agents,
 			selectedAgentId,
 			selectedAgent,
 			setSelectedAgentId,
+			selectedDirectory,
+			setSelectedDirectory,
+			scope,
 			connected,
 			traceVersion,
 			agentVersion,
@@ -184,6 +234,9 @@ export const StudioProvider = ({ children }: { children: ReactNode }) => {
 			agents,
 			selectedAgentId,
 			selectedAgent,
+			selectedDirectory,
+			setSelectedDirectory,
+			scope,
 			connected,
 			traceVersion,
 			agentVersion,

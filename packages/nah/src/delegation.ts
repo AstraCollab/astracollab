@@ -152,13 +152,47 @@ export const createSessionOrchestrator = (options: OrchestratorOptions): Orchest
 
 type DelegateToolOptions = { orchestrator: Orchestrator; approve: (toolName: string, input: unknown) => Promise<boolean> };
 
+/**
+ * A label for something that did not bring one.
+ *
+ * The title is a label for the transcript, not part of the question, and models
+ * leave it out more often than a required field deserves. When it was required,
+ * that omission failed the whole tool call: the provider rejected the arguments
+ * before the tool ever ran, the parent saw an invalid-input error instead of
+ * an answer, and the retry cost another turn to produce the same work.
+ *
+ * So the title is optional everywhere now, and this derives one from the text
+ * that is actually required.
+ */
+const labelFor = (text: string): string => {
+	const firstLine = text.split("\n")[0] ?? text;
+	const flattened = firstLine.trim().replace(/\s+/g, " ");
+	return flattened.length > 80 ? `${flattened.slice(0, 79)}…` : flattened;
+};
+
+/** The title the model brought, or one derived from the text that is required. */
+const titleFor = (title: string | undefined, text: string): string =>
+	title !== undefined && title.length > 0 ? title : labelFor(text);
+
 const subtaskSchema = z.object({
-	title: z.string().trim().min(3).max(120).describe("Short label for this independent subtask."),
+	title: z
+		.string()
+		.trim()
+		.max(120)
+		.optional()
+		.describe(
+			"Short label for this independent subtask. Optional — one is derived from the task when you leave it out.",
+		),
 	task: z.string().trim().min(30).max(4000).describe("Specific implementation request, boundaries, and acceptance criteria."),
 });
 
 const exploreSchema = z.object({
-	title: z.string().trim().min(3).max(120).describe("Short label for this search."),
+	title: z
+		.string()
+		.trim()
+		.max(120)
+		.optional()
+		.describe("Short label for this search. Optional — one is derived from the question when you leave it out."),
 	question: z
 		.string()
 		.trim()
@@ -221,7 +255,8 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 			"Use only for separable subtasks; do not delegate the whole user request or depend on another child’s unfinished changes.",
 		].join(" "),
 		inputSchema: subtaskSchema,
-		execute: async ({ title, task }) => {
+		execute: async ({ title: rawTitle, task }) => {
+			const title = titleFor(rawTitle, task);
 			const approved = await options.approve("delegate_task", { title, task, isolation: WORKTREE_NOTE });
 			if (!approved) return "Delegation was not started because approval was denied.";
 			try {
@@ -242,7 +277,8 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 		inputSchema: z.object({
 			tasks: z.array(subtaskSchema).min(2).max(MAX_BATCH_DELEGATES).describe("The independent subtasks of your plan, each self-contained."),
 		}),
-		execute: async ({ tasks }) => {
+		execute: async ({ tasks: rawTasks }) => {
+			const tasks = rawTasks.map(({ title, task }) => ({ title: titleFor(title, task), task }));
 			const approved = await options.approve("delegate_tasks", {
 				isolation: WORKTREE_NOTE,
 				count: tasks.length,
@@ -291,7 +327,7 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 		].join("\n");
 
 	const exploreSpec = ({ title, question, depth }: z.infer<typeof exploreSchema>) => ({
-		title,
+		title: titleFor(title, question),
 		task: exploreTask(question, depth),
 		isolation: sharedWorkspaceIsolation(),
 		createTools: (cwd: string) => createExploreTools(cwd, options.approve),
@@ -310,7 +346,8 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 			"Prefer this over `delegate_task` whenever the work is finding something out. Reach for `delegate_task` only when the child must actually change files.",
 		].join(" "),
 		inputSchema: exploreSchema,
-		execute: async ({ title, question, depth }) => {
+		execute: async ({ title: rawTitle, question, depth }) => {
+			const title = titleFor(rawTitle, question);
 			const approved = await options.approve("delegate_explore", { title, question, depth });
 			if (!approved) return "Exploration was not started because approval was denied.";
 			try {
@@ -344,7 +381,12 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 		inputSchema: z.object({
 			questions: z.array(exploreSchema).min(2).max(MAX_BATCH_EXPLORES).describe("The independent questions to answer, each self-contained."),
 		}),
-		execute: async ({ questions }) => {
+		execute: async ({ questions: rawQuestions }) => {
+			const questions = rawQuestions.map(({ title, question, depth }) => ({
+				title: titleFor(title, question),
+				question,
+				depth,
+			}));
 			const approved = await options.approve("delegate_explores", {
 				count: questions.length,
 				depths: questions.map(({ depth }) => depth),

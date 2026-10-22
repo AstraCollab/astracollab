@@ -3,17 +3,147 @@ import { z } from "zod";
 import type { SessionTaskLedger } from "not-another-harness";
 import type { SessionState } from "./session.js";
 
+/**
+ * The step status, from the words a model reaches for.
+ *
+ * Only unambiguous names are mapped: a status nobody recognises stays
+ * `pending` rather than being recorded as progress the work has not made.
+ */
+const stepStatus = (value: unknown): "pending" | "in_progress" | "completed" | "blocked" => {
+  const text = typeof value === "string" ? value.trim().toLowerCase().replace(/[\s-]+/g, "_") : "";
+  switch (text) {
+    case "completed":
+    case "complete":
+    case "done":
+    case "finished":
+      return "completed";
+    case "in_progress":
+    case "active":
+    case "doing":
+      return "in_progress";
+    case "blocked":
+      return "blocked";
+    default:
+      return "pending";
+  }
+};
+
+/**
+ * The task status, from the words a model reaches for.
+ *
+ * The task is moving, stuck, or finished: those are the only three answers
+ * the ledger keeps. A status nobody recognises is not guessed at, so the tool
+ * can name the three it takes instead of recording progress that did not
+ * happen.
+ */
+const ledgerStatus = (value: unknown): "in_progress" | "blocked" | "completed" | null => {
+  const text = typeof value === "string" ? value.trim().toLowerCase().replace(/[\s-]+/g, "_") : "";
+  switch (text) {
+    case "completed":
+    case "complete":
+    case "done":
+    case "finished":
+      return "completed";
+    case "in_progress":
+    case "active":
+    case "working":
+      return "in_progress";
+    case "blocked":
+    case "stuck":
+      return "blocked";
+    default:
+      return null;
+  }
+};
+
+/**
+ * The step title, from the object a model wrote instead of a bare string.
+ */
+const stepTitle = (value: Record<string, unknown>): string => {
+  const known = [value.step, value.title, value.description, value.name];
+  const found = known.find((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+  if (found) return found.trim();
+  const other = Object.entries(value).find(
+    ([key, entry]) => key !== "status" && typeof entry === "string" && entry.trim().length > 0,
+  );
+  return other ? (other[1] as string).trim() : "";
+};
+
+/**
+ * A step, in the shape the ledger stores.
+ *
+ * The bare title is what the schema asks for and what a model sends most of
+ * the time. It also sends `{step, status}` — the shape the ledger itself uses
+ * — often enough to matter, and a plan thrown away over that cost a whole
+ * turn: the model had the plan right and the tool said no. So the near miss
+ * is read here instead of rejected.
+ */
+const toStep = (value: unknown): { title: string; status: "pending" | "in_progress" | "completed" | "blocked" } => {
+  if (typeof value === "string") return { title: value.trim(), status: "pending" };
+  if (!value || typeof value !== "object") return { title: "", status: "pending" };
+  const record = value as Record<string, unknown>;
+  return { title: stepTitle(record), status: stepStatus(record.status) };
+};
+
+/**
+ * A check, in the shape the ledger stores: the command is what runs, and the
+ * words around it are the model's to choose.
+ */
+const toCheck = (value: unknown): { description: string; command: string } => {
+  if (!value || typeof value !== "object") return { description: "", command: "" };
+  const record = value as Record<string, unknown>;
+  const text = (entry: unknown): string => (typeof entry === "string" ? entry.trim() : "");
+  return {
+    description: text(record.description) || text(record.desc),
+    command: text(record.command) || text(record.cmd) || text(record.script),
+  };
+};
+
+/**
+ * The plan shapes a model actually sends.
+ *
+ * The schema is deliberately loose about the shape of a step and a check: the
+ * provider validates tool input against it before the tool runs, and a
+ * rejection there is an opaque type error the model can only guess its way
+ * out of. Anything that parses is normalised by `toStep`/`toCheck` instead.
+ */
+const stepInput = z
+  .union([
+    z.string().max(300),
+    z
+      .object({
+        step: z.string().max(300).optional(),
+        title: z.string().max(300).optional(),
+        description: z.string().max(300).optional(),
+        name: z.string().max(300).optional(),
+        status: z.string().max(50).optional().describe("pending | in_progress | completed | blocked"),
+      })
+      .catchall(z.unknown()),
+  ])
+  .describe("A plan step: a short title, or an object with a step/title/description and an optional status.");
+
+const checkInput = z
+  .object({
+    description: z.string().max(300).optional(),
+    desc: z.string().max(300).optional(),
+    command: z.string().max(500).optional(),
+    cmd: z.string().max(500).optional(),
+    script: z.string().max(500).optional(),
+  })
+  .catchall(z.unknown())
+  .describe("An acceptance check: what it proves, and the exact command that proves it.");
+
 const taskInput = z.discriminatedUnion("action", [
   z.object({ action: z.literal("discover_checks") }),
   z.object({
     action: z.literal("plan"), goal: z.string().trim().min(1).max(500),
-    steps: z.array(z.string().trim().min(1).max(300)).min(1).max(20),
-    checks: z.array(z.object({ description: z.string().trim().min(1).max(300), command: z.string().trim().min(1).max(500) })).min(1).max(12),
+    steps: z.array(stepInput).min(1).max(20),
+    checks: z.array(checkInput).min(1).max(12),
     replace: z.boolean().optional().describe("Set true only when the user has changed the scope of an unfinished plan."),
   }),
-  z.object({ action: z.literal("step"), id: z.string().min(1), status: z.enum(["pending", "in_progress", "completed", "blocked"]), note: z.string().max(500).optional() }),
+  z.object({ action: z.literal("step"), id: z.string().min(1), status: z.string().min(1).max(50).describe("pending | in_progress | completed | blocked"), note: z.string().max(500).optional() }),
   z.object({ action: z.literal("run_check"), id: z.string().min(1), timeoutSeconds: z.number().int().min(1).max(1800).optional() }),
-  z.object({ action: z.literal("status"), status: z.enum(["in_progress", "blocked", "completed"]) }),
+  z.object({ action: z.literal("status"), status: z.string().max(50).optional().describe("in_progress | blocked | completed. Leave it out to read the plan back.") }),
 ]);
 
 export const formatTaskLedger = (ledger: SessionTaskLedger): string => [
@@ -68,12 +198,44 @@ export const createTaskLedgerTool = (state: SessionState, approve: Approver): To
     if (input.action === "plan") {
       if (state.taskLedger && state.taskLedger.status !== "completed" && input.replace !== true) return "Error: an active plan already exists. Update it, or pass replace=true if the user has changed scope.";
       if (state.discoveredChecks.length === 0) return "Error: call discover_checks before creating a plan.";
-      const invalid = input.checks.filter((check) => !state.discoveredChecks.includes(check.command));
-      if (invalid.length) return `Error: each check command must exactly match a discovered command. Invalid: ${invalid.map((check) => check.command).join(", ")}`;
+      /**
+       * A command that differs only in whitespace is the same command: a model
+       * that wrapped a long command across lines meant the command it wrote,
+       * and refusing the plan over the wrapping costs the whole turn.
+       */
+      const resolved: Array<{ description: string; command: string }> = [];
+      const invalid: string[] = [];
+      let incomplete = false;
+      for (const raw of input.checks) {
+        const check = toCheck(raw);
+        if (!check.description || !check.command) {
+          incomplete = true;
+          continue;
+        }
+        const match =
+          state.discoveredChecks.find((candidate) => candidate === check.command) ??
+          state.discoveredChecks.find(
+            (candidate) => normalizeCommand(candidate) === normalizeCommand(check.command),
+          );
+        if (match) resolved.push({ description: check.description, command: match });
+        else invalid.push(check.command);
+      }
+      if (incomplete) return "Error: every check needs a description and a command.";
+      if (invalid.length) {
+        return [
+          `Error: each check command must exactly match a discovered command. Invalid: ${invalid.join(", ")}.`,
+          "Use one of these exactly:",
+          ...state.discoveredChecks.map((command) => `- ${command}`),
+        ].join("\n");
+      }
+      const steps = input.steps.map(toStep);
+      if (steps.some((step) => !step.title)) {
+        return "Error: every step needs a title.";
+      }
       const ledger: SessionTaskLedger = {
         version: 2, goal: input.goal, status: "in_progress",
-        steps: input.steps.map((title, index) => ({ id: `step-${index + 1}`, title, status: "pending" })),
-        checks: input.checks.map((check, index) => ({ ...check, id: `check-${index + 1}`, status: "pending" as const, attempts: [] })),
+        steps: steps.map((step, index) => ({ id: `step-${index + 1}`, title: step.title, status: step.status })),
+        checks: resolved.map((check, index) => ({ ...check, id: `check-${index + 1}`, status: "pending" as const, attempts: [] })),
         updatedAt: new Date().toISOString(),
       };
       await persist(state, ledger);
@@ -86,10 +248,11 @@ export const createTaskLedgerTool = (state: SessionState, approve: Approver): To
     if (input.action === "step") {
       const step = resolveStep(next.steps, input.id);
       if (!step) return unknownIdError("step", input.id, current.steps.map((s) => s.id));
-      step.status = input.status;
+      const status = stepStatus(input.status);
+      step.status = status;
       if (input.note !== undefined) step.note = input.note;
-      if (input.status === "blocked") next.status = "blocked";
-      else if (input.status === "in_progress" && next.status === "blocked") next.status = "in_progress";
+      if (status === "blocked") next.status = "blocked";
+      else if (status === "in_progress" && next.status === "blocked") next.status = "in_progress";
     } else if (input.action === "run_check") {
       const check = resolveCheck(next.checks, input.id);
       if (!check) return unknownIdError("check", input.id, next.checks.map((c) => c.id));
@@ -116,19 +279,29 @@ export const createTaskLedgerTool = (state: SessionState, approve: Approver): To
       await persist(state, next);
       return `Check ${check.id} ${check.status} (exit ${result.exitCode}, ${Date.now() - started}ms).${output ? `\n${output}` : ""}\n${formatTaskLedger(next)}`;
     } else {
-      if (input.status === "completed") {
+      /**
+       * A status with no value is a question, not a change: hand back the
+       * plan as it stands. The schema used to demand a value, and the
+       * provider rejected the whole call as invalid input before the tool
+       * ran — an opaque type error for a question with a plain answer.
+       */
+      const requested = typeof input.status === "string" ? input.status.trim() : input.status;
+      if (!requested) return formatTaskLedger(current);
+      const status = ledgerStatus(requested);
+      if (!status) return `Error: unknown task status "${requested}". Use one of: in_progress, blocked, completed.`;
+      if (status === "completed") {
         const unfinished = next.steps.filter((step) => step.status !== "completed");
         const unchecked = next.checks.filter((check) => check.status !== "passed" || check.attempts.at(-1)?.exitCode !== 0);
         if (unfinished.length || unchecked.length) return `Cannot complete task: ${unfinished.length} step(s) and ${unchecked.length} acceptance check(s) remain.`;
       }
-      next.status = input.status;
+      next.status = status;
     }
     next.updatedAt = new Date().toISOString();
     await persist(state, next);
     return formatTaskLedger(next);
   };
   return tool({
-    description: "Maintain durable task progress. For substantial multi-step tasks, call discover_checks before editing, plan observable steps and executable acceptance checks using exact discovered commands, update steps, then run each acceptance check. A check passes only when run_check executes it and returns exit code 0. Repair failures and rerun; only mark completed after every step and check passes.",
+    description: "Maintain durable task progress. For substantial multi-step tasks, call discover_checks before editing, plan observable steps and executable acceptance checks using exact discovered commands, update steps, then run each acceptance check. A check passes only when run_check executes it and returns exit code 0. Repair failures and rerun; only mark completed after every step and check passes. Set the task status with action=status and a status of in_progress, blocked or completed; call action=status with no status to read the plan back.",
     inputSchema: taskInput,
     execute: (input, options) => {
       const signal = (options as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
@@ -190,6 +363,9 @@ const discoverChecks = async (state: SessionState): Promise<string[]> => {
 };
 
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+
+/** Two commands that differ only in whitespace are the same command. */
+const normalizeCommand = (value: string): string => value.replace(/\s+/g, " ").trim();
 
 const persist = async (state: SessionState, ledger: SessionTaskLedger | null): Promise<void> => {
   await state.store?.saveTaskLedger(ledger);

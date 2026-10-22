@@ -183,6 +183,10 @@ export const toolLabel = (toolName: string, input: unknown): string => {
         }
         case "run_check":
           return `run check ${typeof args.id === "string" ? args.id : "?"}`;
+        case "status": {
+          const status = typeof args.status === "string" ? args.status : "";
+          return status ? `plan · status → ${status}` : "plan · status";
+        }
         default:
           return `plan · ${action || "update"}`;
       }
@@ -235,6 +239,11 @@ export const summarizeToolResult = (
       return { show: true, text: `${found.length} check${found.length === 1 ? "" : "s"} found` };
     }
     if (action === "plan") return { show: true, text: "plan saved" };
+    if (action === "status") {
+      const status = output.match(/^Status: (.+)$/m)?.[1];
+      if (status) return { show: true, text: `status → ${status}` };
+      return { show: true, text: output.split("\n")[0] ?? "plan status" };
+    }
     if (action === "run_check") {
       const status = output.match(/\bexit code (\d+)\b|\b(exit \d+|passed|failed)\b/i)?.[0];
       return { show: true, text: status ? `check ${String(args.id ?? "")} ${status}`.trim() : "check ran" };
@@ -409,11 +418,19 @@ export const formatWorkspaceDiff = (summary: string, patch: string): string[] =>
   return output;
 };
 
+/**
+ * The token line a finished run prints.
+ *
+ * `promptTokens` is the whole prompt, cached prefix included, because that is
+ * how a provider counts it and how its dashboard shows it. Leaving the cached
+ * tokens out makes the figure disagree with the provider by the size of the
+ * cache — most of the prompt on a well-cached run.
+ */
 export const usageLine = (u: {
-  inputTokens: number;
+  promptTokens: number;
   outputTokens: number;
   totalTokens: number;
 }): string => {
   const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-  return `${k(u.inputTokens)} in · ${k(u.outputTokens)} out · ${k(u.totalTokens)} total`;
+  return `${k(u.promptTokens)} in · ${k(u.outputTokens)} out · ${k(u.totalTokens)} total`;
 };

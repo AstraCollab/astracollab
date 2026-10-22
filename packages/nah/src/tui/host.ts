@@ -24,7 +24,7 @@ import { pickModel } from "../model-picker.js";
 import { listSessions, pickSession, type SessionRow } from "../session-picker.js";
 import { resolveModel } from "../model.js";
 import { saveLastModel } from "../model-preferences.js";
-import { flushStopNotice, runTurn, resolveInjection, type SessionState } from "../session.js";
+import { flushStopNotice, providerTokenTotals, runTurn, resolveInjection, type SessionState } from "../session.js";
 import { childEventLine } from "../child-events.js";
 import { applyUsageEvent, handleSlashCommand, setActiveModel, setupProvider } from "../repl.js";
 import { handleCogmemCommand } from "../cogmem-command.js";
@@ -140,6 +140,10 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
    */
   const sidebarData = (): SidebarData => {
     const base = state.sessionBasePath ?? defaultSessionFile(state.cwd);
+    // On the provider's count: the prompt includes the cached prefix, so the
+    // panel agrees with the provider's own dashboard rather than with the
+    // uncached remainder the harness bills at the full rate.
+    const tokens = providerTokenTotals(state);
     return {
       // The session file's stem is its id: `/resume` and the files on disk both
       // key off it, so printing it is what makes a bug report actionable.
@@ -150,9 +154,9 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
       modelId: state.model?.modelId ?? "not configured",
       contextUsedTokens: state.contextUsedTokens,
       contextEstimated: state.contextUsageEstimated,
-      inputTokens: state.totalUsage.inputTokens,
-      outputTokens: state.totalUsage.outputTokens,
-      totalTokens: state.totalUsage.totalTokens,
+      inputTokens: tokens.promptTokens,
+      outputTokens: tokens.outputTokens,
+      totalTokens: tokens.totalTokens,
       cacheReadTokens: state.cacheReadTokens,
       cacheWriteTokens: state.cacheWriteTokens,
       cacheHitRate: state.cacheHitRate,

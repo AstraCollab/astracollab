@@ -19,6 +19,12 @@ import { createNodeEnvironment } from "not-another-harness/node";
 
 import type { ResolvedModel } from "./model.js";
 import type { PermissionMode } from "./permissions.js";
+import {
+  continuationStopNotice,
+  createContinuationState,
+  createLedgerContinuation,
+  openLedgerWork,
+} from "./auto-continue.js";
 import { traceTurn } from "./telemetry-export.js";
 import { formatTaskLedger } from "./task-ledger.js";
 import { ratesFor } from "./rates.js";
@@ -372,6 +378,19 @@ export const runTurn = (
   const { system, prompt: requestPrompt } = composeTurnRequest(state, prompt, injectionText);
 
   /**
+   * Whether this run may be talked back into working.
+   *
+   * Created per run, because the question it answers — "did anything happen
+   * since this run last stopped" — is about this run. See `auto-continue.ts`
+   * for why the task ledger is the thing a stop is checked against.
+   */
+  const continuation = createContinuationState();
+  const shouldContinue = createLedgerContinuation({
+    ledger: () => state.taskLedger,
+    state: continuation,
+  });
+
+  /**
    * Prices for this turn, or null when the model cannot be priced.
    *
    * Null is not a failure to compute, it is the answer for a free route. The
@@ -418,6 +437,11 @@ export const runTurn = (
     // request — so this triggers compaction, and only stops a run when even a
     // compacted request cannot fit.
     maxContextTokens: TURN_CONTEXT_LIMIT,
+    // A run that stops with the plan still open is a run that stopped early.
+    // The model narrating its next move and then not making it is the normal
+    // way a long task dies here, and the ledger is the only thing that knows
+    // whether it happened. See `auto-continue.ts`.
+    shouldContinue,
     system,
     prompt: requestPrompt,
     messages: state.messages,
@@ -485,7 +509,19 @@ export const runTurn = (
     // A held tool call ends the run; it is not a finish. Recorded here, where
     // the result is first in hand, because `done` resolves to the result and
     // every host currently ignores that value.
-    state.stopNotice = describeStop(result);
+    //
+    // The continuation notice is the other half of the same idea: a run that
+    // was talked back into working and then stopped with the plan open is a
+    // run that stopped early, and the transcript says nothing about that on
+    // its own.
+    state.stopNotice =
+      describeStop(result) ??
+      continuationStopNotice({
+        continuations: result.continuations,
+        declined: continuation.declined,
+        work: openLedgerWork(state.taskLedger),
+        completed: result.reason === "completed",
+      });
     state.messages = [...result.messages];
     foldTurnIntoState(state, result);
     if (state.store) {
@@ -632,6 +668,49 @@ export const saveUsage = async (state: SessionState): Promise<void> => {
     // Stats are cosmetic next to the transcript, which is already saved. A
     // failure here must not fail the turn.
   }
+};
+
+/**
+ * Token totals as the provider counted them.
+ *
+ * The harness reports `inputTokens` as the *uncached* remainder of a prompt,
+ * because that is the part billed at the full input rate — the cached prefix is
+ * billed separately, at its own rate. Providers do not report it that way.
+ * OpenRouter's `prompt_tokens` is the whole prompt, cached prefix included,
+ * and its `total_tokens` is that plus the completion; Anthropic's input tokens
+ * behave the same way. Counting only the remainder therefore under-reports
+ * every request by the size of its cache — on a long run that is most of the
+ * prompt — and the gap widens with every step that reads the prefix back.
+ *
+ * One place adds the two halves back together, so the panel, the status line
+ * and `/stats` cannot drift apart from each other or from the provider.
+ */
+export type ProviderTokenTotals = {
+  /** Prompt tokens, cache included: the provider's `prompt_tokens`. */
+  promptTokens: number;
+  /** The uncached remainder of the prompt — the part billed at the full rate. */
+  freshInputTokens: number;
+  /** Completion tokens: the provider's `completion_tokens`. */
+  outputTokens: number;
+  /** Prompt plus completion: the provider's `total_tokens`. */
+  totalTokens: number;
+};
+
+/** A counter that is missing or corrupt reads as zero rather than NaN. */
+const finiteCount = (value: number | undefined): number =>
+  typeof value === "number" && Number.isFinite(value) ? value : 0;
+
+export const providerTokenTotals = (state: SessionState): ProviderTokenTotals => {
+  const freshInputTokens = finiteCount(state.totalUsage.inputTokens);
+  const promptTokens =
+    freshInputTokens + finiteCount(state.cacheReadTokens) + finiteCount(state.cacheWriteTokens);
+  const outputTokens = finiteCount(state.totalUsage.outputTokens);
+  return {
+    promptTokens,
+    freshInputTokens,
+    outputTokens,
+    totalTokens: promptTokens + outputTokens,
+  };
 };
 
 /**

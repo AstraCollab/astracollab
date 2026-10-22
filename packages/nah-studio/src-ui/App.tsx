@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "./api";
+import { DirectoryPicker } from "./components/DirectoryPicker";
 import { Badge, Button } from "./components/primitives";
+import { directoryName } from "./lib/agents";
 import { statusTone, useStudio } from "./store";
 import type { AgentSummary } from "./types";
 import { AgentDetailView } from "./views/AgentDetail";
@@ -63,6 +65,8 @@ const App = () => {
 		selectedAgentId,
 		selectedAgent,
 		setSelectedAgentId,
+		selectedDirectory,
+		setSelectedDirectory,
 	} = useStudio();
 	const [view, setView] = useState<View>("agents");
 	// Which agent the detail view is showing. Kept separately from the header's
@@ -215,7 +219,7 @@ const App = () => {
 							</h1>
 						</div>
 						<div className="flex flex-wrap items-center gap-2">
-							{view !== "agent" && <AgentScope />}
+							{view !== "agent" && <DirectoryPicker />}
 							<Badge tone={connected ? "good" : "warn"}>
 								{connected ? "live" : "polling · 4s"}
 							</Badge>
@@ -226,24 +230,45 @@ const App = () => {
 						</div>
 					</header>
 
-					{selectedAgent && view !== "agent" && (
+					{view !== "agent" && (selectedAgent || selectedDirectory) && (
 						<div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-violet-300/20 bg-violet-300/[0.05] px-4 py-2.5">
-							<span
-								className={`size-1.5 rounded-full ${statusTone(selectedAgent.status).dot}`}
-								aria-hidden
-							/>
-							<span className="text-xs text-zinc-200">
-								scoped to {selectedAgent.name}
-							</span>
-							<span className="truncate font-mono text-[10px] text-zinc-600">
-								{selectedAgent.cwd}
-							</span>
+							{selectedAgent ? (
+								<>
+									<span
+										className={`size-1.5 rounded-full ${statusTone(selectedAgent.status).dot}`}
+										aria-hidden
+									/>
+									<span className="text-xs text-zinc-200">
+										scoped to {selectedAgent.name}
+									</span>
+									<span className="truncate font-mono text-[10px] text-zinc-600">
+										{selectedAgent.cwd}
+									</span>
+								</>
+							) : (
+								<>
+									<span
+										className="size-1.5 rounded-full bg-violet-300"
+										aria-hidden
+									/>
+									<span className="text-xs text-zinc-200">
+										scoped to {directoryName(selectedDirectory!)}
+									</span>
+									<span className="truncate font-mono text-[10px] text-zinc-600">
+										{selectedDirectory}
+									</span>
+									<span className="eyebrow">all its agents</span>
+								</>
+							)}
 							<Button
 								variant="ghost"
-								onClick={() => setSelectedAgentId(null)}
+								onClick={() => {
+									setSelectedAgentId(null);
+									setSelectedDirectory(null);
+								}}
 								className="ml-auto"
 							>
-								show every agent
+								show everything
 							</Button>
 						</div>
 					)}
@@ -257,7 +282,10 @@ const App = () => {
 						/>
 					)}
 					{view === "overview" && (
-						<OverviewView onOpenTraces={() => setView("traces")} />
+						<OverviewView
+							onOpenTraces={() => setView("traces")}
+							onOpenAgent={openAgent}
+						/>
 					)}
 					{view === "traces" && (
 						<TracesView
@@ -271,40 +299,6 @@ const App = () => {
 				</main>
 			</div>
 		</div>
-	);
-};
-
-/**
- * The agent scope, in the header.
- *
- * On every view rather than only the agents list, because the number you are
- * reading is the number for whatever this says — and a filter that only exists on
- * the screen you set it from is a filter you forget about.
- */
-const AgentScope = () => {
-	const { agents, selectedAgentId, setSelectedAgentId } = useStudio();
-	if (agents.length === 0) return null;
-	return (
-		<label className="flex items-center gap-1.5">
-			<span className="eyebrow text-zinc-600">agent</span>
-			<select
-				value={selectedAgentId ?? ""}
-				onChange={(event) =>
-					setSelectedAgentId(
-						event.target.value === "" ? null : event.target.value,
-					)
-				}
-				className="rounded-lg border border-white/[0.08] bg-black/40 px-2 py-1 font-mono text-[11px] text-zinc-300 focus:border-violet-300/40 focus:outline-none"
-				aria-label="Scope every view to one agent"
-			>
-				<option value="">all ({agents.length})</option>
-				{agents.map((agent) => (
-					<option key={agent.id} value={agent.id}>
-						{agent.name} · {statusTone(agent.status).label}
-					</option>
-				))}
-			</select>
-		</label>
 	);
 };
 

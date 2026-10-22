@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
+import { AgentTable } from "../components/AgentTable";
 import {
 	Badge,
 	Button,
@@ -11,8 +12,9 @@ import {
 	Stat,
 	inputClass,
 } from "../components/primitives";
-import { duration, percent, relativeTime, usd } from "../lib/format";
-import { statusTone, useStudio } from "../store";
+import { groupAgentsByDirectory } from "../lib/agents";
+import { percent, usd } from "../lib/format";
+import { useStudio } from "../store";
 import type { AgentSummary } from "../types";
 
 /**
@@ -47,6 +49,9 @@ export const AgentsView = ({
 		(agent) => agent.status === "running" || agent.status === "starting",
 	).length;
 	const errorRate = totals.traces === 0 ? 0 : totals.errors / totals.traces;
+	// Grouped by the directory the agent worked in: the list of agents is a list
+	// of names, and names repeat, because an agent is named after its directory.
+	const groups = useMemo(() => groupAgentsByDirectory(agents), [agents]);
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -87,6 +92,10 @@ export const AgentsView = ({
 				title="agents"
 				action={
 					<div className="flex items-center gap-2">
+						<span className="eyebrow">
+							{groups.length}{" "}
+							{groups.length === 1 ? "directory" : "directories"}
+						</span>
 						{selectedAgentId && (
 							<Button variant="ghost" onClick={() => setSelectedAgentId(null)}>
 								clear scope
@@ -102,65 +111,32 @@ export const AgentsView = ({
 						hint="Start one above, or run nah in another terminal — a session that finds this Studio reports to it by itself."
 					/>
 				) : (
-					<div className="overflow-x-auto">
-						<table className="w-full text-xs">
-							<thead>
-								<tr className="border-b border-white/[0.06] text-left">
-									<th className="eyebrow px-4 py-2 font-normal">agent</th>
-									<th className="eyebrow px-3 py-2 font-normal">status</th>
-									<th className="eyebrow px-3 py-2 text-right font-normal">
-										traces
-									</th>
-									<th className="eyebrow px-3 py-2 text-right font-normal">
-										errors
-									</th>
-									<th className="eyebrow px-3 py-2 text-right font-normal">
-										median
-									</th>
-									<th className="eyebrow px-3 py-2 text-right font-normal">
-										spend
-									</th>
-									<th className="eyebrow px-3 py-2 text-right font-normal">
-										last seen
-									</th>
-									<th className="eyebrow px-3 py-2 font-normal" />
-								</tr>
-							</thead>
-							<tbody>
-								{agents.map((agent) => (
-									<AgentRow
-										key={agent.id}
-										agent={agent}
-										selected={agent.id === selectedAgentId}
-										onOpen={() => {
-											// Scoped as well as opened: the detail view is a place, and
-											// the header's scope is a filter over every place — so both
-											// should say the same thing once you are inside one agent.
-											setSelectedAgentId(agent.id);
-											onOpenAgent(agent.id);
-										}}
-									/>
-								))}
-							</tbody>
-						</table>
-					</div>
+					<AgentTable
+						groups={groups}
+						selectedAgentId={selectedAgentId}
+						onOpenAgent={(agentId) => {
+							// Scoped as well as opened: the detail view is a place, and
+							// the header's scope is a filter over every place — so both
+							// should say the same thing once you are inside one agent.
+							setSelectedAgentId(agentId);
+							onOpenAgent(agentId);
+						}}
+						actions={(agent) => <AgentActions agent={agent} />}
+					/>
 				)}
 			</Panel>
 		</div>
 	);
 };
 
-const AgentRow = ({
-	agent,
-	selected,
-	onOpen,
-}: {
-	agent: AgentSummary;
-	selected: boolean;
-	onOpen: () => void;
-}) => {
+/**
+ * The two buttons that act on an agent: stop it, or take it off the list.
+ *
+ * They live here rather than in the shared table because only the agents list
+ * is one you can act in — the overview's table is a place to read from.
+ */
+const AgentActions = ({ agent }: { agent: AgentSummary }) => {
 	const { setSelectedAgentId, agents } = useStudio();
-	const tone = statusTone(agent.status);
 	const [busy, setBusy] = useState(false);
 
 	const stop = useCallback(async () => {
@@ -177,78 +153,25 @@ const AgentRow = ({
 	}, [agent.id]);
 
 	return (
-		<tr
-			className={`border-b border-white/[0.04] transition hover:bg-white/[0.03] ${selected ? "bg-white/[0.04]" : ""}`}
-		>
-			<td className="px-4 py-2.5">
-				<button type="button" onClick={onOpen} className="text-left">
-					<span className="flex items-center gap-2 text-zinc-100">
-						<span
-							className={`size-1.5 shrink-0 rounded-full ${tone.dot}`}
-							aria-hidden
-						/>
-						{agent.name}
-					</span>
-					<span
-						className="mt-0.5 block truncate font-mono text-[10px] text-zinc-600"
-						title={agent.cwd}
-					>
-						{agent.cwd}
-					</span>
-				</button>
-			</td>
-			<td className="px-3 py-2.5">
-				<div className="flex items-center gap-1.5">
-					<Badge tone={tone.badge}>{tone.label}</Badge>
-					{agent.source === "launch" && (
-						<span className="eyebrow text-zinc-600">launched</span>
-					)}
-				</div>
-				{agent.model && (
-					<span className="mt-1 block truncate font-mono text-[10px] text-zinc-600">
-						{agent.model}
-					</span>
-				)}
-			</td>
-			<td className="num px-3 py-2.5 text-right text-zinc-300">
-				{agent.traces.toLocaleString()}
-			</td>
-			<td
-				className={`num px-3 py-2.5 text-right ${agent.errors > 0 ? "text-rose-300" : "text-zinc-600"}`}
+		<div className="flex justify-end gap-1">
+			{agent.source === "launch" && agent.status === "running" && (
+				<Button onClick={() => void stop()} disabled={busy} variant="ghost">
+					stop
+				</Button>
+			)}
+			<Button
+				onClick={() => {
+					// Removing only tidies the list. Its traces stay, because the record
+					// of what it did is the reason the dashboard exists.
+					void api.removeAgent(agent.id);
+					if (agents.length <= 1) setSelectedAgentId(null);
+				}}
+				variant="ghost"
+				title="Remove from this list (its traces are kept)"
 			>
-				{agent.errors.toLocaleString()}
-			</td>
-			<td className="num px-3 py-2.5 text-right text-zinc-400">
-				{duration(agent.medianDurationMs)}
-			</td>
-			<td className="num px-3 py-2.5 text-right text-zinc-400">
-				{usd(agent.costUsd)}
-			</td>
-			<td className="px-3 py-2.5 text-right text-zinc-500">
-				{relativeTime(agent.lastSeenAt)}
-			</td>
-			<td className="px-3 py-2.5 text-right">
-				<div className="flex justify-end gap-1">
-					{agent.source === "launch" && agent.status === "running" && (
-						<Button onClick={() => void stop()} disabled={busy} variant="ghost">
-							stop
-						</Button>
-					)}
-					<Button
-						onClick={() => {
-							// Removing only tidies the list. Its traces stay, because the record
-							// of what it did is the reason the dashboard exists.
-							void api.removeAgent(agent.id);
-							if (agents.length <= 1) setSelectedAgentId(null);
-						}}
-						variant="ghost"
-						title="Remove from this list (its traces are kept)"
-					>
-						remove
-					</Button>
-				</div>
-			</td>
-		</tr>
+				remove
+			</Button>
+		</div>
 	);
 };
 

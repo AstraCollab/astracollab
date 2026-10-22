@@ -11,6 +11,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import {
 	type Launcher,
+	launchAgent,
 	launchArgs,
 	resolveNahBinary,
 } from "../src/launcher.js";
@@ -406,6 +407,41 @@ describe("starting an agent", () => {
 			// did not do what they expected.
 			expect(store.listAgentLogs(agentId).length).toBeGreaterThan(0);
 		});
+	});
+
+	it("hands the agent the row the dashboard already made", async () => {
+		// The Studio makes the row before the process exists, so the agent has to
+		// land on that row. Without the id in its environment the agent registers
+		// under an id of its own, and the dashboard shows one task twice.
+		const store = new StudioStore({ path: ":memory:" });
+		const agent = store.registerAgent({ cwd: "/repo", source: "launch", status: "starting" });
+		let seen: NodeJS.ProcessEnv | undefined;
+		const child = new EventEmitter() as EventEmitter & {
+			pid: number;
+			stdout: null;
+			stderr: null;
+		};
+		child.pid = 4242;
+		child.stdout = null;
+		child.stderr = null;
+		setTimeout(() => child.emit("spawn"), 0);
+
+		await launchAgent(
+			{ command: "/bin/true", prefixArgs: [], label: "true" },
+			{ store, agentId: agent.id, cwd: "/repo", prompt: "go" },
+			{
+				spawnProcess: ((
+					_command: string,
+					_args: string[],
+					options: { env?: NodeJS.ProcessEnv },
+				) => {
+					seen = options.env;
+					return child;
+				}) as never,
+			},
+		);
+
+		expect(seen?.NAH_AGENT_ID).toBe(agent.id);
 	});
 
 	it("refuses to stop an agent it did not start", async () => {

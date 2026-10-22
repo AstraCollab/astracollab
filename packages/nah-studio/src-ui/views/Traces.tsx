@@ -56,7 +56,7 @@ export const TracesView = ({
 }) => {
 	// Scoped by the header, and refreshed when a trace lands anywhere on the
 	// machine — this list is the main way anyone watches an agent work.
-	const { selectedAgentId, traceVersion } = useStudio();
+	const { scope, traceVersion } = useStudio();
 	const [filters, setFilters] = useState<TraceFilters>({
 		sort: "startTime",
 		order: "desc",
@@ -74,14 +74,16 @@ export const TracesView = ({
 	const load = useCallback(async () => {
 		setLoading(true);
 		try {
-			setTraces(await api.traces({ ...filters, agentId: selectedAgentId }));
+			setTraces(
+				await api.traces({ ...filters, agentId: scope.agentId, cwd: scope.cwd }),
+			);
 			setError(null);
 		} catch (caught) {
 			setError(caught instanceof Error ? caught.message : String(caught));
 		} finally {
 			setLoading(false);
 		}
-	}, [filters, selectedAgentId]);
+	}, [filters, scope]);
 
 	// Loads on mount, on every filter or scope change, and when a trace lands
 	// anywhere on the machine. The loading flag is only shown on the first pass:

@@ -42,7 +42,7 @@ Set `NAH_EVAL_MODEL` to a fixed `provider:model-id` supported by the CLI, config
 ```sh
 NAH_EVAL_MODEL=anthropic:claude-sonnet-4-5 \
 NAH_EVAL_REPEATS=3 \
-pnpm --filter @astracollab/nah exec vitest run test/live-evals.test.ts
+pnpm --filter nah-ai exec vitest run test/live-evals.test.ts
 ```
 
 The opt-in suite runs each selected task from a fresh temporary workspace and independently executes its acceptance script. It currently covers numeric clamping and invalid inputs, strict port parsing, and optional-name normalization. Runs repeat three times by default; set `NAH_EVAL_REPEATS` to an integer from 1 to 20. Use `NAH_EVAL_TASKS=clamp-boundaries,strict-port-parser` to select task IDs.
@@ -55,7 +55,7 @@ Example custom output location:
 NAH_EVAL_MODEL=openai:gpt-4.1 \
 NAH_EVAL_REPEATS=5 \
 NAH_EVAL_RESULTS=/tmp/nah-eval-baseline.jsonl \
-pnpm --filter @astracollab/nah exec vitest run test/live-evals.test.ts
+pnpm --filter nah-ai exec vitest run test/live-evals.test.ts
 ```
 
 ## Live memory evaluation

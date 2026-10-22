@@ -94,10 +94,20 @@ export type TraceFilters = {
 	until?: number;
 	/** Scope to one agent. Omitted means every agent. */
 	agentId?: string | null;
+	/** Scope to one directory — every agent that worked there. */
+	cwd?: string | null;
 	sort?: "startTime" | "name" | "costUsd" | "duration";
 	order?: "asc" | "desc";
 	limit?: number;
 };
+
+/**
+ * What a set of numbers is about: one agent, one directory, or everything.
+ *
+ * The server reads the same two parameters, so a scope is the same thing on
+ * both sides of the wire.
+ */
+export type Scope = { agentId?: string; cwd?: string };
 
 export type StudioInfo = {
 	service: string;
@@ -110,9 +120,13 @@ export type StudioInfo = {
 export const api = {
 	health: () => request<{ ok: boolean; service: string }>("/api/health"),
 	info: () => request<StudioInfo>("/api/info"),
-	overview: (buckets?: number, agentId?: string | null) =>
+	overview: (buckets?: number, scope: Scope = {}) =>
 		request<Overview>(
-			`/api/overview${query({ buckets, agentId: agentId ?? undefined })}`,
+			`/api/overview${query({
+				buckets,
+				agentId: scope.agentId,
+				cwd: scope.cwd,
+			})}`,
 		),
 
 	traces: (filters: TraceFilters = {}) =>
@@ -122,6 +136,7 @@ export const api = {
 				status: filters.status,
 				tag: filters.tag,
 				agentId: filters.agentId ?? undefined,
+				cwd: filters.cwd ?? undefined,
 				since: filters.since,
 				until: filters.until,
 				sort: filters.sort,
@@ -133,9 +148,12 @@ export const api = {
 	trace: (id: string) =>
 		request<TraceDetail | null>(`/api/traces/${encodeURIComponent(id)}`),
 
-	tools: (agentId?: string | null) =>
+	tools: (scope: Scope = {}) =>
 		request<ToolStat[]>(
-			`/api/tools${query({ agentId: agentId ?? undefined })}`,
+			`/api/tools${query({
+				agentId: scope.agentId,
+				cwd: scope.cwd,
+			})}`,
 		),
 	messages: (limit = 50) =>
 		request<Message[]>(`/api/messages${query({ limit })}`),

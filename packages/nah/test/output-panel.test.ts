@@ -192,7 +192,10 @@ describe("usage figures", () => {
     const line = strip(output.render(90).join("\n"));
     // The two figures that could not be reconciled against a provider's
     // per-request log are now both present and both labelled.
-    expect(line).toContain("315.6k processed");
+    // The cached prefix is part of the prompt the provider counted, so the
+    // run's total includes it: 315.6k of uncached input and output, plus the
+    // 25.0k the cache served.
+    expect(line).toContain("340.6k processed");
     expect(line).toContain("31.2k in last request");
   });
 
@@ -206,7 +209,7 @@ describe("usage figures", () => {
     const line = strip(output.render(100).join("\n"));
     // "processed" overstates the bill by roughly the cache share, so the split
     // is the part that tells the user what they are paying for.
-    expect(line).toContain("553.5k processed");
+    expect(line).toContain("588.4k processed");
     expect(line).toContain("1.7k fresh");
     expect(line).toContain("34.9k cached (95%)");
   });
