@@ -1,10 +1,9 @@
 import { Context, Effect } from "effect"
 
 import {
-  DEFAULT_DATABASE_PATH,
   isRemoteDatabaseUrl,
-  readDatabaseAuthToken,
-  toDatabaseUrl
+  resolveDatabaseAuthToken,
+  resolveDatabaseUrl
 } from "./db/database-url"
 
 /**
@@ -155,18 +154,11 @@ export const readCognitiveMemorySettings = (): CognitiveMemorySettingsValue => {
     )
   }
 
-  // The order matters. A URL wins over a path, whichever name it comes under:
-  // `DATABASE_URL` is how a platform says "this deployment has a remote
-  // database", and it must not lose to a local path left over from a copied
-  // `.env.local`. Only when no URL is set at all does the path apply, and only
-  // then is the default file used.
-  const databaseUrl = toDatabaseUrl(
-    env.COGNITIVE_MEMORY_DATABASE_URL?.trim() ||
-      env.DATABASE_URL?.trim() ||
-      env.COGNITIVE_MEMORY_DATABASE_PATH?.trim() ||
-      DEFAULT_DATABASE_PATH
-  )
-  const databaseAuthToken = readDatabaseAuthToken(env)
+  // The order matters, and it lives in one place: `resolveDatabaseUrl` is what
+  // the scripts and the Drizzle Kit configuration read too, so all of them
+  // open the database the app opens.
+  const databaseUrl = resolveDatabaseUrl(env)
+  const databaseAuthToken = resolveDatabaseAuthToken(env, databaseUrl)
   // A remote database is asked over HTTP with a token, and without one every
   // query comes back unauthorised. Saying so here is a great deal kinder than
   // a 401 from the middle of a sign-in.

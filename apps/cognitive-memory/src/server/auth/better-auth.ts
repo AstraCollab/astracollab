@@ -128,7 +128,20 @@ export const handleAuthRequest = async (request: Request): Promise<Response> => 
   // Better Auth reads the user and session tables the moment it handles a
   // request, so the schema has to be in place first. The startup hook has
   // usually done it already; this covers the paths it does not run on.
-  await prepareDb()
+  try {
+    await prepareDb()
+  } catch (error) {
+    // The database is unreachable, or it refused the token. Answer with that,
+    // rather than letting the request fail as an opaque 500 and leaving the
+    // operator to read a driver stack trace to find out why.
+    return new Response(
+      JSON.stringify({
+        error: "DatabaseUnavailable",
+        message: error instanceof Error ? error.message : String(error)
+      }),
+      { status: 503, headers: { "content-type": "application/json" } }
+    )
+  }
   return handler(request)
 }
 

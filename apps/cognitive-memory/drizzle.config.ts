@@ -1,4 +1,11 @@
+import { config as loadDotEnv } from "dotenv"
 import { defineConfig } from "drizzle-kit"
+
+import {
+  isRemoteDatabaseUrl,
+  readDatabaseUrl,
+  resolveDatabaseAuthToken
+} from "./src/server/db/database-url"
 
 /**
  * Drizzle Kit configuration.
@@ -9,13 +16,40 @@ import { defineConfig } from "drizzle-kit"
  * the auth tables and the memory tables are created in the same transaction and
  * cannot drift apart.
  */
-export default defineConfig({
-  dialect: "sqlite",
-  schema: ["./src/server/db/schema.ts", "./src/server/db/auth-schema.ts"],
-  out: "./drizzle",
-  dbCredentials: {
-    url: process.env.COGNITIVE_MEMORY_DATABASE_PATH ?? ".cognitive-memory/CognitiveMemory.sqlite"
-  },
-  strict: true,
-  verbose: true
-})
+
+// Drizzle Kit runs outside Next.js, so it reads no environment of its own.
+loadDotEnv()
+
+// The address the app opens, resolved the same way the app resolves it: a
+// remote database is reached over HTTP with the `turso` driver, a local file
+// with `sqlite`. A configuration that always named a file would have
+// `drizzle-kit migrate` write the schema into a file the deployment never
+// reads.
+const url = readDatabaseUrl(process.env)
+const remote = isRemoteDatabaseUrl(url)
+
+const schema = ["./src/server/db/schema.ts", "./src/server/db/auth-schema.ts"]
+const out = "./drizzle"
+
+export default defineConfig(
+  remote
+    ? {
+        dialect: "turso",
+        schema,
+        out,
+        dbCredentials: {
+          url,
+          authToken: resolveDatabaseAuthToken(process.env, url) ?? undefined
+        },
+        strict: true,
+        verbose: true
+      }
+    : {
+        dialect: "sqlite",
+        schema,
+        out,
+        dbCredentials: { url },
+        strict: true,
+        verbose: true
+      }
+)

@@ -95,10 +95,16 @@ export const getDb = (): CognitiveMemoryDatabase => {
  *
  * So the work is done here, awaited by everything that can reach the database:
  * the startup hook, the Effect layer, and the auth handler. The promise is
- * memoised, so it runs once per process however many of those ask.
+ * memoised, so it runs once per process however many of those ask — and a
+ * failed attempt is dropped rather than remembered, so that the next request
+ * tries again. A database that was briefly unreachable would otherwise leave
+ * the instance broken until it was replaced.
  */
 export const prepareDb = (): Promise<void> => {
-  preparation ??= applyPragmasAndMigrations(false)
+  preparation ??= applyPragmasAndMigrations(false).catch((error: unknown) => {
+    preparation = null
+    throw error
+  })
   return preparation
 }
 
@@ -118,9 +124,19 @@ export const migrateDb = async (): Promise<void> => {
 }
 
 const applyPragmasAndMigrations = async (strict: boolean): Promise<void> => {
-  const { databaseUrl } = readCognitiveMemorySettings()
+  const { databaseUrl, databaseAuthToken } = readCognitiveMemorySettings()
+  const remote = isRemoteDatabaseUrl(databaseUrl)
+  if (remote && databaseAuthToken === null) {
+    // Better than a 401 from the middle of a sign-up: say what is missing
+    // before anything is asked.
+    throw new Error(
+      `The database is remote (${databaseUrl}) but no auth token was found. Set TURSO_AUTH_TOKEN ` +
+        "(or COGNITIVE_MEMORY_DATABASE_AUTH_TOKEN, or DATABASE_AUTH_TOKEN), or put the token in the " +
+        "URL as ?authToken=… The token has to be one Turso issued for this database."
+    )
+  }
   try {
-    if (!isRemoteDatabaseUrl(databaseUrl)) {
+    if (!remote) {
       const opened = getClient()
       // WAL keeps a reader from blocking the writer, which matters as soon as
       // two agents share an organisation.
@@ -134,11 +150,13 @@ const applyPragmasAndMigrations = async (strict: boolean): Promise<void> => {
     // already records, so this costs one read on a warm database.
     await migrate(getDb(), { migrationsFolder: migrationsFolder() })
   } catch (error) {
+    // A remote database is the only copy of the data and there is no later
+    // process to fix it, so a failure there is fatal rather than survivable.
+    if (strict || remote) throw new Error(describeFailure(error), { cause: error })
     // Worth surviving: a read-only filesystem at build time should still produce
     // a build, and the next writable process migrates on startup. Loud, because
     // the alternative is a confusing "no such table" on the first request.
-    if (strict) throw error
-    const message = error instanceof Error ? error.message : String(error)
+    const message = describeFailure(error)
     if (preparationWarning !== message) {
       preparationWarning = message
       process.emitWarning(
@@ -146,6 +164,37 @@ const applyPragmasAndMigrations = async (strict: boolean): Promise<void> => {
       )
     }
   }
+}
+
+/**
+ * What went wrong, in words an operator can act on.
+ *
+ * The driver says "SERVER_ERROR: Server returned HTTP status 401", which is
+ * true and useless: it does not say that the token was refused, and the
+ * difference between a wrong token and an unreachable database is the
+ * difference between fixing a variable and chasing a network.
+ */
+const describeFailure = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error)
+  const status = httpStatus(error)
+  if (status === 401 || status === 403) {
+    return (
+      `${message} — the database refused the token. Check TURSO_AUTH_TOKEN: it has to be a token ` +
+      "Turso issued for this database, set in the same environment as the URL."
+    )
+  }
+  if (status !== null) return `${message} — the database answered with HTTP ${status}.`
+  return message
+}
+
+/** The HTTP status in a driver error, if there is one. */
+const httpStatus = (error: unknown): number | null => {
+  const candidates = [error, (error as { cause?: unknown })?.cause, (error as { cause?: { cause?: unknown } })?.cause?.cause]
+  for (const candidate of candidates) {
+    const status = (candidate as { status?: unknown })?.status
+    if (typeof status === "number") return status
+  }
+  return null
 }
 
 /**

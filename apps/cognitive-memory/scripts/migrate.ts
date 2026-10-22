@@ -1,5 +1,6 @@
 import { readCognitiveMemorySettings } from "../src/server/config"
 import { closeDb, migrateDb } from "../src/server/db/client"
+import { loadEnv } from "./env"
 
 /**
  * Apply pending migrations without starting the app.
@@ -16,6 +17,9 @@ import { closeDb, migrateDb } from "../src/server/db/client"
  */
 
 const main = async (): Promise<void> => {
+  // tsx loads no environment of its own, and a migration that runs against a
+  // different database than the app is the one thing this script must not do.
+  loadEnv()
   const { databaseUrl } = readCognitiveMemorySettings()
   // The driver is asynchronous now, so the schema is applied by a promise the
   // caller awaits rather than by the connection being built.

@@ -229,6 +229,13 @@ A URL always wins over a path, whichever name it comes under: a path left over
 from a copied `.env.local` must not quietly send a deployment back to a file it
 cannot write.
 
+The shape of the value decides what it is: `libsql://`, `turso://`, `https://`,
+`http://`, `ws://` and `wss://` name a database reached over the network,
+`file:` names a file on this machine, and anything else is a path. An address
+that is not one of those is never opened as a file — the failure that shape
+would cause is a directory named after the host of a database that is somewhere
+else.
+
 A remote database also needs a token: `TURSO_AUTH_TOKEN`, or
 `COGNITIVE_MEMORY_DATABASE_AUTH_TOKEN`, or `DATABASE_AUTH_TOKEN`. Without one
 every query comes back unauthorised, so a missing token is reported as a problem
@@ -244,10 +251,22 @@ vercel env add TURSO_AUTH_TOKEN production
 vercel env add BETTER_AUTH_SECRET production
 ```
 
+The token is the one Turso issued for that database — `turso db tokens create
+cogmem-helixhex`, or the token page in the Turso dashboard. A deployment that
+answers `401` on every query has no token reaching the database: the address
+alone is not a credential, and Vercel serves each environment's variables to
+the deployments made after they are set. The whole address the CLI prints —
+`libsql://db.turso.io?authToken=…` — is accepted too, so the token can travel
+with the address.
+
 The schema is applied at startup, before the first request is served, so a fresh
 database does not answer `sign-up` with "no such table: user". `pnpm db:migrate`
 applies the same migrations against the remote database, and is worth running
 before the first deploy — it fails loudly where the startup path only warns.
+
+The script reads `.env` and `.env.local` the way the app does, and opens the
+same database, so a migration applies to the database the deployment reads
+rather than to the local file the app falls back to when no URL is set.
 
 ### The public origin
 

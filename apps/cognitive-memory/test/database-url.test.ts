@@ -3,9 +3,13 @@ import { resolve } from "node:path"
 
 import { readCognitiveMemorySettings } from "@/server/config"
 import {
+  authTokenInUrl,
   isRemoteDatabaseUrl,
   localDatabasePath,
   readDatabaseAuthToken,
+  readDatabaseUrl,
+  resolveDatabaseAuthToken,
+  resolveDatabaseUrl,
   toDatabaseUrl
 } from "@/server/db/database-url"
 
@@ -42,6 +46,28 @@ describe("the database address", () => {
 
     expect(toDatabaseUrl(url)).toBe(url)
     expect(isRemoteDatabaseUrl(url)).toBe(true)
+  })
+
+  it("keeps a turso:// URL as a URL too", () => {
+    // The scheme decides what an address is, not the spelling of the whole
+    // thing: `turso://` and `libsql://` name the same kind of database, and an
+    // address that is not recognised as one would be opened as a file.
+    const url = "turso://cogmem-helixhex.aws-us-west-2.turso.io"
+
+    expect(toDatabaseUrl(url)).toBe(url)
+    expect(isRemoteDatabaseUrl(url)).toBe(true)
+    expect(localDatabasePath(url)).toBeNull()
+  })
+
+  it("reads a Windows path as a path", () => {
+    // A drive letter is not a scheme.
+    expect(isRemoteDatabaseUrl("C:\\cognitive-memory.sqlite")).toBe(false)
+  })
+
+  it("has no directory for a file URL whose path is a URL", () => {
+    // A mistake rather than a file. Refused here so that it cannot become a
+    // directory named after the host of a remote database.
+    expect(localDatabasePath("file:libsql://cogmem-helixhex.aws-us-west-2.turso.io")).toBeNull()
   })
 
   it("has no directory to create for a remote database", () => {
@@ -85,6 +111,48 @@ describe("the token a remote database is reached with", () => {
 
   it("has none for a local file", () => {
     expect(readDatabaseAuthToken({})).toBeNull()
+  })
+})
+
+describe("a token carried by the address", () => {
+  it("is read out of the URL, which is what the Turso CLI prints", () => {
+    const url = "libsql://cogmem-helixhex.aws-us-west-2.turso.io?authToken=a-token"
+
+    expect(authTokenInUrl(url)).toBe("a-token")
+    expect(resolveDatabaseAuthToken({}, url)).toBe("a-token")
+  })
+
+  it("is not there when the URL has no token", () => {
+    expect(authTokenInUrl("libsql://cogmem-helixhex.aws-us-west-2.turso.io")).toBeNull()
+  })
+
+  it("loses to the environment, which names the token on purpose", () => {
+    const url = "libsql://cogmem-helixhex.aws-us-west-2.turso.io?authToken=old-token"
+
+    expect(resolveDatabaseAuthToken({ TURSO_AUTH_TOKEN: "new-token" }, url)).toBe("new-token")
+  })
+})
+
+describe("the address the environment names", () => {
+  it("is read the same way by the app, the scripts and Drizzle Kit", () => {
+    // One resolver, three callers. A migration that lands in a different
+    // database than the app opens is the failure this shared reading prevents.
+    const env = { COGNITIVE_MEMORY_DATABASE_URL: "libsql://cogmem-helixhex.aws-us-west-2.turso.io" }
+
+    expect(readDatabaseUrl(env)).toBe("libsql://cogmem-helixhex.aws-us-west-2.turso.io")
+    expect(resolveDatabaseUrl(env)).toBe("libsql://cogmem-helixhex.aws-us-west-2.turso.io")
+  })
+
+  it("keeps a URL under the path variable, which is what a copied .env has", () => {
+    // The shape decides what a value is: a URL under the name of a path is
+    // still a URL, and is reached over HTTP rather than written to disk.
+    const env = { COGNITIVE_MEMORY_DATABASE_PATH: "libsql://cogmem-helixhex.aws-us-west-2.turso.io" }
+
+    expect(resolveDatabaseUrl(env)).toBe("libsql://cogmem-helixhex.aws-us-west-2.turso.io")
+  })
+
+  it("falls back to the local file when nothing is set", () => {
+    expect(resolveDatabaseUrl({})).toBe(`file:${resolve(".cognitive-memory/cognitive-memory.sqlite")}`)
   })
 })
 

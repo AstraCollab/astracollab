@@ -68,3 +68,31 @@ describe("opening a local database", () => {
     rmSync(directory, { recursive: true, force: true })
   })
 })
+
+describe("preparing a remote database", () => {
+  it("says what is missing rather than letting every query come back 401", async () => {
+    // The deployment this exists for: a Turso database with no token set. Every
+    // query answers 401 and the operator sees a driver stack trace.
+    process.env.COGNITIVE_MEMORY_DATABASE_URL = "libsql://cogmem-helixhex.aws-us-west-2.turso.io"
+
+    const { closeDb, prepareDb } = await import("@/server/db/client")
+
+    await expect(prepareDb()).rejects.toThrow(/no auth token was found/)
+
+    closeDb()
+  })
+
+  it("accepts a token carried by the address", async () => {
+    // The Turso CLI prints the URL with the token in it; pasting that whole
+    // string is the path of least resistance.
+    process.env.COGNITIVE_MEMORY_DATABASE_URL = "libsql://127.0.0.1:1?authToken=a-token"
+
+    const { closeDb, prepareDb } = await import("@/server/db/client")
+
+    // Nothing is listening on that port, so the preparation fails — but it
+    // fails on the connection, not on a missing token.
+    await expect(prepareDb()).rejects.not.toThrow(/no auth token was found/)
+
+    closeDb()
+  })
+})

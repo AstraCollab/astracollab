@@ -139,7 +139,16 @@ TURSO_AUTH_TOKEN=…`}</CodeBlock>
         <p>
           The token is the one Turso issued for the database. Without it every
           query comes back unauthorised, and the health endpoint says so rather
-          than leaving it to fail on the first request.
+          than leaving it to fail on the first request. The whole address the
+          CLI prints — <code>libsql://db.turso.io?authToken=…</code> — is
+          accepted too, so the token can travel with the address.
+        </p>
+        <p>
+          An address with a network scheme — <code>libsql://</code>,{" "}
+          <code>turso://</code>, <code>https://</code> — is always reached over
+          the network and never opened as a file, so a deployment cannot end up
+          trying to create a directory named after the host of its own
+          database.
         </p>
         <p>
           The schema is applied at startup, before the first request is served,
