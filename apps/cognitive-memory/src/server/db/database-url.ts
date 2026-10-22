@@ -101,10 +101,19 @@ export const toDatabaseUrl = (raw: string): string => {
  * to a local path left over in a copied `.env.local`. Only when no URL is set
  * at all does the path apply, and only then is the default file used.
  */
+const stripQuotes = (value: string): string => {
+  const trimmed = value.trim()
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
+
 export const readDatabaseUrl = (env: Record<string, string | undefined>): string =>
-  env.COGNITIVE_MEMORY_DATABASE_URL?.trim() ||
-  env.DATABASE_URL?.trim() ||
-  env.COGNITIVE_MEMORY_DATABASE_PATH?.trim() ||
+  stripQuotes(env.COGNITIVE_MEMORY_DATABASE_URL?.trim() || "") ||
+  stripQuotes(env.DATABASE_URL?.trim() || "") ||
+  stripQuotes(env.COGNITIVE_MEMORY_DATABASE_PATH?.trim() || "") ||
   DEFAULT_DATABASE_PATH
 
 /**
