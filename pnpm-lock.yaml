@@ -177,6 +177,9 @@ importers:
       cogmemory:
         specifier: workspace:*
         version: link:../../packages/cognitive-memory
+      dotenv:
+        specifier: ^16.4.7
+        version: 16.4.7
       drizzle-kit:
         specifier: ^0.31.11
         version: 0.31.11
