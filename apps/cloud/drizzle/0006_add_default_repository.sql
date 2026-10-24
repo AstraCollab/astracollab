@@ -1,1 +1,0 @@
-ALTER TABLE "organization" ADD COLUMN IF NOT EXISTS "default_repository" text;

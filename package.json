@@ -24,7 +24,8 @@
 		"release": "pnpm build && pnpm release-it",
 		"release:publish": "pnpm --filter cogmemory publish --no-git-checks && pnpm --filter not-another-harness publish --no-git-checks && pnpm --filter nah-ai publish --no-git-checks && pnpm --filter nah-studio publish --no-git-checks",
 		"link:self": "pnpm link --global",
-		"prepare": "lefthook install"
+		"prepare": "lefthook install",
+		"atmn": "atmn -c \"autumn.config.ts\""
 	},
 	"types": "./dist/index.d.ts",
 	"exports": {
@@ -33,7 +34,9 @@
 			"import": "./dist/index.mjs"
 		}
 	},
-	"files": ["dist"],
+	"files": [
+		"dist"
+	],
 	"config": {
 		"commitizen": {
 			"path": "./node_modules/@ryansonshine/cz-conventional-changelog"
@@ -106,5 +109,11 @@
 			"unrs-resolver",
 			"better-sqlite3"
 		]
+	},
+	"dependencies": {
+		"atmn": "^2.0.173"
+	},
+	"atmn": {
+		"config": "autumn.config.ts"
 	}
 }
