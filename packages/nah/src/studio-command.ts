@@ -32,7 +32,9 @@ import {
   STUDIO_DIST_TAG,
   STUDIO_PACKAGE,
   clearEndpoint,
+  compareVersions,
   isProcessAlive,
+  latestStudioVersion,
   liveEndpoint,
   probeStudio,
   readEndpoint,
@@ -263,6 +265,23 @@ export const runStudioCommand = async (
     // half-dashboards and no way to tell which one is live.
     const answering = await (options.probe ?? probeStudio)(existing);
     if (answering) {
+      // Check if a newer version is available on npm and ask to upgrade.
+      const latest = await latestStudioVersion();
+      const newer = latest && compareVersions(latest, existing.version) > 0;
+      if (newer) {
+        const question = `${c.bold(STUDIO_PACKAGE)} ${latest} is available (you have ${existing.version}). Upgrade?`;
+        const confirm = options.confirm;
+        if (confirm && await confirm(question)) {
+          // Stop the old one and fall through to install the new version.
+          await stopStudio(out, existing, { home, probe: options.probe });
+          // Fall through to the install flow below.
+        } else {
+          out.write(`${c.green("  studio")} ${c.dim(`already running at ${existing.url} · ${existing.version}`)}\n`);
+          const opened = await (options.open ?? openUrl)(existing.url);
+          if (!opened.opened) out.write(`  ${c.dim(`${existing.url}  (${opened.reason})`)}\n`);
+          return "handled";
+        }
+      }
       out.write(`${c.green("  studio")} ${c.dim(`already running at ${existing.url} · ${existing.version}`)}\n`);
       const opened = await (options.open ?? openUrl)(existing.url);
       if (!opened.opened) out.write(`  ${c.dim(`${existing.url}  (${opened.reason})`)}\n`);
@@ -290,6 +309,40 @@ export const runStudioCommand = async (
   const binary = findStudioBinary({ cwd: options.cwd, platform: process.platform, ...(env.PATH === undefined ? {} : { pathEnv: env.PATH }) });
 
   if (binary) {
+    // Check if a newer version is available on npm and ask to upgrade.
+    // We read the version from the endpoint file if a previous session left one.
+    const home = options.home ?? os.homedir();
+    let binaryVersion = existing?.version;
+    if (!binaryVersion) {
+      const ep = await liveEndpoint(endpointFile(home));
+      binaryVersion = ep?.version;
+    }
+    // If we cannot determine the current version, just run the installed binary.
+    if (!binaryVersion) {
+      return startStudio(out, {
+        command: binary,
+        args: studioArgs(options.cwd, env, nahBin),
+        options,
+        binaryLabel: binary,
+      });
+    }
+    const latest = await latestStudioVersion();
+    const newer = latest && compareVersions(latest, binaryVersion) > 0;
+    if (newer) {
+      const question = `${c.bold(STUDIO_PACKAGE)} ${latest} is available (you have ${binaryVersion}). Upgrade?`;
+      const confirm = options.confirm;
+      if (confirm && await confirm(question)) {
+        if (existing) await clearEndpoint(existing.pid, endpointFile(home));
+        // Fall through to the install flow below.
+      } else {
+        return startStudio(out, {
+          command: binary,
+          args: studioArgs(options.cwd, env, nahBin),
+          options,
+          binaryLabel: binary,
+        });
+      }
+    }
     return startStudio(out, {
       command: binary,
       args: studioArgs(options.cwd, env, nahBin),

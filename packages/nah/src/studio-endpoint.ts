@@ -120,3 +120,46 @@ export const probeStudio = async (
     return false;
   }
 };
+
+/**
+ * Compare two semver strings.
+ *
+ * Returns negative when `a` is older than `b`, positive when newer, zero when equal.
+ */
+export const compareVersions = (a: string, b: string): number => {
+  const parse = (v: string): number[] =>
+    v.replace(/^v/, "").split(".").map((n) => {
+      const num = parseInt(n, 10);
+      return Number.isNaN(num) ? 0 : num;
+    });
+  const [aParts, bParts] = [parse(a), parse(b)];
+  for (let i = 0; i < Math.max(aParts.length, bParts.length); i += 1) {
+    const av = aParts[i] ?? 0;
+    const bv = bParts[i] ?? 0;
+    if (av !== bv) return av - bv;
+  }
+  return 0;
+};
+
+/**
+ * The latest published version of the Studio on npm, or null when the registry
+ * is unreachable.
+ *
+ * Asked before `/studio` starts one, so a dashboard that is a release behind
+ * can be upgraded rather than quietly running an old build.
+ */
+export const latestStudioVersion = async (
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 2_000,
+): Promise<string | null> => {
+  try {
+    const response = await fetchImpl(`https://registry.npmjs.org/${STUDIO_PACKAGE}/latest`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) return null;
+    const data = await response.json() as { version?: string };
+    return typeof data.version === "string" ? data.version : null;
+  } catch {
+    return null;
+  }
+};
