@@ -14,6 +14,8 @@ export type {
 	NahAgentContext,
 	NahAgentFactory,
 	NahAgentSpec,
+	NahMemory,
+	NahMemoryOptions,
 	NahRuntime,
 	NahRuntimeOptions,
 	NahTurnSummary,
@@ -21,6 +23,18 @@ export type {
 
 export { createNahHandler } from "./handler.js";
 export type { NahHandlerOptions, NahRouteHandlers } from "./handler.js";
+
+export { createNahServer } from "./server.js";
+export { createMemoryWorkflowRunStore } from "../workflow.js";
+export type { WorkflowRunStore, WorkflowSnapshot } from "../workflow.js";
+export type {
+	NahServer,
+	NahServerAuth,
+	NahServerAuthContext,
+	NahServerOptions,
+	NahServerTool,
+	NahServerToolContext,
+} from "./server.js";
 
 export {
 	createMemoryEventLog,

@@ -4,7 +4,7 @@ A template for building an agent into your own application. `nah-js` is the Web 
 
 The agent stays yours. The model, the tools, the system prompt, the budget — you choose them, per conversation, in the code you already have. What this package takes off your plate is everything around the agent: keeping the conversation between requests, streaming what happens to the page, and making a run that paused resumable.
 
-There is no framework to adopt and nothing to configure. It runs wherever your app runs: Next.js, Hono, Remix, SvelteKit, Astro, a Worker, Deno, Bun, Node.
+There is no framework to adopt. Use the request handler in your own route, or mount agents, tools, and workflows on an existing server with the server adapter. It runs wherever your app runs: Next.js, Hono, Remix, SvelteKit, Astro, a Worker, Deno, Bun, Node.
 
 ## Install
 
@@ -141,6 +141,40 @@ export const { GET, POST } = createNahHandler({
 
 `after` is optional. This package uses it for the tidying-up it does once a turn is over, and does that work inline when it is not there — a Next.js `after` throws when it is called outside the request scope, and a turn can finish after the response has already been sent.
 
+### `memory`
+
+**Opt-in.** When you pass `memory`, the runtime injects the memory block into the system prompt before the run and learns from the exchange after it finishes. When you do not, memory is off and the turn runs as it always would.
+
+```ts
+import { createNahHandler } from "nah-js";
+import { CognitiveMemory } from "not-another-harness";
+
+export const { GET, POST } = createNahHandler({
+  agent: () => ({ model, system, tools }),
+  memory: {
+    memory: new CognitiveMemory(),
+    key: "session-123",
+    stateStore: {
+      load: (key) => db.load(key),
+      save: (key, snapshot) => db.save(key, snapshot),
+    },
+  },
+});
+```
+
+The framework does not pick a memory back-end. `memory.memory` is a `NahMemory` — an interface with four methods:
+
+| Method | What it does |
+| --- | --- |
+| `getPromptContext(userMessage?)` | Builds the prompt block for a turn. Sync or async — both are first-class. |
+| `postTurnAsync({ userMessage, assistantResponse })` | Learns from a finished exchange. Optional: recall-only deployments omit it. |
+| `getSnapshot()` | Serialises the engine's full state. Optional. |
+| `loadSnapshot(snapshot)` | Restores a serialised snapshot. Optional. |
+
+The shipped default wires in CognitiveMemory from `cogmemory`. To use a vector database, Mastra, or any other back-end, implement `NahMemory` and pass it — the runtime calls the same hooks either way, and nothing else in the framework changes.
+
+`stateStore` is where the engine's state lives between turns. `key` identifies the state — per chat, or per caller depending on what should be shared. `onError` reports failures on read, write or learn rather than failing the turn.
+
 ## The browser side
 
 ```tsx
@@ -244,6 +278,63 @@ The core speaks the Web platform's request and response objects, so the same run
 - **Hono, Remix, SvelteKit, Astro** — an endpoint that receives a `Request` and returns a `Response`.
 - **Cloudflare Workers, Deno, Bun, Node** — the same, with the store you have.
 
+## Server adapter
+
+`createNahServer` mounts a registry of agents, explicitly exposed tools, and workflows at an API prefix. It does not start a server: the app owns its listener and deployment. The adapter uses the Web `Request` → `Response` contract, so it mounts directly in Next.js and Hono and can be wrapped by adapters for Node-style frameworks.
+
+```ts
+import { createNahServer } from "nah-js";
+
+const server = createNahServer({
+  agents: {
+    support: {
+      agent: ({ requestContext }) => ({
+        model,
+        system: `Support user ${(requestContext as { userId: string }).userId}`,
+        tools: supportTools,
+      }),
+      session: databaseSessionStore,
+      events: databaseEventLog,
+    },
+  },
+  tools: {
+    lookupOrder: {
+      description: "Look up an order for the signed-in user",
+      inputSchema: lookupOrderSchema,
+      execute: (input, { context, signal }) => lookupOrder(input, context, signal),
+    },
+  },
+  workflows: { refundReview },
+  authenticate: async (request) => {
+    const user = await verifySession(request);
+    if (!user) return new Response("Unauthorized", { status: 401 });
+    return { userId: user.id, tenantId: user.tenantId };
+  },
+});
+```
+
+When configured, the authentication callback runs for every mounted API request. Its returned value is trusted context: agent factories receive `requestContext`, direct tool handlers receive `context`, and workflow steps can read it at `context.requestContext`. Do not derive identity from untrusted JSON supplied by the caller.
+
+| Route | Behavior |
+| --- | --- |
+| `POST /api/agents/:agentId` | Start a turn, answer an approval or suspended tool, steer, or abort; streams NAH events. |
+| `GET /api/agents/:agentId?sessionId=…&after=…` | Replay missed frames, then follow the session stream. |
+| `POST /api/tools/:toolId/execute` | Validate input and execute a tool explicitly registered for direct access. |
+| `POST /api/workflows/:workflowId/runs` | Run a workflow with `{ input, context }`; returns its result as JSON. |
+| `GET /api/openapi.json` | Return an OpenAPI 3.1 description of the registry. |
+
+```ts
+// Hono
+app.all("/api/*", (context) => server.handle(context.req.raw));
+
+// Next.js App Router catch-all route
+export const runtime = "nodejs";
+export const GET = (request: Request) => server.handle(request);
+export const POST = (request: Request) => server.handle(request);
+```
+
+The adapter does not add a listener, authentication provider, database, or deployment platform. Agent sessions and event logs have the same in-memory defaults as `createNahHandler`; configure shared persistent stores for serverless or multi-instance apps. Workflow runs execute in-process and are not durable across restarts.
+
 ## Before you ship
 
 - Save the conversation **before** the response ends. A user who sends their next message the moment they see `finish` must find the conversation already saved. This package does that; a store of your own should too.
@@ -256,6 +347,7 @@ The core speaks the Web platform's request and response objects, so the same run
 
 | Export | What it is |
 | --- | --- |
+| `createNahServer(options)` | Mount registered agents, direct tools, and workflows on a Web API server. |
 | `createNahHandler(options)` | The two route handlers. |
 | `createNahRuntime(options)` | The runtime on its own, if you are not using a route file. |
 | `createMemorySessionStore()` | The default place conversations are kept. |

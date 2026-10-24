@@ -20,6 +20,7 @@ import type {
 	WorkflowRunOptions,
 	WorkflowRunResult,
 	WorkflowSnapshot,
+	WorkflowRunStore,
 } from "./workflow.js";
 
 const execFileAsync = promisify(execFile);
@@ -268,6 +269,10 @@ export type OrchestratorOptions = {
 	taskTimeoutMs?: number;
 	/** Inline diff ceiling. Longer diffs retain the workspace and are truncated. Default 30_000. */
 	maxDiffChars?: number;
+	/** Store suspended workflow checkpoints for restoration after restart. */
+	workflowRunStore?: WorkflowRunStore;
+	/** Workflow definitions required to restore runs in a new process. */
+	workflowRegistry?: Record<string, Workflow<any, any, any>>;
 	/** Aborts every child still in flight. */
 	signal?: AbortSignal;
 	onEvent?: (event: OrchestratorEvent) => void;
@@ -304,6 +309,7 @@ export class Orchestrator {
 			startedAt: number;
 		}
 	>();
+	readonly #workflows = new Map<string, Workflow>();
 
 	constructor(options: OrchestratorOptions) {
 		this.#options = {
@@ -313,6 +319,7 @@ export class Orchestrator {
 				Math.floor(options.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY),
 			),
 		};
+		for (const [id, workflow] of Object.entries(options.workflowRegistry ?? {})) this.#workflows.set(id, workflow);
 	}
 
 	/** Children currently in flight. */
@@ -407,13 +414,14 @@ export class Orchestrator {
 		options: OrchestratorWorkflowOptions<TInput, TState> = {},
 	): Promise<WorkflowRunResult<TOutput, TInput, TState>> {
 		const run = workflow.createRun();
+		this.#workflows.set(workflow.id, workflow);
 		const result = await run.start({
 			inputData: options.inputData,
 			context: this.#stepContext(options.context, options.signal),
 			signal: options.signal ?? this.#options.signal,
 			onEvent: options.onEvent,
 		});
-		this.#track(workflow, run, result);
+		await this.#track(workflow, run, result);
 		return result;
 	}
 
@@ -427,6 +435,7 @@ export class Orchestrator {
 		runId: string;
 	} {
 		const run = workflow.createRun();
+		this.#workflows.set(workflow.id, workflow);
 		const handle = run.stream({
 			inputData: options.inputData,
 			context: this.#stepContext(options.context, options.signal),
@@ -472,7 +481,17 @@ export class Orchestrator {
 		resumeData?: unknown,
 		options: { context?: WorkflowContext; signal?: AbortSignal } = {},
 	): Promise<WorkflowRunResult> {
-		const entry = this.#suspended.get(runId);
+		let entry = this.#suspended.get(runId);
+		if (!entry && this.#options.workflowRunStore) {
+			const snapshot = await this.#options.workflowRunStore.load(runId);
+			if (snapshot) {
+				const workflow = this.#workflows.get(snapshot.workflowId);
+				if (!workflow) throw new Error(`orchestrator: workflow "${snapshot.workflowId}" is not registered for restore`);
+				const run = workflow.restoreRun(snapshot);
+				entry = { workflow, run, result: { status: "suspended", workflowId: snapshot.workflowId, runId, input: snapshot.input, steps: snapshot.steps, state: snapshot.state, durationMs: 0, suspended: snapshot.pending.map((item) => item.id), suspendPayload: snapshot.pending.at(-1)?.payload } as SuspendedRunResult, startedAt: Date.now() };
+				this.#suspended.set(runId, entry);
+			}
+		}
 		if (!entry)
 			throw new Error(
 				`orchestrator: no suspended workflow with run id "${runId}"`,
@@ -482,23 +501,39 @@ export class Orchestrator {
 			context: this.#stepContext(options.context, options.signal),
 			signal: options.signal ?? this.#options.signal,
 		});
-		this.#track(entry.workflow, entry.run, result);
+		await this.#track(entry.workflow, entry.run, result);
 		return result;
 	}
 
-	#track(
+	async #track(
 		workflow: Workflow,
 		run: WorkflowRun,
 		result: WorkflowRunResult,
-	): void {
-		if (result.status === "suspended")
+	): Promise<void> {
+		if (result.status === "suspended") {
 			this.#suspended.set(run.runId, {
 				workflow,
 				run,
 				result,
 				startedAt: Date.now(),
 			});
-		else this.#suspended.delete(run.runId);
+			const snapshot = run.snapshot();
+			if (snapshot) await this.#options.workflowRunStore?.save(snapshot);
+		} else {
+			this.#suspended.delete(run.runId);
+			await this.#options.workflowRunStore?.delete(run.runId);
+		}
+	}
+
+	/** Load stored suspended runs during application startup. */
+	async restoreSuspendedWorkflows(): Promise<void> {
+		if (!this.#options.workflowRunStore) return;
+		for (const snapshot of await this.#options.workflowRunStore.list()) {
+			const workflow = this.#workflows.get(snapshot.workflowId);
+			if (!workflow) continue;
+			const run = workflow.restoreRun(snapshot);
+			this.#suspended.set(snapshot.runId, { workflow, run, result: { status: "suspended", workflowId: snapshot.workflowId, runId: snapshot.runId, input: snapshot.input, steps: snapshot.steps, state: snapshot.state, durationMs: 0, suspended: snapshot.pending.map((item) => item.id), suspendPayload: snapshot.pending.at(-1)?.payload } as SuspendedRunResult, startedAt: Date.now() });
+		}
 	}
 
 	/**

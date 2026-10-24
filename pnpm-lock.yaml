@@ -207,6 +207,9 @@ importers:
       '@radix-ui/react-slot':
         specifier: ^1.3.3
         version: 1.3.3(@types/react@19.2.9)(react@19.2.8)
+      '@wnstn/canopy-nextjs':
+        specifier: ^0.0.1-beta.3
+        version: 0.0.1-beta.3(next@16.3.7(@opentelemetry/api@1.9.1)(@playwright/test@1.58.2)(@types/node@22.19.9)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(sass@1.77.4))(react@19.2.8)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -5689,6 +5692,17 @@ packages:
       react:
         optional: true
 
+  '@wnstn/canopy-nextjs@0.0.1-beta.3':
+    resolution: {integrity: sha512-QY9jnV8c3F+1RZii+f7ZdkIgmRfP0HWeLzSJVxcO27B6iXCZxWhXqc3fhwTyIxBJNCP3DPEaFQCLWNG/qzrzyQ==}
+    peerDependencies:
+      next: '>=14'
+      react: '>=18'
+    peerDependenciesMeta:
+      next:
+        optional: true
+      react:
+        optional: true
+
   '@wnstn/canopy@0.0.1-beta.1':
     resolution: {integrity: sha512-0+3l6xb2QsVXek1uTk8keWYkYymwJSI9Nkqcq16NsuUoypyPKqr6mwcsB9RdpH8sSRHgV1ByxrVtVFxoxfLNBQ==}
 
@@ -5702,6 +5716,9 @@ packages:
         optional: true
       react:
         optional: true
+
+  '@wnstn/canopy@0.0.1-beta.3':
+    resolution: {integrity: sha512-6K7GWaK0FcG7zL040eOgDibzJs5HGhzXI1ai5krm1n1QuT+Z3/H6xJhmskvVpgXUCS79koSsbyKYdfxIYiUCNg==}
 
   '@workflow/serde@4.1.0':
     resolution: {integrity: sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ==}
@@ -18128,12 +18145,21 @@ snapshots:
       next: 16.3.8(@babel/core@7.28.3)(@opentelemetry/api@1.9.1)(@playwright/test@1.58.2)(@types/node@22.19.9)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(sass@1.77.4)
       react: 19.2.8
 
+  '@wnstn/canopy-nextjs@0.0.1-beta.3(next@16.3.7(@opentelemetry/api@1.9.1)(@playwright/test@1.58.2)(@types/node@22.19.9)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(sass@1.77.4))(react@19.2.8)':
+    dependencies:
+      '@wnstn/canopy': 0.0.1-beta.3
+    optionalDependencies:
+      next: 16.3.7(@opentelemetry/api@1.9.1)(@playwright/test@1.58.2)(@types/node@22.19.9)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(sass@1.77.4)
+      react: 19.2.8
+
   '@wnstn/canopy@0.0.1-beta.1': {}
 
   '@wnstn/canopy@0.0.1-beta.2(next@16.3.8(@babel/core@7.28.3)(@opentelemetry/api@1.9.1)(@playwright/test@1.58.2)(@types/node@22.19.9)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(sass@1.77.4))(react@19.2.8)':
     optionalDependencies:
       next: 16.3.8(@babel/core@7.28.3)(@opentelemetry/api@1.9.1)(@playwright/test@1.58.2)(@types/node@22.19.9)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(sass@1.77.4)
       react: 19.2.8
+
+  '@wnstn/canopy@0.0.1-beta.3': {}
 
   '@workflow/serde@4.1.0': {}
 
@@ -19784,7 +19810,7 @@ snapshots:
       eslint: 9.34.0(jiti@2.7.0)
       eslint-import-resolver-node: 0.3.10
       eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(eslint@9.34.0(jiti@2.7.0)))(eslint@9.34.0(jiti@2.7.0))
-      eslint-plugin-import: 2.32.0(eslint-import-resolver-typescript@3.10.1)(eslint@9.34.0(jiti@2.7.0))
+      eslint-plugin-import: 2.32.0(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(eslint@9.34.0(jiti@2.7.0)))(eslint@9.34.0(jiti@2.7.0)))(eslint@9.34.0(jiti@2.7.0))
       eslint-plugin-jsx-a11y: 6.10.2(eslint@9.34.0(jiti@2.7.0))
       eslint-plugin-react: 7.37.5(eslint@9.34.0(jiti@2.7.0))
       eslint-plugin-react-hooks: 7.1.1(eslint@9.34.0(jiti@2.7.0))
@@ -19841,7 +19867,7 @@ snapshots:
       tinyglobby: 0.2.17
       unrs-resolver: 1.12.2
     optionalDependencies:
-      eslint-plugin-import: 2.32.0(eslint-import-resolver-typescript@3.10.1)(eslint@9.34.0(jiti@2.7.0))
+      eslint-plugin-import: 2.32.0(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(eslint@9.34.0(jiti@2.7.0)))(eslint@9.34.0(jiti@2.7.0)))(eslint@9.34.0(jiti@2.7.0))
     transitivePeerDependencies:
       - supports-color
 
@@ -19950,7 +19976,7 @@ snapshots:
       - eslint-import-resolver-webpack
       - supports-color
 
-  eslint-plugin-import@2.32.0(eslint-import-resolver-typescript@3.10.1)(eslint@9.34.0(jiti@2.7.0)):
+  eslint-plugin-import@2.32.0(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(eslint@9.34.0(jiti@2.7.0)))(eslint@9.34.0(jiti@2.7.0)))(eslint@9.34.0(jiti@2.7.0)):
     dependencies:
       '@rtsao/scc': 1.1.0
       array-includes: 3.1.9

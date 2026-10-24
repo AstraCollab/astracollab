@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
-import { AgentTable } from "../components/AgentTable";
+import { AgentBrowser } from "../components/AgentBrowser";
 import {
 	Badge,
 	Button,
@@ -194,36 +194,15 @@ export const OverviewView = ({
 			 * The agents behind the numbers above. A directory is measured as a
 			 * whole, so the agents in it are listed here rather than being a
 			 * separate trip to the agents list.
+			 *
+			 * AgentBrowser handles the directory→agents drill-down and remembers
+			 * where it started so the back button goes to the right place.
 			 */}
-			<Panel
-				title={
-					scopedPath
-						? `agents in ${directoryName(scopedPath)}`
-						: "agents by directory"
-				}
-				action={
-					<span className="eyebrow">
-						{scopedGroups.reduce(
-							(sum, group) => sum + group.agents.length,
-							0,
-						)}{" "}
-						agents
-					</span>
-				}
-			>
-				{scopedGroups.length === 0 ? (
-					<Empty
-						title="No agents here yet"
-						hint="An agent appears in this list as soon as it reports a directory."
-					/>
-				) : (
-					<AgentTable
-						groups={scopedGroups}
-						selectedAgentId={selectedAgentId}
-						onOpenAgent={onOpenAgent}
-					/>
-				)}
-			</Panel>
+			<AgentBrowser
+				onOpenAgent={onOpenAgent}
+				onBack={() => {}}
+				startAtDirectory={scopedPath}
+			/>
 		</div>
 	);
 };

@@ -38,6 +38,8 @@ export interface Memory {
   accessCount: number
   source?: MemorySource
   sessionId?: string
+  /** Which library this memory belongs to. Null means the organisation-wide library. */
+  libraryId?: string | null
   /** Epoch milliseconds. */
   createdAt: number
   lastAccessedAt: number
@@ -161,16 +163,22 @@ export interface RememberRequest {
   }>
   /** Groups memories from one conversation. */
   sessionId?: string
+  /** Which library to scope this operation to. Null means the organisation-wide library. */
+  libraryId?: string | null
 }
 
 export interface ListMemoriesParams {
   limit?: number
   tier?: MemoryTier
+  /** Which library to scope the list to. Null means the organisation-wide library. */
+  libraryId?: string | null
 }
 
 export interface RecallRequest {
   query: string
   limit?: number
+  /** Which library to scope the recall to. Null means the organisation-wide library. */
+  libraryId?: string | null
 }
 
 export interface RecallResponse {

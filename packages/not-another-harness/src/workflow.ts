@@ -17,12 +17,11 @@
  * end. That is the whole difference from a prompt that asks for several things
  * in order: the order is in the code, and it holds when nobody is watching.
  *
- * ## What is deliberately absent
+ * ## Persistence boundary
  *
- * No durable storage, no distributed runners. A run lives in the process that
- * started it, and a suspended run is resumed from an in-memory snapshot. That is
- * enough for repeatable tasks inside an agent session, and claiming otherwise
- * here would be a promise this package cannot keep.
+ * The engine itself runs in-process. Suspended runs can be checkpointed through
+ * `WorkflowRunStore` and restored by the server adapter or Orchestrator, but the
+ * package does not provide a database or distributed worker coordinator.
  */
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
@@ -49,6 +48,11 @@ export type StepExecuteArgs<
 	TInput = unknown,
 	TState = Record<string, unknown>,
 > = {
+	runId: string;
+	stepId: string;
+	attempt: number;
+	/** Stable across retries and crash recovery for this logical step. */
+	idempotencyKey: string;
 	inputData: TInput;
 	/** Shared workflow state. Read it; use `setState` to change it. */
 	state: TState;
@@ -86,6 +90,7 @@ export type WorkflowStep<TInput = any, TOutput = any, TState = any> = {
 	readonly inputSchema?: z.ZodType<TInput>;
 	readonly outputSchema?: z.ZodType<TOutput>;
 	readonly stateSchema?: z.ZodType<TState>;
+	readonly retry?: WorkflowRetryOptions;
 	execute: (
 		args: StepExecuteArgs<TInput, TState>,
 	) => Promise<TOutput> | TOutput;
@@ -104,6 +109,7 @@ export const createStep = <TInput = any, TOutput = any, TState = any>(config: {
 	inputSchema?: z.ZodType<TInput>;
 	outputSchema?: z.ZodType<TOutput>;
 	stateSchema?: z.ZodType<TState>;
+	retry?: WorkflowRetryOptions;
 	execute: (
 		args: StepExecuteArgs<TInput, TState>,
 	) => Promise<TOutput> | TOutput;
@@ -147,7 +153,8 @@ export type BranchCondition = (
 /** What one step did, kept so a caller can inspect a run without replaying it. */
 export type StepRecord = {
 	id: string;
-	status: "success" | "failed" | "suspended";
+	status: "running" | "success" | "failed" | "suspended";
+	attempt?: number;
 	/** The value the step received, after schema selection and validation. */
 	input?: unknown;
 	/** The value the step returned, after output validation. */
@@ -155,6 +162,15 @@ export type StepRecord = {
 	durationMs: number;
 	error?: string;
 	suspendPayload?: unknown;
+};
+
+export type WorkflowRetryOptions = {
+	/** Total attempts including the first. Defaults to one. */
+	maxAttempts?: number;
+	/** Retry delay in ms, or a function of the failed attempt number. */
+	delayMs?: number | ((failedAttempt: number) => number);
+	/** Return false to stop immediately for a permanent error. Defaults to retrying every thrown error. */
+	shouldRetry?: (error: Error) => boolean;
 };
 
 type WorkflowRunCommon = {
@@ -222,13 +238,86 @@ export type WorkflowRunStatus =
 
 /** Everything needed to pick up where a suspended run stopped. */
 export type WorkflowSnapshot<TState = any> = {
+	formatVersion: 2;
 	workflowId: string;
+	workflowVersion: string;
 	runId: string;
+	status: "running" | "suspended";
 	input: unknown;
 	state: TState;
 	steps: Record<string, StepRecord>;
+	/** Internal node outputs are required to skip completed work after restore. */
+	outputs: Record<string, unknown>;
 	/** Step ids still to run, with the payload each suspended on. */
 	pending: Array<{ id: string; payload: unknown }>;
+};
+
+/** Persistence seam for suspended workflow checkpoints. Implement with a shared durable store in production. */
+export type WorkflowRunStore = {
+	save(snapshot: WorkflowSnapshot, scope?: string, fencingToken?: number): Promise<void>;
+	load(runId: string, scope?: string): Promise<WorkflowSnapshot | null>;
+	list(options?: { workflowId?: string; scope?: string; status?: "running" | "suspended" }): Promise<WorkflowSnapshot[]>;
+	delete(runId: string, scope?: string, fencingToken?: number): Promise<void>;
+	/** Atomically acquire execution rights and issue an increasing fencing token. */
+	claim(runId: string, ownerId: string, leaseMs: number, scope?: string): Promise<{ fencingToken: number; expiresAt: number } | null>;
+	renew(runId: string, fencingToken: number, leaseMs: number, scope?: string): Promise<boolean>;
+	release(runId: string, fencingToken: number, scope?: string): Promise<void>;
+};
+
+export class WorkflowCheckpointError extends Error {
+	constructor(cause: unknown) {
+		super("workflow checkpoint could not be persisted", { cause });
+		this.name = "WorkflowCheckpointError";
+	}
+}
+
+/** In-memory workflow store for local development and tests. */
+export const createMemoryWorkflowRunStore = (): WorkflowRunStore => {
+	const records = new Map<string, { snapshot: WorkflowSnapshot; scope?: string }>();
+	const leases = new Map<string, { fencingToken: number; expiresAt: number }>();
+	const tokens = new Map<string, number>();
+	const keyFor = (runId: string, scope?: string) => `${scope ?? ""}:${runId}`;
+	return {
+		async save(snapshot, scope, fencingToken) {
+			const lease = leases.get(keyFor(snapshot.runId, scope));
+			if (fencingToken !== undefined && (!lease || lease.fencingToken !== fencingToken || lease.expiresAt <= Date.now())) throw new Error("workflow run lease lost; checkpoint rejected");
+			records.set(snapshot.runId, { snapshot: structuredClone(snapshot), scope });
+		},
+		async load(runId, scope) {
+			const record = records.get(runId);
+			return record && record.scope === scope ? structuredClone(record.snapshot) : null;
+		},
+		async list(options = {}) {
+			return [...records.values()]
+				.filter(({ snapshot, scope }) => scope === options.scope && (!options.workflowId || snapshot.workflowId === options.workflowId) && (!options.status || snapshot.status === options.status))
+				.map(({ snapshot }) => structuredClone(snapshot));
+		},
+		async delete(runId, scope, fencingToken) {
+			const lease = leases.get(keyFor(runId, scope));
+			if (fencingToken !== undefined && (!lease || lease.fencingToken !== fencingToken || lease.expiresAt <= Date.now())) throw new Error("workflow run lease lost; delete rejected");
+			if (records.get(runId)?.scope === scope) records.delete(runId);
+		},
+		async claim(runId, _ownerId, leaseMs, scope) {
+			const key = keyFor(runId, scope);
+			const current = leases.get(key);
+			if (current && current.expiresAt > Date.now()) return null;
+			const fencingToken = (tokens.get(key) ?? 0) + 1;
+			tokens.set(key, fencingToken);
+			const expiresAt = Date.now() + leaseMs;
+			leases.set(key, { fencingToken, expiresAt });
+			return { fencingToken, expiresAt };
+		},
+		async renew(runId, fencingToken, leaseMs, scope) {
+			const current = leases.get(keyFor(runId, scope));
+			if (!current || current.fencingToken !== fencingToken || current.expiresAt <= Date.now()) return false;
+			current.expiresAt = Date.now() + leaseMs;
+			return true;
+		},
+		async release(runId, fencingToken, scope) {
+			const key = keyFor(runId, scope);
+			if (leases.get(key)?.fencingToken === fencingToken) leases.delete(key);
+		},
+	};
 };
 
 /** How a caller starts or continues a run. */
@@ -245,6 +334,10 @@ export type WorkflowRunOptions<TInput = any> = {
 	 * queue, and a caller that opens both is reading the same run twice.
 	 */
 	onEvent?: (event: WorkflowEvent) => void;
+	/** Persist checkpoints at run start and after each successful step. */
+	onCheckpoint?: (snapshot: WorkflowSnapshot) => void | Promise<void>;
+	checkpoint?: () => Promise<void>;
+	fencingToken?: number;
 };
 
 export type WorkflowResumeOptions = Omit<WorkflowRunOptions, "inputData"> & {
@@ -282,6 +375,7 @@ export type WorkflowRun<TOutput = any, TInput = any, TState = any> = {
 export type Workflow<TOutput = any, TInput = any, TState = any> = {
 	readonly __workflow: true;
 	readonly id: string;
+	readonly version: string;
 	readonly description?: string;
 	readonly inputSchema?: z.ZodType<TInput>;
 	readonly outputSchema?: z.ZodType<TOutput>;
@@ -289,6 +383,8 @@ export type Workflow<TOutput = any, TInput = any, TState = any> = {
 	/** Whether the workflow starts a fresh state when it is run or as a nested step. */
 	readonly standaloneState: boolean;
 	createRun(): WorkflowRun<TOutput, TInput, TState>;
+	/** Recreate a suspended run from a persisted checkpoint. */
+	restoreRun(snapshot: WorkflowSnapshot<TState>): WorkflowRun<TOutput, TInput, TState>;
 };
 
 /** One argument to `then` / `parallel` / `branch`: a step, a workflow, or a composition. */
@@ -447,6 +543,10 @@ type RunState = {
 	/** True while this execution continues a suspended one, which is what makes it skip finished work. */
 	resuming: boolean;
 	context: WorkflowContext;
+	restoredFromCheckpoint: boolean;
+	checkpointReady: boolean;
+	fencingToken?: number;
+	onCheckpoint?: (snapshot: WorkflowSnapshot) => void | Promise<void>;
 	onEvent?: (event: WorkflowEvent) => void;
 	/** Aborting it stops the run between steps, and reaches a step that forwards the signal. */
 	signal?: AbortSignal;
@@ -551,104 +651,69 @@ const runNode = async (
 	switch (node.kind) {
 		case "step": {
 			const { step } = node;
-			// Checked before the step starts, so an aborted run fails the step it was
-			// about to run rather than reporting a success nobody is waiting for.
 			run.signal?.throwIfAborted();
 			const input = validate(
 				step.inputSchema,
 				resolveInput(value, step.inputSchema),
 				`step "${step.id}" input`,
 			);
-			const writer = (chunk: string) =>
-				run.emit({
-					type: "step-delta",
-					workflowId: run.workflowId,
-					stepId: step.id,
-					text: chunk,
-				});
-			run.emit({
-				type: "step-start",
-				workflowId: run.workflowId,
-				stepId: step.id,
-				input,
+			const writer = (chunk: string) => run.emit({
+				type: "step-delta", workflowId: run.workflowId, stepId: step.id, text: chunk,
 			});
-			const startedAt = Date.now();
-			try {
-				const raw = await step.execute({
-					inputData: input as never,
-					state: run.state as never,
-					setState: (partial) => {
-						Object.assign(
-							run.state,
-							typeof partial === "function"
-								? partial(run.state as never)
-								: partial,
-						);
-					},
-					writer,
-					context: run.context,
-					signal: run.signal,
-					resumeData,
-				});
-				const output = validate(
-					step.outputSchema,
-					raw,
-					`step "${step.id}" output`,
-				);
-				const durationMs = Date.now() - startedAt;
-				run.steps[step.id] = {
-					id: step.id,
-					status: "success",
-					input,
-					output,
-					durationMs,
-				};
-				run.outputs[node.key] = output;
-				run.emit({
-					type: "step-finish",
-					workflowId: run.workflowId,
-					stepId: step.id,
-					output,
-					durationMs,
-				});
-				return { value: output, suspended: false };
-			} catch (error) {
-				if (error instanceof StepSuspend) {
-					const durationMs = Date.now() - startedAt;
-					run.steps[step.id] = {
-						id: step.id,
-						status: "suspended",
-						input,
-						durationMs,
-						suspendPayload: error.payload,
-					};
-					run.pending = [{ id: step.id, payload: error.payload }];
-					run.status = "suspended";
-					run.emit({
-						type: "step-suspend",
-						workflowId: run.workflowId,
+			const maxAttempts = Math.max(1, Math.floor(step.retry?.maxAttempts ?? 1));
+			const previous = run.steps[step.id];
+			let attempt = previous?.status === "running" ? Math.max(0, (previous.attempt ?? 1) - 1) : previous?.status === "failed" ? previous.attempt ?? 0 : 0;
+			while (attempt < maxAttempts) {
+				attempt += 1;
+				const stateBeforeAttempt = structuredClone(run.state);
+				run.steps[step.id] = { id: step.id, status: "running", attempt, input, durationMs: 0 };
+				await run.checkpoint?.();
+				run.emit({ type: "step-start", workflowId: run.workflowId, stepId: step.id, input });
+				const startedAt = Date.now();
+				try {
+					const raw = await step.execute({
+						runId: run.runId,
 						stepId: step.id,
-						payload: error.payload,
+						attempt,
+						idempotencyKey: `${run.runId}:${step.id}`,
+						inputData: input as never,
+						state: run.state as never,
+						setState: (partial) => Object.assign(run.state, typeof partial === "function" ? partial(run.state as never) : partial),
+						writer,
+						context: run.context,
+						signal: run.signal,
+						resumeData: resumeData,
 					});
-					return { value: undefined, suspended: true };
+					const output = validate(step.outputSchema, raw, `step "${step.id}" output`);
+					const durationMs = Date.now() - startedAt;
+					run.steps[step.id] = { id: step.id, status: "success", attempt, input, output, durationMs };
+					run.outputs[node.key] = output;
+					await run.checkpoint?.();
+					run.emit({ type: "step-finish", workflowId: run.workflowId, stepId: step.id, output, durationMs });
+					return { value: output, suspended: false };
+				} catch (error) {
+					if (error instanceof WorkflowCheckpointError) throw error;
+					if (error instanceof StepSuspend) {
+						const durationMs = Date.now() - startedAt;
+						run.steps[step.id] = { id: step.id, status: "suspended", attempt, input, durationMs, suspendPayload: error.payload };
+						run.pending = [{ id: step.id, payload: error.payload }];
+						run.status = "suspended";
+						await run.checkpoint?.();
+						run.emit({ type: "step-suspend", workflowId: run.workflowId, stepId: step.id, payload: error.payload });
+						return { value: undefined, suspended: true };
+					}
+					const failure = error instanceof Error ? error : new Error(String(error));
+					run.state = stateBeforeAttempt;
+					run.steps[step.id] = { id: step.id, status: "failed", attempt, input, durationMs: Date.now() - startedAt, error: failure.message };
+					await run.checkpoint?.();
+					run.emit({ type: "step-error", workflowId: run.workflowId, stepId: step.id, error: failure });
+					if (attempt >= maxAttempts || (step.retry?.shouldRetry && !step.retry.shouldRetry(failure))) throw failure;
+					const configuredDelay = step.retry?.delayMs ?? 0;
+					const delay = typeof configuredDelay === "function" ? configuredDelay(attempt) : configuredDelay;
+					if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
 				}
-				const failure =
-					error instanceof Error ? error : new Error(String(error));
-				run.steps[step.id] = {
-					id: step.id,
-					status: "failed",
-					input,
-					durationMs: Date.now() - startedAt,
-					error: failure.message,
-				};
-				run.emit({
-					type: "step-error",
-					workflowId: run.workflowId,
-					stepId: step.id,
-					error: failure,
-				});
-				throw failure;
 			}
+			throw new Error(`workflow step "${step.id}" exhausted retries`);
 		}
 		case "workflow": {
 			const nested = node.workflow.createRun();
@@ -767,25 +832,53 @@ const runNode = async (
 
 const createEngineRun = <TOutput, TInput, TState>(
 	workflow: Workflow<TOutput, TInput, TState>,
+	snapshot?: WorkflowSnapshot<TState>,
 ): WorkflowRun<TOutput, TInput, TState> => {
-	const runId = randomUUID();
+	if (snapshot && (snapshot.formatVersion !== 2 || snapshot.workflowId !== workflow.id || snapshot.workflowVersion !== workflow.version)) {
+		throw new Error(`workflow "${workflow.id}": checkpoint version or definition does not match`);
+	}
+	const runId = snapshot?.runId ?? randomUUID();
 	let emit: (event: WorkflowEvent) => void = () => {};
 	const run: RunState = {
 		workflowId: workflow.id,
 		runId,
-		status: "running",
-		steps: {},
-		outputs: {},
-		state: initialState(workflow) as Record<string, unknown>,
-		pending: [],
-		resuming: false,
+		status: snapshot?.status ?? "running",
+		steps: snapshot ? structuredClone(snapshot.steps) : {},
+		outputs: snapshot ? structuredClone(snapshot.outputs) : {},
+		state: snapshot ? structuredClone(snapshot.state) as Record<string, unknown> : initialState(workflow) as Record<string, unknown>,
+		pending: snapshot ? structuredClone(snapshot.pending) : [],
+		input: snapshot?.input,
+		resuming: Boolean(snapshot),
 		context: {},
+		restoredFromCheckpoint: Boolean(snapshot),
+		checkpointReady: Boolean(snapshot),
 		onEvent: undefined,
 		emit: (event) => {
 			emit(event);
 			run.onEvent?.(event);
 		},
 	};
+	const makeSnapshot = (): WorkflowSnapshot<TState> => ({
+		formatVersion: 2,
+		workflowId: workflow.id,
+		workflowVersion: workflow.version,
+		runId,
+		status: run.status === "suspended" ? "suspended" : "running",
+		input: run.input,
+		state: run.state as TState,
+		steps: structuredClone(run.steps),
+		outputs: structuredClone(run.outputs),
+		pending: structuredClone(run.pending),
+	});
+	const persistCheckpoint = async (): Promise<void> => {
+		if (!run.checkpointReady) return;
+		try {
+			await run.onCheckpoint?.(makeSnapshot());
+		} catch (error) {
+			throw new WorkflowCheckpointError(error);
+		}
+	};
+	run.checkpoint = persistCheckpoint;
 
 	const settle = (
 		status: WorkflowRunStatus,
@@ -813,13 +906,17 @@ const createEngineRun = <TOutput, TInput, TState>(
 		resumeData?: unknown;
 		signal?: AbortSignal;
 		onEvent?: (event: WorkflowEvent) => void;
+		onCheckpoint?: (snapshot: WorkflowSnapshot) => void | Promise<void>;
+		fencingToken?: number;
 		startedAt?: number;
 	}): Promise<WorkflowRunResult<TOutput, TInput, TState>> => {
 		const startedAt = options?.startedAt ?? Date.now();
-		const resuming = isSuspended(run);
+		const resuming = isSuspended(run) || run.restoredFromCheckpoint;
 		if (options?.context) run.context = { ...run.context, ...options.context };
 		if (options?.signal) run.signal = options.signal;
 		if (options?.onEvent) run.onEvent = options.onEvent;
+		if (options?.onCheckpoint) run.onCheckpoint = options.onCheckpoint;
+		if (options?.fencingToken !== undefined) run.fencingToken = options.fencingToken;
 		// Set before the walk, not instead of the status: "running" is what the run is,
 		// "resuming" is how this pass got here, and only the second one means skip.
 		run.resuming = resuming;
@@ -834,12 +931,14 @@ const createEngineRun = <TOutput, TInput, TState>(
 					options?.inputData,
 					`workflow "${workflow.id}" input`,
 				);
+				run.checkpointReady = true;
 				emit({
 					type: "workflow-start",
 					workflowId: workflow.id,
 					runId,
 					input: run.input,
 				});
+				await persistCheckpoint();
 				value = run.input;
 			}
 			for (const node of internalsOf(workflow).__nodes) {
@@ -878,6 +977,7 @@ const createEngineRun = <TOutput, TInput, TState>(
 			emit({ type: "workflow-finish", workflowId: workflow.id, result });
 			return result as WorkflowRunResult<TOutput, TInput, TState>;
 		} catch (error) {
+			if (error instanceof WorkflowCheckpointError) throw error;
 			const failure = error instanceof Error ? error : new Error(String(error));
 			const result = settle("failed", { error: failure }, startedAt);
 			emit({ type: "workflow-finish", workflowId: workflow.id, result });
@@ -890,6 +990,8 @@ const createEngineRun = <TOutput, TInput, TState>(
 		inputData?: TInput;
 		context?: WorkflowContext;
 		resumeData?: unknown;
+		onCheckpoint?: (snapshot: WorkflowSnapshot) => void | Promise<void>;
+		fencingToken?: number;
 	}): {
 		events: AsyncIterable<WorkflowEvent<TState>>;
 		result: Promise<WorkflowRunResult<TOutput, TInput, TState>>;
@@ -954,17 +1056,7 @@ const createEngineRun = <TOutput, TInput, TState>(
 			started ??= handle.result;
 			return handle;
 		},
-		snapshot: () =>
-			run.status === "suspended"
-				? {
-						workflowId: workflow.id,
-						runId,
-						input: run.input,
-						state: run.state as TState,
-						steps: { ...run.steps },
-						pending: [...run.pending],
-					}
-				: null,
+		snapshot: () => run.checkpointReady && (run.status === "suspended" || run.status === "running") ? makeSnapshot() : null,
 	};
 };
 
@@ -985,6 +1077,8 @@ export const createWorkflow = <
 	inputSchema?: z.ZodType<TInput>;
 	outputSchema?: z.ZodType<TOutput>;
 	stateSchema?: z.ZodType<TState>;
+	/** Bump when changing a workflow's behavior incompatibly with suspended runs. */
+	version?: string;
 }): WorkflowBuilder<TOutput, TInput, TState> => {
 	const nodes: WorkflowNode[] = [];
 	const builder: WorkflowBuilder<TOutput, TInput, TState> = {
@@ -1068,6 +1162,7 @@ export const createWorkflow = <
 			const workflow = {
 				__workflow: true as const,
 				id: config.id,
+				version: config.version ?? "1",
 				description: config.description,
 				inputSchema: config.inputSchema,
 				outputSchema: config.outputSchema,
@@ -1079,6 +1174,9 @@ export const createWorkflow = <
 					createEngineRun(
 						workflow as unknown as Workflow<TOutput, TInput, TState>,
 					),
+				restoreRun: (snapshot: WorkflowSnapshot<TState>) => createEngineRun(
+					workflow as unknown as Workflow<TOutput, TInput, TState>, snapshot,
+				),
 			} as unknown as Workflow<TOutput, TInput, TState>;
 			return workflow;
 		},
@@ -1103,6 +1201,7 @@ export const cloneWorkflow = <TOutput, TInput, TState>(
 		inputSchema: workflow.inputSchema,
 		outputSchema: workflow.outputSchema,
 		stateSchema: workflow.stateSchema,
+		version: workflow.version,
 	})
 		.then(internalsOf(workflow).__nodes)
 		.commit();

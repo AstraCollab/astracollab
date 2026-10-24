@@ -73,6 +73,8 @@ const App = () => {
 	// scope: the scope says which agent the *other* views are about, and a detail
 	// view is about one agent regardless of what that happens to be.
 	const [focusAgent, setFocusAgent] = useState<string | null>(null);
+	// Where the agent detail was opened from, so "back" returns to the right place.
+	const [agentDetailFrom, setAgentDetailFrom] = useState<NavView>("agents");
 	// A trace opened from elsewhere — a chat turn, an eval row — lands here and is
 	// opened by the traces view when it sees the id change.
 	const [focusTrace, setFocusTrace] = useState<string | null>(null);
@@ -92,9 +94,11 @@ const App = () => {
 	}, []);
 
 	const openAgent = useCallback((agentId: string) => {
+		// Remember where we came from so the agent detail's back button returns there.
+		setAgentDetailFrom(view === "agent" ? "agents" : view);
 		setFocusAgent(agentId);
 		setView("agent");
-	}, []);
+	}, [view]);
 
 	const openTrace = useCallback((traceId: string) => {
 		setFocusTrace(traceId);
@@ -277,7 +281,7 @@ const App = () => {
 					{view === "agent" && focusAgent && (
 						<AgentDetailView
 							agentId={focusAgent}
-							onBack={() => setView("agents")}
+							onBack={() => setView(agentDetailFrom)}
 							onOpenTrace={openTrace}
 						/>
 					)}

@@ -114,7 +114,7 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
     screen.requestRender(true);
   };
   const status = new Text("", 1, 0);
-  const editor = new Editor(screen, editorTheme, { paddingX: 1 });
+  const editor = new Editor(screen, editorTheme, { paddingX: 1, autocompleteMaxVisible: 8 });
 
   /**
    * Seed recall from the resumed transcript.
@@ -169,6 +169,7 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
       providerStatus: state.providerStatus,
       undoDepth: state.undoHistory.length,
       planSteps: state.taskLedger?.steps?.length ?? null,
+      studioConnected: state.studio !== null,
     };
   };
   const sidebar = new ContextSidebar(sidebarData, () => terminal.rows);
@@ -339,13 +340,14 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
 
   const refreshPrompt = () => {
     if (approval) {
-      setStatus(c.yellow("  allow?  y  ·  n  ·  a = always this tool  ·  A = always this exact call"));
+      setStatus(`${c.yellow("! approval required")}  ${c.dim("y allow  ·  n deny  ·  a always tool  ·  A always this call")}`);
       return;
     }
+    const location = sidebarShown ? "" : `  ${c.dim("in")} ${c.dim(state.cwd)}`;
     setStatus(
       run.turn
-        ? c.dim("  running — type to steer, / for commands")
-        : c.dim(`  ${state.model?.spec ?? "no model"} · ${state.cwd}`),
+        ? `${c.purple("● working")}  ${c.dim("type to steer  ·  / for commands")}`
+        : `${c.purple("◆")} ${c.dim(state.model?.spec ?? "no model selected")}  ${c.dim("·")} ${c.dim(state.permissions)}${location}`,
     );
   };
 

@@ -306,6 +306,93 @@ describe("an agent's output", () => {
 	});
 });
 
+describe("scoping to a directory", () => {
+	it("summarises all agents in one directory together", () => {
+		const db = store();
+		const a = db.registerAgent({ id: "ag_a", cwd: "/repo" }).id;
+		const b = db.registerAgent({ id: "ag_b", cwd: "/repo" }).id;
+		const c = db.registerAgent({ id: "ag_c", cwd: "/other" }).id;
+
+		db.saveTrace(trace({ id: "t_a", rootSpanId: "sa" }), [span({ id: "sa", traceId: "t_a", attributes: { "nah.cost.usd": 0.1 } })], a);
+		db.saveTrace(trace({ id: "t_b", rootSpanId: "sb", status: "error" }), [span({ id: "sb", traceId: "t_b", attributes: { "nah.cost.usd": 0.2 } })], b);
+		db.saveTrace(trace({ id: "t_c", rootSpanId: "sc" }), [span({ id: "sc", traceId: "t_c", attributes: { "nah.cost.usd": 0.3 } })], c);
+
+		// Directory scope aggregates all agents in that directory.
+		expect(db.overview({ cwd: "/repo" })).toMatchObject({
+			traces: 2,
+			errors: 1,
+			costUsd: 0.3,
+		});
+
+		// Other directory is not included.
+		expect(db.overview({ cwd: "/other" })).toMatchObject({
+			traces: 1,
+			errors: 0,
+			costUsd: 0.3,
+		});
+
+		// No scope = everything.
+		expect(db.overview({})).toMatchObject({
+			traces: 3,
+			errors: 1,
+			costUsd: 0.6,
+		});
+	});
+
+	it("lists agents filtered to one directory", () => {
+		const db = store();
+		db.registerAgent({ id: "ag_a", cwd: "/repo" });
+		db.registerAgent({ id: "ag_b", cwd: "/repo" });
+		db.registerAgent({ id: "ag_c", cwd: "/other" });
+
+		const repoAgents = db.listAgents({ cwd: "/repo" });
+		expect(repoAgents.map((agent) => agent.id).sort()).toEqual(["ag_a", "ag_b"]);
+
+		const otherAgents = db.listAgents({ cwd: "/other" });
+		expect(otherAgents.map((agent) => agent.id)).toEqual(["ag_c"]);
+
+		// No filter = all agents.
+		expect(db.listAgents({}).length).toBe(3);
+	});
+
+	it("scopes tool stats to a directory", () => {
+		const db = store();
+		const a = db.registerAgent({ id: "ag_a", cwd: "/repo" }).id;
+		const b = db.registerAgent({ id: "ag_b", cwd: "/repo" }).id;
+		const c = db.registerAgent({ id: "ag_c", cwd: "/other" }).id;
+
+		db.saveTrace(
+			trace({ id: "t_a", rootSpanId: "sa" }),
+			[
+				span({ id: "sa", traceId: "t_a", kind: "tool", name: "tool: read", attributes: { "nah.cost.usd": 0.1 } }),
+			],
+			a,
+		);
+		db.saveTrace(
+			trace({ id: "t_b", rootSpanId: "sb" }),
+			[
+				span({ id: "sb", traceId: "t_b", kind: "tool", name: "tool: write", attributes: { "nah.cost.usd": 0.2 } }),
+			],
+			b,
+		);
+		db.saveTrace(
+			trace({ id: "t_c", rootSpanId: "sc" }),
+			[
+				span({ id: "sc", traceId: "t_c", kind: "tool", name: "tool: read", attributes: { "nah.cost.usd": 0.3 } }),
+			],
+			c,
+		);
+
+		const repoTools = db.toolStats({ cwd: "/repo" });
+		expect(repoTools.map((tool) => tool.tool).sort()).toEqual(["read", "write"]);
+		expect(repoTools.find((tool) => tool.tool === "read")?.calls).toBe(1);
+		expect(repoTools.find((tool) => tool.tool === "write")?.calls).toBe(1);
+
+		const otherTools = db.toolStats({ cwd: "/other" });
+		expect(otherTools.map((tool) => tool.tool)).toEqual(["read"]);
+	});
+});
+
 describe("a store written by an older build", () => {
 	it("gains the agent columns instead of refusing to open", async () => {
 		const { mkdtempSync } = await import("node:fs");

@@ -108,6 +108,7 @@ const DATA: SidebarData = {
   undoDepth: 2,
   planSteps: 4,
   workspaceRoot: null,
+  studioConnected: true,
 };
 
 describe("workspace root", () => {

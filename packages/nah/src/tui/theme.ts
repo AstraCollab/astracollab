@@ -9,16 +9,16 @@ import { Markdown, type DefaultTextStyle, type EditorTheme, type MarkdownTheme, 
 import { c } from "../render.js";
 
 export const selectListTheme: SelectListTheme = {
-  selectedPrefix: (text: string) => c.cyan(text),
-  selectedText: (text: string) => c.bold(text),
+  selectedPrefix: (text: string) => c.purple(text),
+  selectedText: (text: string) => c.purple(c.bold(text)),
   description: (text: string) => c.dim(text),
   scrollInfo: (text: string) => c.dim(text),
   noMatch: (text: string) => c.dim(text),
 };
 
 export const editorTheme: EditorTheme = {
-  // Neutral: the editor should not compete with the transcript for attention.
-  borderColor: (text: string) => c.dim(text),
+  // A quiet violet edge anchors the prompt and autocomplete in the layout.
+  borderColor: (text: string) => c.purple(text),
   selectList: selectListTheme,
 };
 

@@ -73,6 +73,8 @@ export type NahAgentContext = {
 	messages: ModelMessage[];
 	/** Aborted when the client goes away or the turn is stopped. */
 	signal: AbortSignal;
+	/** Trusted, request-scoped context supplied by the HTTP adapter. */
+	requestContext?: unknown;
 };
 
 /**
@@ -100,6 +102,40 @@ export type NahAgentSpec = Omit<
 export type NahAgentFactory = (
 	context: NahAgentContext,
 ) => NahAgentSpec | Promise<NahAgentSpec>;
+
+/**
+ * The memory back-end interface the runtime uses to inject context and learn
+ * from turns. Implement this and pass it as `memory` to `createNahHandler`
+ * or `createNahRuntime` — you do not need any particular memory package to use
+ * the framework. The shipped CognitiveMemory implementation wires in cogmemory
+ * behind this same contract.
+ */
+export type NahMemory = {
+	/** Builds the prompt block for a turn. Sync or async — both are first-class. */
+	getPromptContext(currentUserMessage?: string): string | Promise<string>;
+	/** Learn from a finished exchange. Optional: recall-only deployments omit it. */
+	postTurnAsync?(turn: { userMessage: string; assistantResponse: string }): Promise<unknown>;
+	/** Serialise the engine's full state for persistence. Optional. */
+	getSnapshot?(): unknown;
+	/** Restore a serialised snapshot from storage. Optional. */
+	loadSnapshot?(snapshot: unknown): void;
+};
+
+/** Options the runtime needs to drive a memory back-end. Same shape either side. */
+export type NahMemoryOptions = {
+	/** The memory back-end. Owned by the caller; the same instance serves every turn. */
+	memory: NahMemory;
+	/** Where the engine's state lives between turns. */
+	stateStore?: { load(key: string): Promise<unknown>; save(key: string, snapshot: unknown): Promise<void> };
+	/** Identifies the state — per chat, or per caller depending on what should be shared. */
+	key?: string;
+	/** Report failures on read/write/learn rather than failing the turn. */
+	onError?: (operation: "load-state" | "save-state" | "learn", error: unknown) => void;
+	/** Consecutive failures before a state operation is retried. Default 3. */
+	circuitThreshold?: number;
+	/** Stay open for this long after consecutive failures. Default 30s. */
+	circuitCooldownMs?: number;
+};
 
 /** How a turn ended. Handed to `onTurnFinish`. */
 export type NahTurnSummary = {
@@ -134,6 +170,15 @@ export type NahRuntimeOptions = {
 	after?: (task: () => void | Promise<void>) => void;
 	/** Called when a turn ends, for logging. */
 	onTurnFinish?: (summary: NahTurnSummary) => void;
+	/**
+ * Memory integration options. When provided, the memory layer is activated:
+ * - `buildMemoryContext` is called pre-turn to inject the memory block into the prompt.
+ * - `learnFromTurn` is called post-turn to persist what was learned.
+ * Default `undefined`: memory is off. Set to a `NahMemoryOptions` object to enable.
+ * This makes the framework plug-in play — you can swap the memory back-end
+ * (vector DB, Mastra, etc.) by implementing the `NahMemoryLike` protocol.
+ */
+memory?: NahMemoryOptions;
 };
 
 /** The runtime's surface. */
@@ -141,12 +186,12 @@ export type NahRuntime = {
 	/** The frames of one turn. */
 	frames: (
 		request: NahTurnRequest,
-		options?: { signal?: AbortSignal },
+		options?: { signal?: AbortSignal; requestContext?: unknown },
 	) => AsyncGenerator<NahFrame>;
 	/** A turn, as an event-stream response. */
 	turn: (
 		request: NahTurnRequest,
-		options?: { signal?: AbortSignal },
+		options?: { signal?: AbortSignal; requestContext?: unknown },
 	) => Response;
 	/**
 	 * Replay what a client missed, then follow along live.
@@ -402,7 +447,7 @@ export const createNahRuntime = (options: NahRuntimeOptions): NahRuntime => {
 
 	async function* frames(
 		request: NahTurnRequest,
-		turnOptions: { signal?: AbortSignal } = {},
+		turnOptions: { signal?: AbortSignal; requestContext?: unknown } = {},
 	): AsyncGenerator<NahFrame> {
 		const sessionId = request.sessionId ?? createSessionId();
 		const runId = createRunId();
@@ -441,10 +486,39 @@ export const createNahRuntime = (options: NahRuntimeOptions): NahRuntime => {
 				sessionId,
 				messages: plan.messages,
 				signal: controller.signal,
+				...(turnOptions.requestContext === undefined ? {} : { requestContext: turnOptions.requestContext }),
 			});
+
+			// Pre-turn: build memory context and inject into system prompt.
+			let memoryContext = "";
+			let memoryDegraded = false;
+			if (options.memory) {
+				const { memory, stateStore, key, onError, circuitThreshold, circuitCooldownMs } = options.memory;
+				// Restore persisted state
+				if (stateStore && key && memory.getSnapshot && memory.loadSnapshot) {
+					try {
+						const snapshot = await stateStore.load(key);
+						if (snapshot != null) memory.loadSnapshot(snapshot);
+					} catch (error) {
+						onError?.("load-state", error);
+					}
+				}
+				// Get prompt context
+				try {
+					memoryContext = await memory.getPromptContext(plan.prompt);
+				} catch (error) {
+					onError?.("load-state", error);
+					memoryDegraded = true;
+				}
+			}
+
+			const systemWithMemory = memoryContext
+				? (spec.system ? `${spec.system}\n${memoryContext}` : memoryContext)
+				: spec.system;
 
 			const run = runAgent({
 				...spec,
+				system: systemWithMemory,
 				messages: plan.messages,
 				prompt: plan.prompt,
 				toolResumeData: plan.toolResumeData ?? spec.toolResumeData,
@@ -488,6 +562,29 @@ export const createNahRuntime = (options: NahRuntimeOptions): NahRuntime => {
 						await session.append(sessionId, update.messages);
 					} else {
 						await session.replace(sessionId, update.messages);
+					}
+
+					// Post-turn: learn from the exchange.
+					if (options.memory && memoryContext) {
+						const { memory, stateStore, key, onError } = options.memory;
+						try {
+							if (memory.postTurnAsync) {
+								await memory.postTurnAsync({
+									userMessage: plan.prompt,
+									assistantResponse: outcome.result.text,
+								});
+							}
+							// Persist state
+							if (stateStore && key && memory.getSnapshot) {
+								try {
+									await stateStore.save(key, memory.getSnapshot());
+								} catch (error) {
+									onError?.("save-state", error);
+								}
+							}
+						} catch (error) {
+							onError?.("learn", error);
+						}
 					}
 				}
 
@@ -549,7 +646,7 @@ export const createNahRuntime = (options: NahRuntimeOptions): NahRuntime => {
 
 	const turn = (
 		request: NahTurnRequest,
-		turnOptions: { signal?: AbortSignal } = {},
+		turnOptions: { signal?: AbortSignal; requestContext?: unknown } = {},
 	): Response =>
 		createEventStreamResponse(frames(request, turnOptions), {
 			headers: options.headers,

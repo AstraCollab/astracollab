@@ -57,6 +57,8 @@ export type SidebarData = {
   planSteps: number | null;
   /** Directory the file tools are confined to. Equals `cwd` unless widened. */
   workspaceRoot: string | null;
+  /** True when this session is connected to a running Studio dashboard. */
+  studioConnected: boolean;
 };
 
 /** 1.2k / 3.4m, matching the status line's notation. */
@@ -101,10 +103,10 @@ const shortPath = (value: string): string => {
  */
 export const formatSidebar = (data: SidebarData, width: number): string[] => {
   const lines: string[] = [];
-  const section = (label: string) => lines.push(c.dim(label.toUpperCase()));
+  const section = (label: string) => lines.push(c.purple(label));
   const row = (value: string) => lines.push(clip(value, width));
 
-  section("session");
+  section("Session");
   row(c.bold(data.sessionId));
   row(c.dim(shortPath(data.cwd)));
   // Only when it differs from `cwd`: in a monorepo the root is usually one level
@@ -113,11 +115,11 @@ export const formatSidebar = (data: SidebarData, width: number): string[] => {
     row(c.dim(`root ${shortPath(data.workspaceRoot)}`));
   }
 
-  section("model");
+  section("Model");
   row(c.cyan(data.modelProvider));
   row(clip(data.modelId, width));
 
-  section("context");
+  section("Context");
   // `~` marks the figure as derived, the same convention as the status line.
   row(`${data.contextEstimated ? "~" : ""}${formatTokens(data.contextUsedTokens)} used`);
 
@@ -129,7 +131,7 @@ export const formatSidebar = (data: SidebarData, width: number): string[] => {
    * everything the session has sent so far. Under one heading the two look
    * like they contradict each other.
    */
-  section("tokens");
+  section("Tokens");
   /**
    * The hit rate is the diagnostic that matters most here: below ~80% the run is
    * rewriting its prefix instead of reading it back, which costs roughly 10x on
@@ -178,11 +180,12 @@ export const formatSidebar = (data: SidebarData, width: number): string[] => {
     row(c.dim(limit === null ? `${formatUsd(spend)} spent` : `${formatUsd(spend)} / ${formatUsd(limit)} ceiling`));
   }
 
-  section("session state");
+  section("Session state");
   row(`${data.turns} turn${data.turns === 1 ? "" : "s"}`);
-  row(c.magenta(`mode ${data.permissions}`));
+  row(c.purple(`mode ${data.permissions}`));
   if (data.planSteps !== null) row(c.dim(`plan ${data.planSteps} step${data.planSteps === 1 ? "" : "s"}`));
   if (data.undoDepth > 0) row(c.dim(`${data.undoDepth} undoable`));
+  if (data.studioConnected) row(c.green("studio connected"));
   if (data.providerStatus) row(c.yellow(clip(data.providerStatus, width)));
 
   return lines;

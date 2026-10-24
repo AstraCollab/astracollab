@@ -337,33 +337,21 @@ export const formatFileChange = (change: RenderableFileChange): string[] => {
     for (let i = Math.max(0, index - 3); i <= Math.min(diff.length - 1, index + 3); i += 1) visibleIndexes.add(i);
   }
   const lines = [
-    `${c.cyan("◆")} ${c.bold(change.path)} ${faint(`${added} additions · ${removed} removals`)}`,
-    faint("  ┌─────┬─────┬────────────────────────────────────────────────────────"),
+    `${c.purple("▸")} ${c.bold(change.path)}  ${c.added(`+${added}`)} ${c.removed(`−${removed}`)}`,
   ];
-  let oldLine = 1;
-  let newLine = 1;
-  const lineNumbers = diff.map((line) => {
-    const result = { old: line.kind === "added" ? "" : String(oldLine), next: line.kind === "removed" ? "" : String(newLine) };
-    if (line.kind !== "added") oldLine += 1;
-    if (line.kind !== "removed") newLine += 1;
-    return result;
-  });
   let previous = -1;
   for (const index of [...visibleIndexes].sort((a, b) => a - b)) {
-    if (previous >= 0 && index > previous + 1) lines.push(c.dim("  │ …"));
+    if (previous >= 0 && index > previous + 1) lines.push(c.dim("    …"));
     const line = diff[index]!;
-    const oldNumber = lineNumbers[index]!.old;
-    const newNumber = lineNumbers[index]!.next;
-    const marker = line.kind === "added" ? c.added("+") : line.kind === "removed" ? c.removed("−") : c.dim("│");
     const value = line.text.slice(0, 220);
-    const text = line.kind === "added" ? c.added(value) : line.kind === "removed" ? c.removed(value) : value;
-    lines.push(`  ${c.dim(oldNumber.padStart(4))} ${c.dim(newNumber.padStart(4))} ${marker} ${text}`);
+    if (line.kind === "added") lines.push(`  ${c.added(`+ ${value}`)}`);
+    else if (line.kind === "removed") lines.push(`  ${c.removed(`− ${value}`)}`);
+    else lines.push(`  ${c.dim("  ")}${value}`);
     previous = index;
   }
-  if (changedIndexes.length === 0) lines.push(c.dim("  │ no textual changes"));
-  lines.push(faint("  └─────┴─────┴────────────────────────────────────────────────────────"));
+  if (changedIndexes.length === 0) lines.push(c.dim("  no textual changes"));
   if (lines.length > 124) {
-    return [...lines.slice(0, 120), c.dim(`  │ … ${lines.length - 120} more diff lines`)];
+    return [...lines.slice(0, 120), c.dim(`  … ${lines.length - 120} more diff lines`)];
   }
   return lines;
 };

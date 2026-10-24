@@ -46,6 +46,8 @@ import type {
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 
 export type NahHandlerOptions = NahRuntimeOptions & {
+	/** Resolve trusted context after the host application authenticates the request. */
+	requestContext?: (request: Request) => unknown | Promise<unknown>;
 	/**
 	 * How large a request body may be.
 	 *
@@ -187,7 +189,11 @@ export const createNahHandler = (options: NahHandlerOptions): NahRouteHandlers =
 		// The request's own signal is the run's abort signal: a client that
 		// closes the tab stops the run rather than leaving it burning tokens
 		// for an answer nobody will read.
-		return runtime.turn(turn, { signal: request.signal });
+		const requestContext = await options.requestContext?.(request);
+		return runtime.turn(turn, {
+			signal: request.signal,
+			...(requestContext === undefined ? {} : { requestContext }),
+		});
 	};
 
 	const GET = async (request: Request): Promise<Response> =>

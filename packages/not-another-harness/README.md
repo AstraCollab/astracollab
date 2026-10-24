@@ -948,6 +948,17 @@ if (first.status === "suspended") {
 }
 ```
 
+For a suspended run that must survive a process restart, provide a
+`WorkflowRunStore` to `createNahServer` or `Orchestrator`. The built-in
+`createMemoryWorkflowRunStore()` is for local development; production apps should
+implement the interface with a shared database or key-value store. A checkpoint
+contains the input, state, completed step records and cached outputs needed to
+resume without replaying those completed steps. It does not persist runtime
+context such as request objects or callbacks. Bump a workflow's `version` when
+changing its behavior incompatibly with saved checkpoints. This recovers runs
+after they suspend; it does not checkpoint in-flight steps or coordinate multiple
+workers.
+
 **Watching one run.** `run.start()` resolves at the end; `run.stream()` yields
 `step-start` / `step-delta` / `step-finish` events as they happen, which is what a
 UI wants. Nesting is depth-capped at 64 and fan-out at 64, so a cycle or an
@@ -962,9 +973,33 @@ of throwing, because a sequence's own queue is already the orchestrator's.
 only it can answer. Workflow steps share the caller's workspace; a sub-agent gets
 its own, which is the real difference between nesting a workflow and delegating one.
 
-## Cognitive Memory Cache
+## Cognitive Memory (opt-in)
 
-`not-another-harness` includes an intelligent 4-tier cache layer (`CognitiveMemory`):
+`not-another-harness` ships an intelligent 4-tier cache layer (`CognitiveMemory`) as one implementation of the framework's plug-in `NahMemory` interface. The memory layer is **off by default** — you opt in by passing `memory` to `createNahHandler` or `createNahRuntime`:
+
+```ts
+import { createNahHandler } from "not-another-harness/js";
+import { CognitiveMemory } from "not-another-harness";
+
+export const { GET, POST } = createNahHandler({
+  agent: () => ({ model, system, tools }),
+  memory: {
+    memory: new CognitiveMemory({
+      maxL0Tokens: 2000,
+      maxL1Tokens: 8000,
+      arbiter: createModelArbiter({ model: arbiterModel }),
+    }),
+    key: "session-123",
+    stateStore: {
+      load: (key) => db.load(key),
+      save: (key, snapshot) => db.save(key, snapshot),
+    },
+  },
+});
+```
+
+### The 4-tier cache (when enabled)
+
 - **L0 (Registers)**: Always injected into the prompt. Stores the agent's per-domain reliability record (scores, failure patterns) and any unresolved contradiction.
 - **L1 (Hot Cache)**: Pre-staged prompt context prepared asynchronously at the end of the previous turn.
 - **L2 (Warm Store)**: Indexed memories ready for promotion by the Arbiter.
@@ -972,13 +1007,14 @@ its own, which is the real difference between nesting a workflow and delegating 
 - **Fast Heuristic Gate**: Sub-5ms regex scanner detecting immediate user corrections/contradictions without blocking streaming.
 - **Zero Added TTFT**: Memory arbitration executes asynchronously post-turn; prompt context concatenation takes `<1ms`.
 
+### Using CognitiveMemory directly (without the runtime)
+
 ```ts
 import { CognitiveMemory, createModelArbiter } from "not-another-harness";
 
 const memory = new CognitiveMemory({
   maxL0Tokens: 2000,
   maxL1Tokens: 8000,
-  // Optional: supply a fast arbiter model (Gemini Flash, Haiku, GPT-4o-mini)
   arbiter: createModelArbiter({ model: arbiterModel }),
 });
 
@@ -992,9 +1028,13 @@ await memory.postTurnAsync({
 });
 ```
 
+### Swapping the back-end
+
+The framework defines a `NahMemory` interface. Implement it for vector DBs, Mastra, or any other memory system — the runtime calls the same hooks (`getPromptContext` pre-turn, `postTurnAsync` post-turn, plus optional snapshot methods) and nothing else in the framework changes.
+
 ## Package exports
 
-- `not-another-harness`: agent loop, orchestrator, workflows, tools, prompt builder, caps, compaction, session store, CognitiveMemory, and types.
+- `not-another-harness`: agent loop, orchestrator, workflows, tools, prompt builder, caps, compaction, session store, CognitiveMemory, NahMemory (plug-in memory interface), and types.
 - `not-another-harness/node`: local Node.js workspace environment.
 - `not-another-harness/js`: the Web runtime — a handler that serves a turn as an event stream, with a runtime for callers that want the frames themselves.
 - `not-another-harness/js/client`: the browser half — the `useNahChat` hook, kept out of the server bundle.
@@ -1010,9 +1050,33 @@ pnpm --filter not-another-harness test
  Workflow steps share the caller's workspace; a sub-agent gets
 its own, which is the real difference between nesting a workflow and delegating one.
 
-## Cognitive Memory Cache
+## Cognitive Memory (opt-in)
 
-`not-another-harness` includes an intelligent 4-tier cache layer (`CognitiveMemory`):
+`not-another-harness` ships an intelligent 4-tier cache layer (`CognitiveMemory`) as one implementation of the framework's plug-in `NahMemory` interface. The memory layer is **off by default** — you opt in by passing `memory` to `createNahHandler` or `createNahRuntime`:
+
+```ts
+import { createNahHandler } from "not-another-harness/js";
+import { CognitiveMemory } from "not-another-harness";
+
+export const { GET, POST } = createNahHandler({
+  agent: () => ({ model, system, tools }),
+  memory: {
+    memory: new CognitiveMemory({
+      maxL0Tokens: 2000,
+      maxL1Tokens: 8000,
+      arbiter: createModelArbiter({ model: arbiterModel }),
+    }),
+    key: "session-123",
+    stateStore: {
+      load: (key) => db.load(key),
+      save: (key, snapshot) => db.save(key, snapshot),
+    },
+  },
+});
+```
+
+### The 4-tier cache (when enabled)
+
 - **L0 (Registers)**: Always injected into the prompt. Stores the agent's per-domain reliability record (scores, failure patterns) and any unresolved contradiction.
 - **L1 (Hot Cache)**: Pre-staged prompt context prepared asynchronously at the end of the previous turn.
 - **L2 (Warm Store)**: Indexed memories ready for promotion by the Arbiter.
@@ -1020,13 +1084,14 @@ its own, which is the real difference between nesting a workflow and delegating 
 - **Fast Heuristic Gate**: Sub-5ms regex scanner detecting immediate user corrections/contradictions without blocking streaming.
 - **Zero Added TTFT**: Memory arbitration executes asynchronously post-turn; prompt context concatenation takes `<1ms`.
 
+### Using CognitiveMemory directly (without the runtime)
+
 ```ts
 import { CognitiveMemory, createModelArbiter } from "not-another-harness";
 
 const memory = new CognitiveMemory({
   maxL0Tokens: 2000,
   maxL1Tokens: 8000,
-  // Optional: supply a fast arbiter model (Gemini Flash, Haiku, GPT-4o-mini)
   arbiter: createModelArbiter({ model: arbiterModel }),
 });
 
@@ -1040,9 +1105,13 @@ await memory.postTurnAsync({
 });
 ```
 
+### Swapping the back-end
+
+The framework defines a `NahMemory` interface. Implement it for vector DBs, Mastra, or any other memory system — the runtime calls the same hooks (`getPromptContext` pre-turn, `postTurnAsync` post-turn, plus optional snapshot methods) and nothing else in the framework changes.
+
 ## Package exports
 
-- `not-another-harness`: agent loop, orchestrator, workflows, tools, prompt builder, caps, compaction, session store, CognitiveMemory, and types.
+- `not-another-harness`: agent loop, orchestrator, workflows, tools, prompt builder, caps, compaction, session store, CognitiveMemory, NahMemory (plug-in memory interface), and types.
 - `not-another-harness/node`: local Node.js workspace environment.
 
 ## Develop in this monorepo

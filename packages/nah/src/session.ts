@@ -38,6 +38,15 @@ import { resolveTurnSpendUsd } from "./budget.js";
  */
 const TURN_CONTEXT_LIMIT = 180_000;
 
+/**
+ * How many past turns' undo checkpoints to retain in memory.
+ *
+ * See the comment next to the `undoHistory.push(...)` in `runTurn` for why this
+ * exists: each checkpoint pins the full transcript of its turn, and an
+ * unbounded stack is what takes a long session past available memory.
+ */
+const UNDO_HISTORY_CAP = 25;
+
 /** Asks the user to approve a tool call and resolves with their answer. */
 export type ApprovalPrompt = (question: string) => Promise<string>;
 
@@ -505,6 +514,24 @@ export const runTurn = (
       state.activeFileChanges = null;
       state.activeShellCommands = null;
       state.undoHistory.push({ steps: stepRecoveries, changes: fileChanges, messages: previousMessages, ledgerBefore });
+      // Cap undo history so old message snapshots can be garbage collected.
+      //
+      // Each checkpoint holds a full copy of the transcript at turn start plus
+      // per-step message snapshots, and a long session pushes one per turn.
+      // Nothing prunes them except `/undo` (which only ever reads the last
+      // entry) and `/clear`, so they accumulate until the process runs out of
+      // memory. A user who has been working for hours can hit this silently —
+      // the terminal becomes unresponsive and the only signal is the OS
+      // killing the process.
+      //
+      // 25 turns is far more than any interactive undo session needs: `/undo`
+      // walks back one turn at a time and a user rarely wants to unwind more
+      // than a handful. Beyond that the checkpoints describe work the user has
+      // already moved past, and keeping them costs memory that belongs to the
+      // live transcript instead.
+      if (state.undoHistory.length > UNDO_HISTORY_CAP) {
+        state.undoHistory = state.undoHistory.slice(-UNDO_HISTORY_CAP);
+      }
     }
     // A held tool call ends the run; it is not a finish. Recorded here, where
     // the result is first in hand, because `done` resolves to the result and

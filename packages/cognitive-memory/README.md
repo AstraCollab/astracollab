@@ -58,7 +58,60 @@ one environment variable:
 COGNITIVE_MEMORY_URL=https://memory.example.com
 ```
 
-## The two calls that matter
+## Libraries (Workspaces)
+
+Memory libraries let you partition memory by a `libraryId` string. Two agents on the
+same organization but different machines can each use their own library — recall
+and learning are scoped to that library, while the org-wide default (`libraryId: null`)
+is used when no `libraryId` is provided.
+
+### In the HTTP client
+
+```ts
+import { createClient } from "cogmemory"
+
+const memory = createClient({
+  apiKey: process.env.COGNITIVE_MEMORY_KEY!
+})
+
+// Write to a library scoped to this machine
+await memory.memories.create({
+  libraryId: "laptop-elias",   // any string ID you choose
+  items: [{ content: "My agent starts on this machine" }]
+})
+
+// Recall only from the same library
+const hits = await memory.recall({
+  libraryId: "laptop-elias",
+  query: "my agent starts"
+})
+
+// Build context from the library
+const ctx = await memory.context.build({
+  libraryId: "laptop-elias",
+  userMessage: "Deploy the latest build"
+})
+```
+
+### In the in-process engine
+
+```ts
+import { CognitiveMemory, makeEngine } from "cogmemory/engine"
+
+// When creating the engine, propagate the library ID through your runtime
+const engine = makeEngine({ libraryId: "laptop-elias" })
+```
+
+The default (`libraryId: null`) is the organisation-wide library — fully backward
+compatible. Every read/write filters by `organizationId` and, when set, `libraryId`.
+
+### Library ID best practices
+
+- Use stable, readable IDs: `laptop-elias`, `ci-github-actions`, `proj-frontend`
+- When `libraryId` is `null` or omitted, all memories are org-wide
+- Libraries only restrict recall/learning — they do not prevent cross-library access
+  unless you explicitly avoid writing to the org-wide library
+```
 
 ```ts
 // Before the model runs.

@@ -462,10 +462,10 @@ export class TurnOutput implements Component {
         // Reasoning only carries `text`; the signature/provider metadata that made
         // it replayable is not persisted, so an empty string is possible.
         if (part.type === "reasoning" && typeof part.text === "string" && part.text.trim()) {
-          // `◦` at prose indent, against the `·` that hangs under a call. Both
-          // are dimmed, so the glyph and the indent are what tell them apart.
-          // Plain, not markdown: this is a log line, not an answer.
-          this.addLine(c.dim(`  ◦ ${clipLine(part.text, 100)}`));
+          // A quiet inline label reads as a distinct thought without turning
+          // reasoning into another bullet list in an already busy transcript.
+          // Keep it plain: this is context from the model, not its answer.
+          this.addLine(`  ${c.purple("thinking")} ${c.dim(clipLine(part.text, 160))}`);
           continue;
         }
         if (part.type === "text" && typeof part.text === "string") {

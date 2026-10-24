@@ -210,6 +210,8 @@ export type NahTurnRequest = {
 	approvals?: ToolApprovalAnswers;
 	/** Answers to parked calls, keyed by `toolCallId`. */
 	resumeData?: Record<string, unknown>;
+	/** Trusted context injected by the server adapter; never accept this from client JSON. */
+	requestContext?: unknown;
 };
 
 /**
