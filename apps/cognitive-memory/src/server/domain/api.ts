@@ -28,6 +28,11 @@ export const RememberBody = Schema.Struct({
   /** Groups memories that came from one conversation. */
   sessionId: Schema.optional(Schema.String),
   /**
+   * Which library to scope this operation to. Null means the organisation-wide
+   * library. When set, only memories in that library are considered.
+   */
+  libraryId: Schema.optional(Schema.String),
+  /**
    * Fold restatements into what is already held. On by default: a storage layer
    * that accumulates paraphrases becomes unsearchable within a week.
    */
@@ -36,7 +41,9 @@ export const RememberBody = Schema.Struct({
 
 export const RecallBody = Schema.Struct({
   query: NonEmpty.pipe(Schema.check(Schema.isMaxLength(2000))),
-  limit: Schema.optional(Schema.Number)
+  limit: Schema.optional(Schema.Number),
+  /** Scope the recall to one library. Null means the organisation-wide library. */
+  libraryId: Schema.optional(Schema.String)
 })
 
 /**
@@ -53,7 +60,9 @@ export const TURN_FIELD_LIMIT = 200000
 export const TurnBody = Schema.Struct({
   userMessage: Schema.String.pipe(Schema.check(Schema.isMaxLength(TURN_FIELD_LIMIT))),
   assistantResponse: Schema.String.pipe(Schema.check(Schema.isMaxLength(TURN_FIELD_LIMIT))),
-  sessionId: Schema.optional(Schema.String)
+  sessionId: Schema.optional(Schema.String),
+  /** Scope the turn learning to one library. Null means the organisation-wide library. */
+  libraryId: Schema.optional(Schema.String)
 })
 
 export const ContextBody = Schema.Struct({
@@ -63,6 +72,8 @@ export const ContextBody = Schema.Struct({
   forceFull: Schema.optional(Schema.Array(Schema.String)),
   /** Override the service-wide injection budget for this call. */
   maxTokens: Schema.optional(Schema.Number),
+  /** Scope the context build to one library. Null means the organisation-wide library. */
+  libraryId: Schema.optional(Schema.String),
   sessionId: Schema.optional(Schema.String)
 })
 

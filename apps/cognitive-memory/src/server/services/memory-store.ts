@@ -51,6 +51,7 @@ const toItem = (row: typeof memories.$inferSelect): MemoryItem =>
   new MemoryItem({
     id: row.id,
     organizationId: row.organizationId,
+    ...(row.libraryId === null ? {} : { libraryId: row.libraryId ?? undefined }),
     content: row.content,
     bookmark: row.bookmark,
     ...(row.gist === null ? {} : { gist: row.gist }),
@@ -129,10 +130,11 @@ export interface StoreService {
     readonly tiers?: ReadonlyArray<MemoryTier>
     readonly limit?: number
     readonly sessionId?: string
+    readonly libraryId?: string | null | undefined
   }) => Effect.Effect<Array<MemoryItem>, StorageFailure>
 
   /** Everything the engine may consider for injection or arbitration. */
-  readonly activeMemories: (organizationId: string, limit: number) => Effect.Effect<Array<MemoryItem>, StorageFailure>
+  readonly activeMemories: (organizationId: string, limit: number, libraryId?: string | null) => Effect.Effect<Array<MemoryItem>, StorageFailure>
 
   readonly getMemory: (organizationId: string, id: string) => Effect.Effect<MemoryItem, StorageFailure | NotFound>
 
@@ -148,6 +150,7 @@ export interface StoreService {
       readonly now: number
       readonly source: MemorySource
       readonly sessionId?: string | undefined
+      readonly libraryId?: string | null | undefined
     }
   ) => Effect.Effect<MemoryItem, StorageFailure | NotFound>
 
@@ -411,6 +414,9 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
           if (options.sessionId) {
             conditions.push(eq(memories.sourceSessionId, options.sessionId))
           }
+          if (options.libraryId) {
+            conditions.push(eq(memories.libraryId, options.libraryId))
+          }
           return (await db
             .select()
             .from(memories)
@@ -421,13 +427,17 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
             .map(toItem)
         })
 
-      const activeMemories: StoreService["activeMemories"] = (organizationId, limit) =>
+      const activeMemories: StoreService["activeMemories"] = (organizationId, limit, libraryId = null) =>
         run("MemoryStore.activeMemories", async () => {
           // L1 first (pre-staged, always relevant), then the warmest of the rest.
+          const conditions = [eq(memories.organizationId, organizationId)]
+          if (libraryId !== null) {
+            conditions.push(eq(memories.libraryId, libraryId))
+          }
           return (await db
             .select()
             .from(memories)
-            .where(eq(memories.organizationId, organizationId))
+            .where(and(...conditions))
             .orderBy(desc(sql`CASE WHEN ${memories.tier} = 'L1' THEN 1 ELSE 0 END`), desc(memories.lastAccessedAt))
             .limit(Math.max(1, Math.min(limit, 500)))
             .all())
@@ -455,6 +465,7 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
             .values({
               id: input.id,
               organizationId,
+              libraryId: input.libraryId ?? null,
               content: input.content,
               bookmark: input.bookmark,
               gist: input.gist ?? null,

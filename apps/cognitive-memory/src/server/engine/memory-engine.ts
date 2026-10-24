@@ -116,6 +116,7 @@ export interface MemoryEngineService {
    */
   readonly remember: (input: {
     readonly organizationId: string
+    readonly libraryId?: string | null | undefined
     readonly items: ReadonlyArray<{ readonly content: string; readonly domains?: ReadonlyArray<string>; readonly tier?: MemoryTier }>
     readonly sessionId?: string | undefined
     readonly source?: MemorySource | undefined
@@ -131,6 +132,7 @@ export interface MemoryEngineService {
    */
   readonly recall: (input: {
     readonly organizationId: string
+    readonly libraryId?: string | null | undefined
     readonly query: string
     readonly limit?: number | undefined
   }) => Effect.Effect<Array<RecallHit>, StorageFailure>
@@ -143,6 +145,7 @@ export interface MemoryEngineService {
    */
   readonly planContext: (input: {
     readonly organizationId: string
+    readonly libraryId?: string | null | undefined
     readonly userMessage?: string | undefined
     readonly forceFull?: ReadonlyArray<string> | undefined
     readonly maxTokens?: number | undefined
@@ -156,6 +159,7 @@ export interface MemoryEngineService {
    */
   readonly learnFromTurn: (input: {
     readonly organizationId: string
+    readonly libraryId?: string | null | undefined
     readonly userMessage: string
     readonly assistantResponse: string
     readonly sessionId?: string | undefined
@@ -196,7 +200,7 @@ export interface MemoryEngineService {
   }) => Effect.Effect<DomainCapability, StorageFailure>
 
   readonly forget: (organizationId: string, id: string) => Effect.Effect<boolean, StorageFailure>
-  readonly list: (organizationId: string, options?: { readonly tiers?: ReadonlyArray<MemoryTier>; readonly limit?: number }) => Effect.Effect<Array<MemoryItem>, StorageFailure>
+  readonly list: (organizationId: string, options?: { readonly tiers?: ReadonlyArray<MemoryTier>; readonly limit?: number; readonly libraryId?: string | null }) => Effect.Effect<Array<MemoryItem>, StorageFailure>
   readonly promote: (organizationId: string, id: string, tier: MemoryTier) => Effect.Effect<void, NotFound | StorageFailure>
 
   /**
@@ -229,6 +233,7 @@ export interface MemoryEngineService {
       readonly sort?: "recent" | "created" | "accessed" | "alpha" | undefined
       readonly limit?: number | undefined
       readonly offset?: number | undefined
+      readonly libraryId?: string | null | undefined
     }
   ) => Effect.Effect<
     {
@@ -310,7 +315,7 @@ export interface MemoryEngineService {
    * Memories similar enough to a candidate that a restatement should be folded
    * in rather than stored twice.
    */
-  readonly candidatesFor: (organizationId: string, content: string) => Effect.Effect<Array<MemoryItem>, StorageFailure>
+  readonly candidatesFor: (organizationId: string, content: string, libraryId?: string | null) => Effect.Effect<Array<MemoryItem>, StorageFailure>
 }
 
 /** Ids that are unique per row and readable in a log. */
@@ -362,6 +367,7 @@ const makeMemoryEngine = Effect.gen(function*() {
    */
   const storeStatement = (
     organizationId: string,
+    libraryId: string | null,
     statement: {
       readonly content: string
       readonly domains: ReadonlyArray<string>
@@ -389,7 +395,7 @@ const makeMemoryEngine = Effect.gen(function*() {
       }
 
       const at = yield* now
-      const similar = yield* candidatesFor(organizationId, content)
+      const similar = yield* candidatesFor(organizationId, content, libraryId)
 
       if (similar.length > 0) {
         const exact = similar.find((item) => normalise(item.content) === normalise(content))
@@ -410,14 +416,15 @@ const makeMemoryEngine = Effect.gen(function*() {
         domains: statement.domains,
         now: at,
         source: statement.source,
-        ...(statement.sessionId === undefined ? {} : { sessionId: statement.sessionId })
+        ...(statement.sessionId === undefined ? {} : { sessionId: statement.sessionId }),
+        ...(libraryId !== null ? { libraryId } : {})
       })
       return { stored: item, merged: false }
     })
 
-  const candidatesFor: MemoryEngineService["candidatesFor"] = (organizationId, content) =>
+  const candidatesFor: MemoryEngineService["candidatesFor"] = (organizationId, content, libraryId = null) =>
     Effect.gen(function*() {
-      const pool = yield* store.activeMemories(organizationId, 200)
+      const pool = yield* store.activeMemories(organizationId, 200, libraryId)
       const needle = new Set([...relevanceTokens(content)])
       const scored = pool
         .map((item) => ({
@@ -468,7 +475,7 @@ const makeMemoryEngine = Effect.gen(function*() {
       let merged = 0
 
       for (const statement of input.items) {
-        const result = yield* storeStatement(input.organizationId, {
+        const result = yield* storeStatement(input.organizationId, input.libraryId ?? null, {
           content: statement.content,
           domains: statement.domains ?? [],
           source: input.source ?? "api",
@@ -501,7 +508,7 @@ const recall: MemoryEngineService["recall"] = (input) =>
       const query = relevanceTokens(input.query)
       if (query.size === 0) return []
 
-      const pool = yield* store.activeMemories(input.organizationId, 400)
+      const pool = yield* store.activeMemories(input.organizationId, 400, input.libraryId ?? null)
       const scored = pool
         .map((item) => ({
           item,
@@ -543,7 +550,7 @@ const planContext: MemoryEngineService["planContext"] = (input) =>
       if (input.userMessage) {
         for (const identifier of extractIdentifiers(input.userMessage)) {
           const needle = identifier.toLowerCase()
-          for (const item of yield* store.activeMemories(input.organizationId, budgets.maxIndexItems)) {
+          for (const item of yield* store.activeMemories(input.organizationId, budgets.maxIndexItems, input.libraryId ?? null)) {
             if (item.content.toLowerCase().includes(needle)) force.add(item.id)
           }
         }
@@ -614,7 +621,7 @@ const planContext: MemoryEngineService["planContext"] = (input) =>
       }
 
       // 3. The index: one line per memory, bodies withheld unless a trigger earned them.
-      const pool = yield* store.activeMemories(input.organizationId, budgets.maxIndexItems)
+      const pool = yield* store.activeMemories(input.organizationId, budgets.maxIndexItems, input.libraryId ?? null)
       const indexLines: Array<string> = []
       for (const item of pool) {
         const tags = item.metadata.domains.slice(0, 3)
@@ -703,7 +710,7 @@ const planContext: MemoryEngineService["planContext"] = (input) =>
       const pending: Array<{ readonly content: string; readonly survivors: Array<MemoryItem>; readonly storedId: string }> = []
 
       for (const statement of statements) {
-        const result = yield* storeStatement(input.organizationId, {
+        const result = yield* storeStatement(input.organizationId, input.libraryId ?? null, {
           content: statement.content,
           domains: statement.domains,
           source: statement.source,
@@ -722,7 +729,7 @@ const planContext: MemoryEngineService["planContext"] = (input) =>
         const item = result.success.stored
         stored.push(item)
 
-        const survivors = yield* candidatesFor(input.organizationId, statement.content)
+        const survivors = yield* candidatesFor(input.organizationId, statement.content, input.libraryId ?? null)
         if (survivors.length > 0) {
           pending.push({ content: statement.content, survivors, storedId: item.id })
         }

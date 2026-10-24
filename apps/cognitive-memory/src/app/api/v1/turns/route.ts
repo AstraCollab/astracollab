@@ -28,6 +28,7 @@ const learn = (request: Request) =>
 
     const outcome = yield* engine.learnFromTurn({
       organizationId: caller.organizationId,
+      libraryId: body.libraryId ?? null,
       userMessage: body.userMessage,
       assistantResponse: body.assistantResponse,
       ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId })

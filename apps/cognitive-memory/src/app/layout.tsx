@@ -47,9 +47,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           }}
         />
       </head>
-      {/* <CanopyProvider endpoint={process.env.NEXT_PUBLIC_CANOPY_URL ?? ""} siteId={process.env.NEXT_PUBLIC_CANOPY_SITE_ID ?? ""}> */}
+      <CanopyProvider endpoint={process.env.NEXT_PUBLIC_CANOPY_URL ?? ""} siteId={process.env.NEXT_PUBLIC_CANOPY_SITE_ID ?? ""}>
         <body className="min-h-full flex flex-col">{children}</body>
-      {/* </CanopyProvider> */}
+      </CanopyProvider>
     </html>
   );
 }

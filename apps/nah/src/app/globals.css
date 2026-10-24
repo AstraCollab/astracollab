@@ -601,3 +601,116 @@
     padding-top: 70px;
   }
 }
+
+/* Sticky docs rail keeps the page overview directly below the control callout. */
+.docs-aside > .docs-aside-sticky {
+  position: sticky;
+  top: 99px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.docs-aside-callout {
+  padding: 15px;
+  border: 1px solid #ffffff12;
+  border-radius: 8px;
+  background: #ffffff03;
+}
+
+.docs-aside-callout > p:first-child {
+  margin: 0;
+  color: #88799a;
+  font: 7px var(--font-mono);
+  letter-spacing: .14em;
+}
+
+.docs-aside-callout > p:nth-child(2) {
+  margin: 12px 0 0;
+  color: #aaa3b4;
+  font: 9px/1.75 var(--font-sans);
+}
+
+.docs-aside-callout > a {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 13px;
+  color: #c6a9ec;
+  font: 8px var(--font-mono);
+  text-decoration: none;
+}
+
+.docs-aside-callout > a svg {
+  width: 11px;
+}
+
+.docs-toc {
+  margin-top: 24px;
+  padding: 16px 15px 0;
+  border-top: 1px solid #ffffff12;
+}
+
+.docs-toc > p {
+  margin: 0 0 9px;
+  color: #8b7b9e;
+  font: 7px var(--font-mono);
+  letter-spacing: .13em;
+}
+
+.docs-toc ol {
+  position: relative;
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: section-ledger;
+}
+
+.docs-toc li {
+  position: relative;
+  min-height: 31px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  counter-increment: section-ledger;
+}
+
+.docs-toc li::before {
+  content: counter(section-ledger, decimal-leading-zero);
+  padding-top: 7px;
+  color: #796b88;
+  font: 7px var(--font-mono);
+}
+
+.docs-toc a {
+  display: block;
+  padding: 5px 0 7px;
+  border-bottom: 1px solid #ffffff09;
+  color: #9b96a3;
+  font: 9px/1.5 var(--font-sans);
+  text-decoration: none;
+  transition: color .15s ease;
+}
+
+.docs-toc li:last-child a {
+  border-bottom: 0;
+}
+
+.docs-toc a:hover,
+.docs-toc a:focus-visible {
+  color: #d4bfef;
+}
+
+.docs-toc a:focus-visible {
+  outline: 1px solid #bd9ae255;
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .docs-toc a {
+    transition: none;
+  }
+}

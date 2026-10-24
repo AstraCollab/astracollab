@@ -25,12 +25,14 @@ const list = (request: Request) =>
     const url = new URL(request.url)
     const limitParam = Number(url.searchParams.get("limit") ?? "100")
     const tierParam = url.searchParams.get("tier")
+    const libraryId = url.searchParams.get("libraryId") ?? null
 
     const store = yield* MemoryStore
     const tier = TIERS.find((value) => value === tierParam)
     const memories = yield* store.listMemories(caller.organizationId, {
       limit: Number.isFinite(limitParam) ? limitParam : 100,
-      ...(tier === undefined ? {} : { tiers: [tier] })
+      ...(tier === undefined ? {} : { tiers: [tier] }),
+      ...(libraryId ? { libraryId } : {})
     })
     const stats = yield* store.stats(caller.organizationId)
 
@@ -45,6 +47,7 @@ const create = (request: Request) =>
 
     const outcome = yield* engine.remember({
       organizationId: caller.organizationId,
+      libraryId: body.libraryId ?? null,
       items: body.items,
       ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
       source: "api"

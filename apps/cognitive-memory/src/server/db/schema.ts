@@ -53,6 +53,16 @@ export const memories = sqliteTable(
   {
     id: text("id").primaryKey(),
     organizationId: text("organization_id").notNull(),
+    /**
+     * Which library this memory belongs to within the organisation.
+     *
+     * Null means the organisation-wide library — the default, and the only
+     * library a single-machine agent needs. A library is a scope for recall:
+     * two agents on the same codebase but different machines can keep their
+     * own memories without either seeing the other's, by using different
+     * library ids.
+     */
+    libraryId: text("library_id"),
     content: text("content").notNull(),
     /** Dense one-liner used to pre-stage and to show in the index. */
     bookmark: text("bookmark").notNull(),
@@ -73,7 +83,8 @@ export const memories = sqliteTable(
   (table) => [
     index("memories_organization_tier_idx").on(table.organizationId, table.tier),
     index("memories_organization_recent_idx").on(table.organizationId, table.lastAccessedAt),
-    index("memories_session_idx").on(table.organizationId, table.sourceSessionId)
+    index("memories_session_idx").on(table.organizationId, table.sourceSessionId),
+    index("memories_library_idx").on(table.organizationId, table.libraryId)
   ]
 )
 

@@ -25,6 +25,7 @@ const recall = (request: Request) =>
 
     const hits = yield* engine.recall({
       organizationId: caller.organizationId,
+      libraryId: body.libraryId ?? null,
       query: body.query,
       ...(body.limit === undefined ? {} : { limit: body.limit })
     })

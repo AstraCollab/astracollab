@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import {CanopyProvider} from "@wnstn/canopy-nextjs"
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://nah.astracollab.com"),
@@ -42,7 +43,9 @@ export default function RootLayout({
         <link rel="icon" href="/favicon.ico" sizes="any" />
       </head>
       <body className="min-h-screen bg-bg text-text antialiased">
+        <CanopyProvider siteId="canopy_nah_ai_com">
         {children}
+        </CanopyProvider>
       </body>
     </html>
   );

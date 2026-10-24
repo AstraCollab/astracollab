@@ -49,6 +49,37 @@ same change in the same commit.
 | L2 | Warm store | Candidates scored against each turn | Nothing until promoted |
 | L3 | Cold archive | Everything else, still recallable | Nothing until recalled |
 
+## Libraries (Workspaces)
+
+Memory libraries let you partition an organization's memory into separate,
+isolated namespaces. Two agents on the same organization but different machines
+can each use their own library — recall and learning are scoped to that library,
+while the org-wide default (`libraryId: null`) is used when no `libraryId` is
+provided.
+
+```ts
+// Write to a library scoped to this machine
+await memory.memories.create({
+  libraryId: "laptop-elias",
+  items: [{ content: "My agent starts on this machine" }]
+})
+
+// Recall only from the same library
+const hits = await memory.recall({
+  libraryId: "laptop-elias",
+  query: "my agent starts"
+})
+
+// Build context from the library
+const ctx = await memory.context.build({
+  libraryId: "laptop-elias",
+  userMessage: "Deploy the latest build"
+})
+```
+
+The default (`libraryId: null`) is the organisation-wide library — fully backward
+compatible. Every read/write filters by `organizationId` and, when set, `libraryId`.
+
 ## Quickstart
 
 ```sh

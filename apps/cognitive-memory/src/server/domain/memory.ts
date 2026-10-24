@@ -50,6 +50,14 @@ export class MemoryMetadata extends Schema.Class<MemoryMetadata>("cognitive-memo
 export class MemoryItem extends Schema.Class<MemoryItem>("cognitive-memory/MemoryItem")({
   id: Schema.String,
   organizationId: Schema.String,
+  /**
+   * Which library this memory belongs to within the organisation.
+   *
+   * Null means the organisation-wide (default) library. A library lets agents on
+   * different machines scope their recall to a separate set of memories while
+   * staying within the same Better Auth organisation.
+   */
+  libraryId: Schema.optional(Schema.String),
   content: Schema.String,
   /**
    * Dense 1-2 sentence representation. Kept separate from `content` so the

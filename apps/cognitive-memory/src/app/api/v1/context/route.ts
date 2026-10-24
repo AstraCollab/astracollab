@@ -34,6 +34,7 @@ const build = (request: Request) =>
 
     const report = yield* engine.planContext({
       organizationId: caller.organizationId,
+      libraryId: body.libraryId ?? null,
       ...(body.userMessage === undefined ? {} : { userMessage: body.userMessage }),
       ...(body.forceFull === undefined ? {} : { forceFull: body.forceFull }),
       ...(body.maxTokens === undefined ? {} : { maxTokens: body.maxTokens })
