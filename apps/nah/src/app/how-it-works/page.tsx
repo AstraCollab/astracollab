@@ -1,2 +1,11 @@
-import { MarketingPage } from "@/components/MarketingPage";
-export default function HowItWorksPage() { return <MarketingPage page="how-it-works"/>; }
+import type { Metadata } from "next";
+import { HowItWorksPage } from "@/components/HowItWorksPage";
+
+export const metadata: Metadata = {
+  title: "How it works — nah",
+  description: "See how the nah agent loop turns a prompt into bounded, observable work.",
+};
+
+export default function Page() {
+  return <HowItWorksPage />;
+}
