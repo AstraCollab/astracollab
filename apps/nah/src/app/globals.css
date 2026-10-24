@@ -505,10 +505,10 @@
 
   .docs-sidebar {
     position: sticky;
-    top: 62px;
+    top: 0;
     z-index: 35;
     margin: 0 -18px;
-    padding: 9px 0 0;
+    padding: 0;
     border-bottom: 1px solid #ffffff12;
     background: rgba(8, 10, 9, 0.96);
     backdrop-filter: blur(16px);
@@ -589,5 +589,15 @@
 
   .docs-content > section.grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 901px) {
+  .docs-shell > .site-nav {
+    position: fixed;
+  }
+
+  .docs-layout {
+    padding-top: 70px;
   }
 }
