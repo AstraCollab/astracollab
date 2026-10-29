@@ -142,7 +142,6 @@ export function SettingsPanel() {
       <Panel title="Deployment" hint="Read-only. An unusable value is reported here rather than thrown at startup.">
         <Facts
           rows={[
-            ["database", <span key="db" className="truncate">{data.deployment.databaseUrl}</span>],
             [
               "model",
               data.deployment.modelConfigured
