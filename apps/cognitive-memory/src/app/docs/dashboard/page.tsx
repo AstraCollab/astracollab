@@ -75,7 +75,7 @@ const SECTIONS: readonly DocSectionSpec[] = [
             ],
             [
               "/dashboard/memory",
-              "Search, filter, edit, retier and bulk-forget. Plus a recall inspector that names the terms that matched."
+              "Search, filter, edit, retier and bulk-forget — including by project and agent. Plus a recall inspector that names the terms that matched."
             ],
             [
               "/dashboard/tensions",

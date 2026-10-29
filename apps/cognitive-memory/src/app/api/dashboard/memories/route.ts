@@ -43,6 +43,12 @@ const search = (request: Request) =>
       ...(url.searchParams.get("source") === null
         ? {}
         : { source: url.searchParams.get("source") ?? "" }),
+      ...(url.searchParams.get("projectId") === null
+        ? {}
+        : { projectId: url.searchParams.get("projectId") ?? "" }),
+      ...(url.searchParams.get("agentId") === null
+        ? {}
+        : { agentId: url.searchParams.get("agentId") ?? "" }),
       ...(sort === undefined ? {} : { sort }),
       limit: Number.isFinite(limit) ? limit : 50,
       offset: Number.isFinite(offset) ? offset : 0

@@ -55,6 +55,8 @@ export function MemoryPanel() {
   const [tiers, setTiers] = useState<Array<string>>([])
   const [domain, setDomain] = useState("")
   const [source, setSource] = useState("")
+  const [projectId, setProjectId] = useState("")
+  const [agentId, setAgentId] = useState("")
   const [sort, setSort] = useState<Sort>("recent")
   const [offset, setOffset] = useState(0)
   const [selected, setSelected] = useState<Array<string>>([])
@@ -69,11 +71,13 @@ export function MemoryPanel() {
     for (const tier of tiers) search.append("tier", tier)
     if (domain !== "") search.set("domain", domain)
     if (source !== "") search.set("source", source)
+    if (projectId !== "") search.set("projectId", projectId)
+    if (agentId !== "") search.set("agentId", agentId)
     search.set("sort", sort)
     search.set("limit", String(PAGE_SIZE))
     search.set("offset", String(offset))
     return `/api/dashboard/memories?${search.toString()}`
-  }, [query, tiers, domain, source, sort, offset])
+  }, [query, tiers, domain, source, projectId, agentId, sort, offset])
 
   const { data, error, loading, reload } = useResource<MemoryPageResponse>(url)
 
@@ -82,7 +86,7 @@ export function MemoryPanel() {
   useEffect(() => {
     const timer = setTimeout(() => setOffset(0), 250)
     return () => clearTimeout(timer)
-  }, [query, tiers, domain, source])
+  }, [query, tiers, domain, source, projectId, agentId])
 
   /**
    * Run a change, then say what it did.
@@ -238,16 +242,48 @@ export function MemoryPanel() {
                       ))}
                     </select>
                   </Field>
+
+                  <Field label="project">
+                    <select
+                      value={projectId}
+                      onChange={(event) => setProjectId(event.target.value)}
+                      className={inputClass}
+                    >
+                      <option value="">any project</option>
+                      {data.facets.projectIds?.map((entry) => (
+                        <option key={entry.name} value={entry.name} className="bg-[#0e0e13]">
+                          {entry.name} ({entry.count})
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+
+                  <Field label="agent">
+                    <select
+                      value={agentId}
+                      onChange={(event) => setAgentId(event.target.value)}
+                      className={inputClass}
+                    >
+                      <option value="">any agent</option>
+                      {data.facets.agentIds?.map((entry) => (
+                        <option key={entry.name} value={entry.name} className="bg-[#0e0e13]">
+                          {entry.name} ({entry.count})
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
                 </>
               )}
 
-              {(tiers.length > 0 || domain !== "" || source !== "" || query !== "") && (
+              {(tiers.length > 0 || domain !== "" || source !== "" || projectId !== "" || agentId !== "" || query !== "") && (
                 <Button
                   size="sm"
                   onClick={() => {
                     setTiers([])
                     setDomain("")
                     setSource("")
+                    setProjectId("")
+                    setAgentId("")
                     setQuery("")
                   }}
                 >
@@ -313,6 +349,8 @@ export function MemoryPanel() {
                     setTiers([])
                     setDomain("")
                     setSource("")
+                    setProjectId("")
+                    setAgentId("")
                     setQuery("")
                   }}
                   className="text-violet-300 underline underline-offset-2"
@@ -346,6 +384,8 @@ export function MemoryPanel() {
                       <Th>tier</Th>
                       <Th>memory</Th>
                       <Th>domains</Th>
+                      <Th>project</Th>
+                      <Th>agent</Th>
                       <Th className="text-right" title="Times it was put in front of a model">used</Th>
                       <Th className="text-right">last</Th>
                       <Th />
@@ -388,6 +428,12 @@ export function MemoryPanel() {
                             </span>
                           ))}
                         </span>
+                      </Td>
+                      <Td className="font-mono text-[10px] text-zinc-500 truncate">
+                        {memory.projectId}
+                      </Td>
+                      <Td className="font-mono text-[10px] text-zinc-500 truncate">
+                        {memory.agentId}
                       </Td>
                       <Td className="text-right font-mono text-[11px] text-zinc-500">
                         {memory.accessCount}×

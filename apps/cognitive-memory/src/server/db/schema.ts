@@ -53,6 +53,12 @@ export const memories = sqliteTable(
   {
     id: text("id").primaryKey(),
     organizationId: text("organization_id").notNull(),
+    /** Project this memory belongs to. Required for multi-project isolation. */
+    projectId: text("project_id").notNull().default("default"),
+    /** Agent that created this memory. Required for multi-agent isolation. */
+    agentId: text("agent_id").notNull().default("default"),
+    /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+    agentType: text("agent_type"),
     /**
      * Which library this memory belongs to within the organisation.
      *
@@ -61,6 +67,9 @@ export const memories = sqliteTable(
      * two agents on the same codebase but different machines can keep their
      * own memories without either seeing the other's, by using different
      * library ids.
+     *
+     * @deprecated Use projectId + agentId instead. Kept for backward compatibility.
+     *  Derived from projectId:agentId when not explicitly set.
      */
     libraryId: text("library_id"),
     content: text("content").notNull(),
@@ -84,7 +93,13 @@ export const memories = sqliteTable(
     index("memories_organization_tier_idx").on(table.organizationId, table.tier),
     index("memories_organization_recent_idx").on(table.organizationId, table.lastAccessedAt),
     index("memories_session_idx").on(table.organizationId, table.sourceSessionId),
-    index("memories_library_idx").on(table.organizationId, table.libraryId)
+    index("memories_library_idx").on(table.organizationId, table.libraryId),
+    /** Composite index for project-scoped queries. */
+    index("memories_organization_project_idx").on(table.organizationId, table.projectId),
+    /** Composite index for project+agent scoped queries. */
+    index("memories_organization_project_agent_idx").on(table.organizationId, table.projectId, table.agentId),
+    /** Index for agent-type filtered queries. */
+    index("memories_organization_agent_type_idx").on(table.organizationId, table.agentType),
   ]
 )
 
@@ -93,6 +108,10 @@ export const tensions = sqliteTable(
   {
     id: text("id").primaryKey(),
     organizationId: text("organization_id").notNull(),
+    /** Project this tension belongs to. */
+    projectId: text("project_id").notNull().default("default"),
+    /** Agent this tension belongs to. */
+    agentId: text("agent_id").notNull().default("default"),
     /** active | latent | resolved */
     status: text("status").notNull().default("active"),
     claimA: text("claim_a", { mode: "json" }).$type<Claim>().notNull(),
@@ -105,7 +124,11 @@ export const tensions = sqliteTable(
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull()
   },
-  (table) => [index("tensions_organization_status_idx").on(table.organizationId, table.status)]
+  (table) => [
+    index("tensions_organization_status_idx").on(table.organizationId, table.status),
+    index("tensions_organization_project_idx").on(table.organizationId, table.projectId),
+    index("tensions_organization_project_agent_idx").on(table.organizationId, table.projectId, table.agentId),
+  ]
 )
 
 /**
@@ -146,6 +169,10 @@ export const injectionLogs = sqliteTable(
   {
     id: text("id").primaryKey(),
     organizationId: text("organization_id").notNull(),
+    /** Project this injection belongs to. */
+    projectId: text("project_id").notNull().default("default"),
+    /** Agent this injection belongs to. */
+    agentId: text("agent_id").notNull().default("default"),
     apiKeyId: text("api_key_id"),
     tokens: integer("tokens").notNull().default(0),
     truncated: integer("truncated", { mode: "boolean" }).notNull().default(false),
@@ -162,7 +189,11 @@ export const injectionLogs = sqliteTable(
     text: text("text").notNull().default(""),
     createdAt: text("created_at").notNull()
   },
-  (table) => [index("injection_logs_organization_idx").on(table.organizationId, table.createdAt)]
+  (table) => [
+    index("injection_logs_organization_idx").on(table.organizationId, table.createdAt),
+    index("injection_logs_organization_project_idx").on(table.organizationId, table.projectId),
+    index("injection_logs_organization_project_agent_idx").on(table.organizationId, table.projectId, table.agentId),
+  ]
 )
 
 /**
@@ -178,6 +209,10 @@ export const domainOutcomes = sqliteTable(
   {
     id: text("id").primaryKey(),
     organizationId: text("organization_id").notNull(),
+    /** Project this outcome belongs to. */
+    projectId: text("project_id").notNull().default("default"),
+    /** Agent this outcome belongs to. */
+    agentId: text("agent_id").notNull().default("default"),
     domain: text("domain").notNull(),
     success: integer("success", { mode: "boolean" }).notNull(),
     failurePattern: text("failure_pattern"),
@@ -186,7 +221,9 @@ export const domainOutcomes = sqliteTable(
   },
   (table) => [
     index("domain_outcomes_organization_idx").on(table.organizationId, table.createdAt),
-    index("domain_outcomes_domain_idx").on(table.organizationId, table.domain)
+    index("domain_outcomes_domain_idx").on(table.organizationId, table.domain),
+    index("domain_outcomes_organization_project_idx").on(table.organizationId, table.projectId),
+    index("domain_outcomes_organization_project_agent_idx").on(table.organizationId, table.projectId, table.agentId),
   ]
 )
 
@@ -209,6 +246,10 @@ export const usageEvents = sqliteTable(
   {
     id: text("id").primaryKey(),
     organizationId: text("organization_id").notNull(),
+    /** Project this usage event belongs to. */
+    projectId: text("project_id").notNull().default("default"),
+    /** Agent this usage event belongs to. */
+    agentId: text("agent_id").notNull().default("default"),
     apiKeyId: text("api_key_id"),
     /** Which endpoint was called. */
     route: text("route").notNull(),
@@ -216,7 +257,11 @@ export const usageEvents = sqliteTable(
     injectedTokens: integer("injected_tokens"),
     createdAt: text("created_at").notNull()
   },
-  (table) => [index("usage_events_organization_idx").on(table.organizationId, table.createdAt)]
+  (table) => [
+    index("usage_events_organization_idx").on(table.organizationId, table.createdAt),
+    index("usage_events_organization_project_idx").on(table.organizationId, table.projectId),
+    index("usage_events_organization_project_agent_idx").on(table.organizationId, table.projectId, table.agentId),
+  ]
 )
 
 export type Claim = {

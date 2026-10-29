@@ -27,6 +27,9 @@ export const toMemoryView = (item: MemoryItem): MemoryView => ({
   tier: item.tier,
   domains: item.metadata.domains,
   accessCount: item.metadata.accessCount,
+  projectId: item.projectId,
+  agentId: item.agentId,
+  ...(item.agentType === undefined ? {} : { agentType: item.agentType }),
   ...(item.source === undefined ? {} : { source: item.source }),
   ...(item.metadata.sourceSessionId === undefined
     ? {}

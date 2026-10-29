@@ -230,6 +230,8 @@ export interface MemoryEngineService {
       readonly tiers?: ReadonlyArray<string> | undefined
       readonly domain?: string | undefined
       readonly source?: string | undefined
+      readonly projectId?: string | undefined
+      readonly agentId?: string | undefined
       readonly sort?: "recent" | "created" | "accessed" | "alpha" | undefined
       readonly limit?: number | undefined
       readonly offset?: number | undefined
@@ -245,6 +247,8 @@ export interface MemoryEngineService {
         readonly tiers: Record<string, number>
         readonly sources: Record<string, number>
         readonly domains: ReadonlyArray<{ readonly name: string; readonly count: number }>
+        readonly projectIds: ReadonlyArray<{ readonly name: string; readonly count: number }>
+        readonly agentIds: ReadonlyArray<{ readonly name: string; readonly count: number }>
       }
     },
     StorageFailure
@@ -609,7 +613,7 @@ const planContext: MemoryEngineService["planContext"] = (input) =>
                 pitfalls ? ` Known pitfalls: ${pitfalls}` : ""
               }${approach ? ` Approach: ${approach}` : ""}`,
               bookmark: `${domain} weak domain`,
-              metadata: new MemoryMetadata({ domains: [domain], createdAt: 0, lastAccessedAt: 0, accessCount: 0 }),
+              metadata: new MemoryMetadata({ domains: [domain], projectId: "default", agentId: "default", createdAt: 0, lastAccessedAt: 0, accessCount: 0 }),
               tier: "L0"
             },
             "guardrail",
@@ -653,7 +657,7 @@ const planContext: MemoryEngineService["planContext"] = (input) =>
               id: tension.id,
               content: `${tension.claimA.statement} vs ${tension.claimB.statement} — ${tension.actionableQuestion}`,
               bookmark: tension.claimA.statement,
-              metadata: new MemoryMetadata({ domains: [], createdAt: tension.claimA.timestamp, lastAccessedAt: 0, accessCount: 0 }),
+              metadata: new MemoryMetadata({ domains: [], projectId: "default", agentId: "default", createdAt: tension.claimA.timestamp, lastAccessedAt: 0, accessCount: 0 }),
               tier: "L0"
             },
             "tension",

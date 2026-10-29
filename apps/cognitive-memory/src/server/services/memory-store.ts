@@ -52,12 +52,18 @@ const toItem = (row: typeof memories.$inferSelect): MemoryItem =>
     id: row.id,
     organizationId: row.organizationId,
     ...(row.libraryId === null ? {} : { libraryId: row.libraryId ?? undefined }),
+    projectId: row.projectId,
+    agentId: row.agentId,
+    agentType: row.agentType ?? undefined,
     content: row.content,
     bookmark: row.bookmark,
     ...(row.gist === null ? {} : { gist: row.gist }),
     tier: row.tier as MemoryTier,
     metadata: new MemoryMetadata({
       domains: row.domains,
+      projectId: row.projectId,
+      agentId: row.agentId,
+      agentType: row.agentType ?? undefined,
       createdAt: msOf(row.createdAt),
       lastAccessedAt: msOf(row.lastAccessedAt),
       accessCount: row.accessCount,
@@ -113,6 +119,8 @@ export interface MemoryPage {
     readonly tiers: Record<string, number>
     readonly sources: Record<string, number>
     readonly domains: ReadonlyArray<{ readonly name: string; readonly count: number }>
+    readonly projectIds: ReadonlyArray<{ readonly name: string; readonly count: number }>
+    readonly agentIds: ReadonlyArray<{ readonly name: string; readonly count: number }>
   }
 }
 
@@ -283,6 +291,8 @@ export interface StoreService {
       readonly tiers?: ReadonlyArray<string> | undefined
       readonly domain?: string | undefined
       readonly source?: string | undefined
+      readonly projectId?: string | undefined
+      readonly agentId?: string | undefined
       readonly sort?: "recent" | "created" | "accessed" | "alpha" | undefined
       readonly limit?: number | undefined
       readonly offset?: number | undefined
@@ -851,6 +861,12 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
           if (query.source !== undefined && query.source !== "") {
             conditions.push(eq(memories.source, query.source))
           }
+          if (query.projectId !== undefined && query.projectId !== "") {
+            conditions.push(eq(memories.projectId, query.projectId))
+          }
+          if (query.agentId !== undefined && query.agentId !== "") {
+            conditions.push(eq(memories.agentId, query.agentId))
+          }
 
           const order = (() => {
             switch (query.sort) {
@@ -902,14 +918,18 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
           }
 
           const domainCounts = new Map<string, number>()
+          const projectIdCounts = new Map<string, number>()
+          const agentIdCounts = new Map<string, number>()
           for (const row of await db
-            .select({ domains: memories.domains })
+            .select({ domains: memories.domains, projectId: memories.projectId, agentId: memories.agentId })
             .from(memories)
             .where(eq(memories.organizationId, organizationId))
             .all()) {
             for (const domain of row.domains) {
               domainCounts.set(domain, (domainCounts.get(domain) ?? 0) + 1)
             }
+            projectIdCounts.set(row.projectId, (projectIdCounts.get(row.projectId) ?? 0) + 1)
+            agentIdCounts.set(row.agentId, (agentIdCounts.get(row.agentId) ?? 0) + 1)
           }
 
           return {
@@ -921,6 +941,12 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
               tiers,
               sources,
               domains: [...domainCounts.entries()]
+                .map(([name, count]) => ({ name, count }))
+                .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+              projectIds: [...projectIdCounts.entries()]
+                .map(([name, count]) => ({ name, count }))
+                .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+              agentIds: [...agentIdCounts.entries()]
                 .map(([name, count]) => ({ name, count }))
                 .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
             }

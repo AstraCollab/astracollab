@@ -117,6 +117,12 @@ export interface MemoryRow {
   accessCount: number
   source?: string
   sessionId?: string
+  /** Project this memory belongs to. */
+  projectId: string
+  /** Agent that created this memory. */
+  agentId: string
+  /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+  agentType?: string
   createdAt: number
   lastAccessedAt: number
 }
@@ -264,6 +270,8 @@ export interface MemoryPageResponse {
     tiers: Record<string, number>
     sources: Record<string, number>
     domains: Array<{ name: string; count: number }>
+    projectIds: Array<{ name: string; count: number }>
+    agentIds: Array<{ name: string; count: number }>
   }
 }
 

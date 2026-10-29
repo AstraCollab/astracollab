@@ -173,6 +173,8 @@ const SECTIONS: readonly DocSectionSpec[] = [
       "tier": "L1",
       "reason": "index",
       "gist": "Deploy target is ZQ7X4M2K",
+      "projectId": "default",
+      "agentId": "default",
       "tokens": 9
     },
     {
@@ -180,6 +182,8 @@ const SECTIONS: readonly DocSectionSpec[] = [
       "tier": "L1",
       "reason": "trigger",
       "gist": "Staging host is internal-hbr-2291.pineapple.example",
+      "projectId": "default",
+      "agentId": "default",
       "body": "The staging host for the billing service is internal-hbr-2291.pineapple.example, owned by platform.",
       "tokens": 31
     }
@@ -229,6 +233,8 @@ result.rejected  // [{ content, reason }] — never silent`}
       "tier": "L1",
       "domains": [],
       "accessCount": 0,
+      "projectId": "default",
+      "agentId": "default",
       "source": "rules",
       "createdAt": 1767225600000,
       "lastAccessedAt": 1767225600000
@@ -278,6 +284,8 @@ if (empty) return "If you were not told, say so rather than guessing."`}
         "tier": "L1",
         "domains": ["infra"],
         "accessCount": 4,
+        "projectId": "default",
+        "agentId": "default",
         "createdAt": 1767225600000,
         "lastAccessedAt": 1767312000000
       },

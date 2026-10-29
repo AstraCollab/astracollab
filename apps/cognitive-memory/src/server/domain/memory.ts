@@ -41,6 +41,12 @@ export type ReconciliationAction = typeof ReconciliationAction.Type
 
 export class MemoryMetadata extends Schema.Class<MemoryMetadata>("cognitive-memory/MemoryMetadata")({
   domains: Schema.Array(Schema.String),
+  /** Project this memory belongs to. Required for multi-project isolation. */
+  projectId: Schema.String,
+  /** Agent that created this memory. Required for multi-agent isolation. */
+  agentId: Schema.String,
+  /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+  agentType: Schema.optional(Schema.String),
   createdAt: Schema.Number,
   lastAccessedAt: Schema.Number,
   accessCount: Schema.Number,
@@ -58,6 +64,12 @@ export class MemoryItem extends Schema.Class<MemoryItem>("cognitive-memory/Memor
    * staying within the same Better Auth organisation.
    */
   libraryId: Schema.optional(Schema.String),
+  /** Project this memory belongs to. Required for multi-project isolation. */
+  projectId: Schema.String,
+  /** Agent that created this memory. Required for multi-agent isolation. */
+  agentId: Schema.String,
+  /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+  agentType: Schema.optional(Schema.String),
   content: Schema.String,
   /**
    * Dense 1-2 sentence representation. Kept separate from `content` so the

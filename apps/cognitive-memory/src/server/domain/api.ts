@@ -189,6 +189,12 @@ export const MemoryView = Schema.Struct({
   tier: MemoryTier,
   domains: Schema.Array(Schema.String),
   accessCount: Schema.Number,
+  /** Project this memory belongs to. */
+  projectId: Schema.String,
+  /** Agent that created this memory. */
+  agentId: Schema.String,
+  /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+  agentType: Schema.optional(Schema.String),
   source: Schema.optional(Schema.String),
   sessionId: Schema.optional(Schema.String),
   createdAt: Schema.Number,

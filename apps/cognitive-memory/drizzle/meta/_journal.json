@@ -22,6 +22,13 @@
       "when": 1792814141079,
       "tag": "0002_fast_whiplash",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1793303095784,
+      "tag": "0003_lethal_leader",
+      "breakpoints": true
     }
   ]
 }
