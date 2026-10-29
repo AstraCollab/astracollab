@@ -29,6 +29,12 @@ export interface KnowledgeTension {
     resolvedBy: string;
     pattern: string;
   };
+  /** Project this tension belongs to. Required for multi-project isolation. */
+  projectId: string;
+  /** Agent that detected this tension. Required for multi-agent isolation. */
+  agentId: string;
+  /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+  agentType?: string;
 }
 
 export interface DomainCapability {
@@ -49,6 +55,12 @@ export interface ProprioceptiveSelfModel {
 
 export interface MemoryMetadata {
   domains: string[];
+  /** Project this memory belongs to. Required for multi-project isolation. */
+  projectId: string;
+  /** Agent that created this memory. Required for multi-agent isolation. */
+  agentId: string;
+  /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+  agentType?: string;
   isFailurePattern?: boolean;
   isSuccessfulStrategy?: boolean;
   isGuardrail?: boolean;
@@ -73,6 +85,12 @@ export interface MemoryItem {
   embedding?: number[];
   tier: MemoryTier;
   metadata: MemoryMetadata;
+  /** Project this memory belongs to. Required for multi-project isolation. */
+  projectId: string;
+  /** Agent that created this memory. Required for multi-agent isolation. */
+  agentId: string;
+  /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+  agentType?: string;
 }
 
 /** Why a memory ended up in the prompt — the thing you tune once you log it. */
@@ -113,6 +131,12 @@ export interface MemoryInjectionEntry {
   body?: string;
   /** Rough token cost of what was included. */
   tokens: number;
+  /** Project this memory belongs to. */
+  projectId: string;
+  /** Agent that created this memory. */
+  agentId: string;
+  /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+  agentType?: string;
 }
 
 /** What was put in the prompt this turn, and why. */
@@ -168,9 +192,21 @@ export type ArbiterFn = (params: {
   l0Prompt: string;
   l1Summaries: Array<{ id: string; bookmark: string; domains: string[] }>;
   candidates: Array<{ id: string; bookmark: string; domains: string[]; hasTension?: boolean }>;
+  /** Project context for this arbiter evaluation */
+  projectId: string;
+  /** Agent context for this arbiter evaluation */
+  agentId: string;
+  /** Agent type context (optional) */
+  agentType?: string;
 }) => Promise<ArbiterEvaluationResult>;
 
 export interface CognitiveMemoryOptions {
+  /** Project this cognitive memory instance operates within. Required for multi-project isolation. */
+  projectId: string;
+  /** Agent identity this cognitive memory instance represents. Required for multi-agent isolation. */
+  agentId: string;
+  /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+  agentType?: string;
   /** Maximum token budget for L0 (default: 2000) */
   maxL0Tokens?: number;
   /** Maximum token budget for L1 hot cache (default: 8000) */

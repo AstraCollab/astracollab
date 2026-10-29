@@ -150,6 +150,12 @@ export interface SeedOptions {
   /** Statements worth keeping regardless of how they are phrased. */
   facts: string[]
   sessionId?: string
+  /** Project this memory belongs to. Required for multi-project isolation. */
+  projectId: string
+  /** Agent that created this memory. Required for multi-agent isolation. */
+  agentId: string
+  /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+  agentType?: string
 }
 
 /**
@@ -165,7 +171,12 @@ export async function seedMemories(memory: Cogmem, options: SeedOptions): Promis
   rejected: LearnResult["rejected"]
 }> {
   const result = await memory.memories.create({
-    items: options.facts.map((content) => ({ content })),
+    items: options.facts.map((content) => ({
+      content,
+      projectId: options.projectId,
+      agentId: options.agentId,
+      agentType: options.agentType,
+    })),
     ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId })
   })
   return { stored: result.stored, merged: result.mergedInto, rejected: result.rejected }

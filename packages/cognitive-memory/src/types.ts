@@ -38,7 +38,14 @@ export interface Memory {
   accessCount: number
   source?: MemorySource
   sessionId?: string
-  /** Which library this memory belongs to. Null means the organisation-wide library. */
+  /** Which project this memory belongs to. Required for multi-project isolation. */
+  projectId: string
+  /** Which agent created this memory. Required for multi-agent isolation. */
+  agentId: string
+  /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+  agentType?: string
+  /** Which library this memory belongs to. Null means the organisation-wide library.
+   *  Derived from projectId + agentId when not explicitly set. */
   libraryId?: string | null
   /** Epoch milliseconds. */
   createdAt: number
@@ -141,6 +148,8 @@ export interface Stats {
   memories: {
     total: number
     byTier: Record<MemoryTier, number>
+    byProject: Record<string, number>
+    byAgent: Record<string, number>
     sessions: number
     firstStoredAt: number
     lastAccessedAt: number
@@ -160,24 +169,53 @@ export interface RememberRequest {
     content: string
     domains?: string[]
     tier?: MemoryTier
+    /** Project this memory belongs to. Required. */
+    projectId: string
+    /** Agent that created this memory. Required. */
+    agentId: string
+    /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+    agentType?: string
   }>
   /** Groups memories from one conversation. */
   sessionId?: string
-  /** Which library to scope this operation to. Null means the organisation-wide library. */
+  /** Default projectId for items that don't specify one. */
+  projectId?: string
+  /** Default agentId for items that don't specify one. */
+  agentId?: string
+  /** Default agentType for items that don't specify one. */
+  agentType?: string
+  /** Which library to scope this operation to. Null means the organisation-wide library.
+   *  @deprecated Use projectId + agentId instead. Kept for backward compatibility. */
   libraryId?: string | null
 }
 
 export interface ListMemoriesParams {
   limit?: number
   tier?: MemoryTier
-  /** Which library to scope the list to. Null means the organisation-wide library. */
+  /** Filter by project. */
+  projectId?: string
+  /** Filter by agent. */
+  agentId?: string
+  /** Filter by agent type. */
+  agentType?: string
+  /** Which library to scope the list to. Null means the organisation-wide library.
+   *  @deprecated Use projectId + agentId instead. Kept for backward compatibility. */
   libraryId?: string | null
 }
 
 export interface RecallRequest {
   query: string
   limit?: number
-  /** Which library to scope the recall to. Null means the organisation-wide library. */
+  /** Filter by project. */
+  projectId?: string
+  /** Filter by agent. */
+  agentId?: string
+  /** Filter by agent type. */
+  agentType?: string
+  /** Include memories from all agents in the project (opt-in cross-agent recall). */
+  includeAllAgents?: boolean
+  /** Which library to scope the recall to. Null means the organisation-wide library.
+   *  @deprecated Use projectId + agentId instead. Kept for backward compatibility. */
   libraryId?: string | null
 }
 
@@ -191,6 +229,10 @@ export interface TurnRequest {
   userMessage: string
   assistantResponse: string
   sessionId?: string
+  /** Project this turn belongs to. */
+  projectId?: string
+  /** Agent processing this turn. */
+  agentId?: string
 }
 
 export interface ContextRequest {
@@ -199,6 +241,12 @@ export interface ContextRequest {
   /** Ids whose body to include regardless of tier. */
   forceFull?: string[]
   maxTokens?: number
+  /** Project to scope the context build to. */
+  projectId?: string
+  /** Agent to scope the context build to. */
+  agentId?: string
+  /** Include memories from all agents in the project. */
+  includeAllAgents?: boolean
 }
 
 export interface AddTensionRequest {
@@ -206,12 +254,20 @@ export interface AddTensionRequest {
   claimB: string
   impact?: Impact
   actionableQuestion: string
+  /** Project this tension belongs to. */
+  projectId?: string
+  /** Agent this tension belongs to. */
+  agentId?: string
 }
 
 export interface ResolveTensionRequest {
   resolvedBy: string
   /** The reusable pattern the resolution revealed. */
   pattern?: string
+  /** Project this tension belongs to. */
+  projectId?: string
+  /** Agent this tension belongs to. */
+  agentId?: string
 }
 
 export interface DomainOutcomeRequest {
@@ -219,6 +275,10 @@ export interface DomainOutcomeRequest {
   success: boolean
   failurePattern?: string
   strategy?: string
+  /** Project this outcome belongs to. */
+  projectId?: string
+  /** Agent this outcome belongs to. */
+  agentId?: string
 }
 
 /* -------------------------------------------------------------------------- */
@@ -248,6 +308,12 @@ export interface CognitiveMemoryConfig {
    */
   debug?: boolean
   headers?: Record<string, string>
+  /** Default projectId for all requests. Required for multi-project isolation. */
+  projectId?: string
+  /** Default agentId for all requests. Required for multi-agent isolation. */
+  agentId?: string
+  /** Default agentType for all requests. */
+  agentType?: string
 }
 
 /** The error envelope every non-2xx response carries. */

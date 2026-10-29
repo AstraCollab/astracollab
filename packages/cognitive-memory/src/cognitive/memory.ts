@@ -74,6 +74,13 @@ export class CognitiveMemory {
   // L3: Cold Archive (historical, loaded on demand)
   private l3ColdArchive: Map<string, MemoryItem> = new Map();
 
+  /** Project this cognitive memory instance operates within. */
+  private projectId: string;
+  /** Agent identity this cognitive memory instance represents. */
+  private agentId: string;
+  /** Type of agent (e.g., "coding", "research", "support"). Optional. */
+  private agentType?: string;
+
   private maxL0Tokens: number;
   private maxL1Tokens: number;
   /** Ceiling on everything injected into one prompt, index and bodies together. */
@@ -100,7 +107,11 @@ export class CognitiveMemory {
     tensionsDetected: 0,
   };
 
-  constructor(options: CognitiveMemoryOptions = {}) {
+  constructor(options: CognitiveMemoryOptions) {
+    this.projectId = options.projectId;
+    this.agentId = options.agentId;
+    this.agentType = options.agentType;
+
     this.maxL0Tokens = options.maxL0Tokens ?? 2000;
     this.maxL1Tokens = options.maxL1Tokens ?? 8000;
     this.maxTotalTokens = options.maxTotalTokens ?? 2000;
@@ -155,7 +166,7 @@ export class CognitiveMemory {
         return;
       }
       used += tokens;
-      entries.push({ id: item.id, tier: item.tier, reason, gist, body, tokens });
+      entries.push({ id: item.id, tier: item.tier, reason, gist, body, tokens, projectId: this.projectId, agentId: this.agentId, agentType: this.agentType });
     };
 
     // Fast gate: catch a contradiction in what the user just said.
@@ -181,7 +192,10 @@ export class CognitiveMemory {
             }${cap.recommendedStrategies.length > 0 ? ` Approach: ${cap.recommendedStrategies.join("; ")}` : ""}`,
             bookmark: `${d} weak domain`,
             tier: "L0",
-            metadata: { domains: [d], createdAt: Date.now(), lastAccessedAt: Date.now(), accessCount: 0 },
+            metadata: { domains: [d], createdAt: Date.now(), lastAccessedAt: Date.now(), accessCount: 0, projectId: this.projectId, agentId: this.agentId, agentType: this.agentType },
+            projectId: this.projectId,
+            agentId: this.agentId,
+            agentType: this.agentType,
           },
           "guardrail",
           true,
@@ -226,7 +240,10 @@ export class CognitiveMemory {
             content: `${t.claimA.statement} vs ${t.claimB.statement} — ${t.actionableQuestion}`,
             bookmark: t.claimA.statement,
             tier: "L0",
-            metadata: { domains: [], createdAt: t.claimA.timestamp, lastAccessedAt: Date.now(), accessCount: 0 },
+            metadata: { domains: [], createdAt: t.claimA.timestamp, lastAccessedAt: Date.now(), accessCount: 0, projectId: this.projectId, agentId: this.agentId, agentType: this.agentType },
+            projectId: this.projectId,
+            agentId: this.agentId,
+            agentType: this.agentType,
           },
           "tension",
           true,
@@ -335,6 +352,9 @@ export class CognitiveMemory {
           l0Prompt: this.activeTaskTrace,
           l1Summaries,
           candidates,
+          projectId: this.projectId,
+          agentId: this.agentId,
+          agentType: this.agentType,
         })
       : this.runHeuristicArbiter(params, candidates);
 
@@ -456,7 +476,13 @@ export class CognitiveMemory {
             createdAt: now,
             lastAccessedAt: now,
             accessCount: 1,
+            projectId: this.projectId,
+            agentId: this.agentId,
+            agentType: this.agentType,
           },
+          projectId: this.projectId,
+          agentId: this.agentId,
+          agentType: this.agentType,
         },
         "L1",
       );
@@ -502,6 +528,9 @@ export class CognitiveMemory {
         impact: tension.impact,
         taskRelevance: 1,
         actionableQuestion: tension.actionableQuestion,
+        projectId: this.projectId,
+        agentId: this.agentId,
+        agentType: this.agentType,
       });
     }
   }
@@ -789,6 +818,9 @@ export class CognitiveMemory {
         impact: t.impact,
         taskRelevance: 1.0,
         actionableQuestion: t.actionableQuestion,
+        projectId: this.projectId,
+        agentId: this.agentId,
+        agentType: this.agentType,
       });
     }
 
@@ -871,7 +903,13 @@ export class CognitiveMemory {
           createdAt: Date.now(),
           lastAccessedAt: Date.now(),
           accessCount: 1,
+          projectId: this.projectId,
+          agentId: this.agentId,
+          agentType: this.agentType,
         },
+        projectId: this.projectId,
+        agentId: this.agentId,
+        agentType: this.agentType,
       }, "L1");
     }
   }
