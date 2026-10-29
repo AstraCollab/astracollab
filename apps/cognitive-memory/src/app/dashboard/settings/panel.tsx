@@ -139,26 +139,6 @@ export function SettingsPanel() {
 
       <Organisation />
 
-      <Panel title="Deployment" hint="Read-only. An unusable value is reported here rather than thrown at startup.">
-        <Facts
-          rows={[
-            [
-              "model",
-              data.deployment.modelConfigured
-                ? `${data.deployment.modelProvider} · ${data.deployment.modelName}`
-                : "not configured"
-            ],
-            ["sign-in secret", data.deployment.authConfigured ? "set" : "development fallback"],
-            [
-              "store",
-              `${data.footprint.memories.toLocaleString()} memories · ${data.footprint.activeKeys} active key${
-                data.footprint.activeKeys === 1 ? "" : "s"
-              } of ${data.footprint.keys}`
-            ]
-          ]}
-        />
-      </Panel>
-
       <DangerZone onDone={(message) => { setNotice(message); reload() }} />
     </div>
   )
