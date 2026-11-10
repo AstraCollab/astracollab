@@ -107,24 +107,24 @@ export class CognitiveMemory {
     tensionsDetected: 0,
   };
 
-  constructor(options: CognitiveMemoryOptions) {
-    this.projectId = options.projectId;
-    this.agentId = options.agentId;
-    this.agentType = options.agentType;
+  constructor(options?: CognitiveMemoryOptions) {
+    this.projectId = options?.projectId ?? '';
+    this.agentId = options?.agentId ?? '';
+    this.agentType = options?.agentType;
 
-    this.maxL0Tokens = options.maxL0Tokens ?? 2000;
-    this.maxL1Tokens = options.maxL1Tokens ?? 8000;
-    this.maxTotalTokens = options.maxTotalTokens ?? 2000;
-    this.arbiter = options.arbiter ?? null;
-    this.autoExtractMemories = options.autoExtractMemories ?? true;
-    this.extract = options.extract;
-    this.reconcile = options.reconcile;
-    this.onPersist = options.onPersist;
+    this.maxL0Tokens = options?.maxL0Tokens ?? 2000;
+    this.maxL1Tokens = options?.maxL1Tokens ?? 8000;
+    this.maxTotalTokens = options?.maxTotalTokens ?? 2000;
+    this.arbiter = options?.arbiter ?? null;
+    this.autoExtractMemories = options?.autoExtractMemories ?? true;
+    this.extract = options?.extract;
+    this.reconcile = options?.reconcile;
+    this.onPersist = options?.onPersist;
 
     this.selfModel = {
-      domains: options.initialSelfModel?.domains ?? {},
-      calibrationFactor: options.initialSelfModel?.calibrationFactor ?? 1.0,
-      activeDomains: options.initialSelfModel?.activeDomains ?? [],
+      domains: options?.initialSelfModel?.domains ?? {},
+      calibrationFactor: options?.initialSelfModel?.calibrationFactor ?? 1.0,
+      activeDomains: options?.initialSelfModel?.activeDomains ?? [],
     };
   }
 
