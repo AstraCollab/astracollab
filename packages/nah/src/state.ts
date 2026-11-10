@@ -15,8 +15,10 @@ import { selectMemory } from "./memory-select.js";
 import { createRecallTool, createRememberTool } from "./memory-tool.js";
 import { MemoryInjectionLog } from "./memory-injection.js";
 import { createApprover, type PermissionMode } from "./permissions.js";
-import type { SessionState } from "./session.js";
+import { loadSessionName, type SessionState } from "./session.js";
 import { createTaskLedgerTool } from "./task-ledger.js";
+import { createNameSessionTool } from "./session-name.js";
+import { nameFromPrompt } from "./session.js";
 import { createDelegationTools, createSessionOrchestrator } from "./delegation.js";
 import { createWorkflowTools } from "./workflow-tools.js";
 import { loadWorkspaceWorkflows } from "./workspace-workflows.js";
@@ -104,11 +106,18 @@ export const makeState = async (opts: {
           describeWorkspaceBoundary(workspaceRoot, opts.cwd),
         ].join("\n\n");
 
+  // The agent owns session naming: it labels each session based on the task so
+  // a user can tell what a session is for when resuming it with /session list.
+  const systemWithNaming = `${system}
+
+Session naming: At the start of a session, call the name_session tool once with a short, memorable name for the work (e.g. "fix-login-flow", "upgrade-dependencies"). The name is shown in /session list and in the sidebar, so it should say what the session is for rather than repeating the directory.`;
+
   const store = opts.noSession || !opts.sessionPath ? null : createJsonlSessionStore(opts.sessionPath);
   const taskLedger = await store?.loadTaskLedger() ?? null;
+  const name = store ? await loadSessionName(store) : null;
   const state: SessionState = {
     messages: [],
-    system,
+    system: systemWithNaming,
     cwd: opts.cwd,
     tools: {},
     workspace: envToolSource,
@@ -117,6 +126,7 @@ export const makeState = async (opts: {
     undoHistory: [],
     sessionBasePath: opts.noSession ? null : opts.sessionPath ?? null,
     taskLedger,
+    name,
     discoveredChecks: [],
     store,
     model,
@@ -165,6 +175,7 @@ export const makeState = async (opts: {
     : createSessionOrchestrator({
         cwd: opts.cwd,
         system: state.system,
+        modelSpec: opts.modelSpec,
         getModel: () => {
           if (!state.model) throw new Error("Configure a model before delegating a task.");
           return state.model.model;
@@ -205,6 +216,7 @@ export const makeState = async (opts: {
     recall: createRecallTool(() => state.cognitiveMemory),
     remember: createRememberTool(() => state.cognitiveMemory),
     task_ledger: createTaskLedgerTool(state, approve),
+    name_session: createNameSessionTool(state),
     ...(orchestrator ? {
       ...createDelegationTools({ orchestrator, approve }),
       ...createWorkflowTools({ orchestrator, registry: state.workflows!, cwd: opts.cwd, approve }),

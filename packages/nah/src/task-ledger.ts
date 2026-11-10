@@ -133,12 +133,23 @@ const checkInput = z
   .catchall(z.unknown())
   .describe("An acceptance check: what it proves, and the exact command that proves it.");
 
+const parseJsonString = (value: unknown): unknown => {
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+  return value;
+};
+
 const taskInput = z.discriminatedUnion("action", [
   z.object({ action: z.literal("discover_checks") }),
   z.object({
     action: z.literal("plan"), goal: z.string().trim().min(1).max(500),
-    steps: z.array(stepInput).min(1).max(20),
-    checks: z.array(checkInput).min(1).max(12),
+    steps: z.preprocess(parseJsonString, z.array(stepInput).min(1).max(20)),
+    checks: z.preprocess(parseJsonString, z.array(checkInput).min(1).max(12)),
     replace: z.boolean().optional().describe("Set true only when the user has changed the scope of an unfinished plan."),
   }),
   z.object({ action: z.literal("step"), id: z.string().min(1), status: z.string().min(1).max(50).describe("pending | in_progress | completed | blocked"), note: z.string().max(500).optional() }),

@@ -296,6 +296,8 @@ export class MemoryStore {
       l0: {
         tensions: tensionRows.map((row) => ({
           id: row.id,
+          projectId: "default",
+          agentId: "default",
           status: row.status as "active" | "latent" | "resolved",
           claimA: JSON.parse(row.claim_a),
           claimB: JSON.parse(row.claim_b),
@@ -311,9 +313,9 @@ export class MemoryStore {
         },
         activeTaskTrace: traceRow?.value ?? ""
       },
-      l1: byTier.L1,
-      l2: byTier.L2,
-      l3: byTier.L3,
+      l1: byTier.L1.map((item) => ({ ...item, projectId: "default", agentId: "default", metadata: { ...item.metadata, projectId: "default", agentId: "default" } })),
+      l2: byTier.L2.map((item) => ({ ...item, projectId: "default", agentId: "default", metadata: { ...item.metadata, projectId: "default", agentId: "default" } })),
+      l3: byTier.L3.map((item) => ({ ...item, projectId: "default", agentId: "default", metadata: { ...item.metadata, projectId: "default", agentId: "default" } })),
       stats: {
         totalTurnsProcessed: statsRow?.total_turns ?? 0,
         predictionsHit: statsRow?.predictions_hit ?? 0,

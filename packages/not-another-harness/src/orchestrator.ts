@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
 import { promisify } from "node:util";
 import type { LanguageModel } from "ai";
+import { inferModelTier, isWeakModel, modelCapabilities, type ModelTier } from "./model-tier.js";
 import { runAgent } from "./agent.js";
 import type {
 	HarnessEvent,
@@ -56,6 +57,24 @@ const addUsage = (acc: HarnessUsage, next: HarnessUsage): HarnessUsage => ({
 });
 
 /**
+ * Drop git diff hunks for files under `references/`. Reference projects are
+ * copied into the child's workspace as read-only context and are not part of
+ * the child's changes, so they must not appear in the diff the parent reviews.
+ *
+ * Each hunk begins with `diff --git a/<path> b/<path>`; hunks whose path is
+ * under `references/` are removed.
+ */
+const stripReferenceHunks = (diff: string): string => {
+	return diff
+		.split(/(?=^diff --git )/m)
+		.filter((hunk) => {
+			const match = hunk.match(/^diff --git a\/(.*?) b\//);
+			return !match || !(match[1] ?? "").startsWith("references/");
+		})
+		.join("");
+};
+
+/**
  * Default ceiling on simultaneous children.
  *
  * Three is not a measured number. It is the point where fan-out stops being
@@ -63,6 +82,14 @@ const addUsage = (acc: HarnessUsage, next: HarnessUsage): HarnessUsage => ({
  * spend event that the parent's own budget rail was never sized for.
  */
 const DEFAULT_MAX_CONCURRENCY = 3;
+
+/** A weak model should not burn a long trajectory getting lost; cap its steps
+ * lower than a flagship, which can hold more context and recover from missteps. */
+const DEFAULT_WEAK_MAX_STEPS = 8;
+
+/** A weak model should not be able to burn dollars getting lost; cap its spend
+ * ceiling well below what a flagship child may spend. */
+const DEFAULT_WEAK_MAX_SPEND_USD = 2;
 
 /** A child that has run this long has stopped being a subtask and started being a leak. */
 const DEFAULT_TASK_TIMEOUT_MS = 15 * 60_000;
@@ -119,6 +146,12 @@ export type SubtaskSpec = {
 	 * capability it does not have.
 	 */
 	createTools?: (cwd: string) => HarnessRunOptions["tools"];
+	/**
+	 * Other projects this child may read for context, overriding the
+	 * orchestrator's `referenceProjects`. Copied into the child's workspace
+	 * under `references/<name>` as read-only material.
+	 */
+	referenceProjects?: ReferenceProject[];
 };
 
 /** What an isolation strategy made available to a child. */
@@ -150,6 +183,20 @@ export type SubtaskArtifact = {
 	diff: string;
 	/** Workspace retained for manual inspection, when one still exists. */
 	workspace?: string;
+};
+
+/**
+ * A project outside the child's own workspace that the child may read for
+ * context. Copied into the child's isolated workspace under `references/<name>`
+ * as read-only material; it is excluded from the child's diff and can never be
+ * written back. Weak/open-weight models benefit most, since they cannot reason
+ * from scratch as reliably as a flagship and need concrete reference code.
+ */
+export type ReferenceProject = {
+	/** Display name used as the references subdirectory and in boundary notes. */
+	name: string;
+	/** Absolute path to the project directory to reference. */
+	path: string;
 };
 
 /**
@@ -189,6 +236,12 @@ export type SubtaskResult = {
 	/** Workspace retained because its artifact exceeded the inline limit. */
 	workspace?: string;
 	artifact?: SubtaskArtifact;
+	/**
+	 * Paths this child touched that overlap with a previously finished sibling.
+	 * Empty when the child touched no shared ground; populated so the parent can
+	 * sequence dependent work instead of merging conflicting diffs after the fact.
+	 */
+	overlap?: string[];
 };
 
 export type OrchestratorEvent =
@@ -245,12 +298,24 @@ export type OrchestratorWorkflowOptions<TInput = any, TState = any> = Omit<
 export type OrchestratorOptions = {
 	/** Any AI SDK language model, or a getter for one resolved per child. */
 	model: LanguageModel | (() => LanguageModel);
+	/** The model id (e.g. `llama-3.1-8b`, `claude-sonnet-4`). Used to route
+	 * weak/open-weight models into smaller, structured subtasks instead of
+	 * open-ended planning. Omitted, the model is routed conservatively. */
+	modelSpec?: string;
 	/** Parent system prompt. Children receive it plus their boundary notes. */
 	system: string;
 	/** Build a child tool set confined to `cwd`. `createCodingTools(createNodeEnvironment(cwd))`. */
 	createTools: (cwd: string) => HarnessRunOptions["tools"];
 	/** Defaults to sharing the caller's workspace: a root, and no isolation. */
 	isolation?: SubtaskIsolation;
+	/**
+	 * Other projects every child may read for context. Copied into each child's
+	 * isolated workspace under `references/<name>` as read-only material,
+	 * excluded from the child's diff. Individual subtasks can override with
+	 * `SubtaskSpec.referenceProjects`. Especially valuable for weak/open-weight
+	 * models, which need concrete reference code they cannot recall from scratch.
+	 */
+	referenceProjects?: ReferenceProject[];
 	/** Simultaneous children. Default 3. */
 	maxConcurrency?: number;
 	/** Step cap per child. No ceiling when unset, as for any run. */
@@ -299,6 +364,8 @@ export class Orchestrator {
 		OrchestratorOptions;
 	#active = 0;
 	#total = emptyUsage();
+	/** Changed paths per finished child, keyed by child id, for overlap detection. */
+	#changedPaths = new Map<string, string[]>();
 	/** Runs stopped on a caller's answer, so they can be found and resumed. */
 	readonly #suspended = new Map<
 		string,
@@ -310,8 +377,14 @@ export class Orchestrator {
 		}
 	>();
 	readonly #workflows = new Map<string, Workflow>();
+	readonly #modelSpec: string | undefined;
+	readonly #modelTier: ModelTier;
+	readonly #isWeakModel: boolean;
 
 	constructor(options: OrchestratorOptions) {
+		this.#modelSpec = options.modelSpec;
+		this.#modelTier = options.modelSpec ? inferModelTier(options.modelSpec) : "unknown";
+		this.#isWeakModel = this.#modelTier !== "strong";
 		this.#options = {
 			...options,
 			maxConcurrency: Math.max(
@@ -597,20 +670,37 @@ export class Orchestrator {
 			});
 			const child = await this.#runChild(spec, handle);
 			const artifact = handle.collect ? await handle.collect() : undefined;
+			// References are read-only context copied into the workspace, not the
+			// child's own changes, so they are excluded from the reported diff and
+			// from changed-path overlap detection.
+			const changedPaths = (artifact?.changedPaths ?? []).filter(
+				(path) => !path.startsWith("references/"),
+			);
+			// Overlap with previously finished siblings: paths this child touched
+			// that another child already touched. Flags potential merge conflicts
+			// so the parent can sequence dependent work instead of reconciling
+			// conflicting diffs after the fact.
+			const overlap = changedPaths.filter((path) =>
+				[...this.#changedPaths.values()].some((paths) => paths.includes(path)),
+			);
+			if (spec.id) this.#changedPaths.set(spec.id, changedPaths);
 			// An artifact too large to inline is only useful if someone can still go
 			// look at it, so a truncated diff retains the workspace it came from.
+			const cleanDiff = artifact ? stripReferenceHunks(artifact.diff) : "";
 			const retain =
-				artifact !== undefined && artifact.diff.length > this.#diffLimit();
+				artifact !== undefined && cleanDiff.length > this.#diffLimit();
 			const result: SubtaskResult = {
 				...child,
 				durationMs: Date.now() - startedAt,
 				workspace: retain ? handle.cwd : undefined,
+				...(overlap.length > 0 ? { overlap } : {}),
 				artifact: artifact
 					? {
 							...artifact,
+							changedPaths, // references excluded above
 							diff: retain
-								? `${artifact.diff.slice(0, this.#diffLimit())}\n[diff truncated at ${this.#diffLimit()} characters; full diff remains in ${handle.cwd}. Review it there and remove the worktree when finished.]`
-								: artifact.diff || "(no changes produced)",
+								? `${cleanDiff.slice(0, this.#diffLimit())}\n[diff truncated at ${this.#diffLimit()} characters; full diff remains in ${handle.cwd}. Review it there and remove the worktree when finished.]`
+								: cleanDiff || "(no changes produced)",
 						}
 					: undefined,
 			};
@@ -618,9 +708,53 @@ export class Orchestrator {
 			handle = undefined;
 			return result;
 		} catch (error) {
-			if (handle) await handle.cleanup({ retain: false }).catch(() => {});
+			// Retain a failed child's workspace so it can be inspected and the
+			// failure reproduced, rather than deleting the only record of what
+			// went wrong.
+			if (handle) await handle.cleanup({ retain: true }).catch(() => {});
 			return this.#failed(spec, error, Date.now() - startedAt);
 		}
+	}
+
+	/**
+	 * Copy each reference project into the child's workspace under
+	 * `references/<name>` as read-only context. Real files rather than symlinks,
+	 * because the child's read tools reject symlinks that escape the workspace.
+	 * `.git` and `node_modules` are excluded.
+	 */
+	async #copyReferences(
+		references: readonly ReferenceProject[],
+		handle: IsolationHandle,
+	): Promise<void> {
+		const referencesRoot = nodePath.join(handle.cwd, "references");
+		await mkdir(referencesRoot, { recursive: true });
+		for (const ref of references) {
+			if (ref.name.includes(nodePath.sep) || ref.name === ".." || ref.name === ".") {
+				throw new Error(`orchestrator: invalid reference project name "${ref.name}"`);
+			}
+			const target = nodePath.join(referencesRoot, ref.name);
+			await mkdir(target, { recursive: true });
+			// Copy the reference project's contents into the child's workspace so
+			// its read tools can reach them as ordinary files.
+			await execFileAsync(
+				"sh",
+				["-c", `tar cf - --exclude=.git --exclude=node_modules . | tar xf - -C "${target}"`],
+				{ cwd: ref.path, maxBuffer: 8 * 1024 * 1024, encoding: "utf8" },
+			);
+		}
+	}
+
+	/** Boundary notes telling the child which reference projects are available. */
+	#referenceNotes(references: readonly ReferenceProject[]): string[] {
+		if (references.length === 0) return [];
+		return [
+			"",
+			"Reference projects (read-only context):",
+			...references.map(
+				(ref) =>
+					`- ${ref.name}: references/${ref.name}/ — related code you may read for context. Do not write into references/; it is not part of your changes and is excluded from your diff.`,
+			),
+		];
 	}
 
 	async #runChild(
@@ -628,6 +762,8 @@ export class Orchestrator {
 		handle: IsolationHandle,
 	): Promise<Omit<SubtaskResult, "durationMs" | "workspace" | "artifact">> {
 		const options = this.#options;
+		const references = spec.referenceProjects ?? options.referenceProjects ?? [];
+		if (references.length > 0) await this.#copyReferences(references, handle);
 		const controller = new AbortController();
 		const timeoutMs = options.taskTimeoutMs ?? DEFAULT_TASK_TIMEOUT_MS;
 		const timer =
@@ -653,12 +789,34 @@ export class Orchestrator {
 				`- Assignment: ${spec.title}`,
 				"- Work only on the assigned subtask and its acceptance criteria.",
 				...handle.boundaryNotes,
+				...this.#referenceNotes(references),
+				...(this.#isWeakModel
+					? [
+							"\nYou are being routed as a weaker/open-weight model.",
+							"- Work in tiny, verifiable steps; do not attempt open-ended planning.",
+							"- Prefer tool calls you can check the result of, then stop and report.",
+							"- Break the task into the smallest possible subtasks and finish one before starting the next.",
+					  ]
+					: []),
 			].join("\n"),
 			prompt: spec.task,
-			tools: (spec.createTools ?? options.createTools)(handle.cwd),
-			maxSteps: spec.maxSteps ?? options.maxSteps,
+			tools: (() => {
+					const childTools = (spec.createTools ?? options.createTools)(handle.cwd);
+					if (this.#isWeakModel) {
+						// A weak model should not be handed tools that can destroy state;
+						// confine it to read-only inspection so it can gather evidence
+						// without causing damage.
+						for (const name of ["edit", "write", "bash"]) {
+							delete childTools[name];
+						}
+					}
+					return childTools;
+				})(),
+			maxSteps: spec.maxSteps ?? options.maxSteps ?? (this.#isWeakModel ? DEFAULT_WEAK_MAX_STEPS : undefined),
 			maxTokens: options.maxTokens,
-			maxSpendUsd: spec.maxSpendUsd ?? options.maxSpendUsd,
+			maxSpendUsd: this.#isWeakModel
+				? Math.min(spec.maxSpendUsd ?? options.maxSpendUsd ?? DEFAULT_WEAK_MAX_SPEND_USD, DEFAULT_WEAK_MAX_SPEND_USD)
+				: spec.maxSpendUsd ?? options.maxSpendUsd,
 			rates: options.rates,
 			abortSignal: controller.signal,
 		});
@@ -802,12 +960,13 @@ export const formatSubtaskReport = (
 };
 
 /** Default isolation: children share the caller's workspace and are given no isolation. */
-export const sharedWorkspaceIsolation = (): SubtaskIsolation => ({
-	description: "shared workspace",
+export const sharedWorkspaceIsolation = (options?: { cwd?: string }): SubtaskIsolation => ({
+	description: options?.cwd === undefined ? "shared workspace" : `shared workspace (${options.cwd})`,
 	prepare: async () => ({
-		cwd: ".",
+		cwd: options?.cwd ?? ".",
 		boundaryNotes: [
 			"- You share a workspace with the parent agent. Coordinate through files, and keep to your assignment.",
+			...(options?.cwd === undefined ? [] : [`- The workspace you are searching is ${options.cwd}, not the parent's current directory.`]),
 		],
 		cleanup: async () => {},
 	}),
@@ -973,7 +1132,8 @@ export const createGitWorktreeIsolation = (
 									: `- The parent has uncommitted changes in: ${parentChangedPaths.join(", ")}. They are not present here; do not depend on them.`,
 							]
 						: []),
-					"- This is an isolated worktree. Do not attempt to access or modify the parent worktree.",
+					"- This is an isolated worktree. Do not attempt to access or modify the parent worktree, another child's worktree, or any project outside this checkout.",
+					"- bash runs inside this worktree only. Do not `cd` out of it, do not run `git worktree` or `git checkout` against other checkouts, and do not edit files outside this directory.",
 					"- Do not commit changes. Inspect and validate your changes when practical, then report what changed and any check results.",
 					"- The parent agent will review your diff and decide whether to integrate it.",
 				],
@@ -1032,6 +1192,97 @@ export const createGitWorktreeIsolation = (
 						// The report already carries the child's work; a stale worktree is
 						// recoverable with `git worktree prune`, and failing the child over it
 						// would throw away a diff the parent needs.
+					}
+				},
+			};
+		},
+	};
+};
+
+/**
+ * Options for `createCopyIsolation`.
+ */
+export type CopyIsolationOptions = {
+	/** The directory to copy into an isolated workspace for the child. */
+	cwd: string;
+	/** Where isolated copies are created. Defaults to the OS temp directory. */
+	tmpRoot?: string;
+	/** Keep the copy even when its diff fits inline. Off by default. */
+	retain?: boolean;
+};
+
+/**
+ * Isolation by copying the working tree into a temp directory.
+ *
+ * Fallback for workspaces that are not git repositories, where
+ * `createGitWorktreeIsolation` cannot run. The child gets its own copy so two
+ * children cannot collide and a child cannot half-apply over a parent edit in
+ * progress. `.git` and `node_modules` are excluded from the copy.
+ *
+ * The diff is produced by `diff -ruN` against the original tree, so it is a
+ * unified diff rather than a git diff. Review semantics are the same: the
+ * parent decides whether to integrate.
+ */
+export const createCopyIsolation = (
+	options: CopyIsolationOptions,
+): SubtaskIsolation => {
+	const run = async (command: string, args: string[], cwd: string) => {
+		const result = await execFileAsync(command, args, {
+			cwd,
+			maxBuffer: 8 * 1024 * 1024,
+			encoding: "utf8",
+		});
+		return { stdout: result.stdout, stderr: result.stderr };
+	};
+
+	return {
+		description: "temporary directory copy",
+		prepare: async () => {
+			const tmpRoot = options.tmpRoot ?? tmpdir();
+			await mkdir(tmpRoot, { recursive: true });
+			const copy = nodePath.join(tmpRoot, `nah-copy-${randomUUID()}`);
+			await mkdir(copy, { recursive: true });
+			// Copy the tree, excluding .git and node_modules which are either
+			// large, environment-specific, or not meaningful to diff.
+			await run(
+				"sh",
+				["-c", `tar cf - --exclude=.git --exclude=node_modules . | tar xf - -C "${copy}"`],
+				options.cwd,
+			);
+			return {
+				cwd: copy,
+				boundaryNotes: [
+					"- This is an isolated copy of the working tree. Do not attempt to access or modify the original workspace, another child's copy, or any project outside this directory.",
+					"- bash runs inside this copy only. Do not `cd` out of it, and do not edit files outside this directory.",
+					"- Do not commit changes. Inspect and validate your changes when practical, then report what changed and any check results.",
+					"- The parent agent will review your diff and decide whether to integrate it.",
+				],
+				collect: async (): Promise<SubtaskArtifact> => {
+					const diff = (await run("diff", ["-ruN", options.cwd, copy], options.cwd)).stdout;
+					// changedPaths: parse the `diff -ruN <a> <b>` header lines, stripping
+					// the original/copy prefixes so paths are relative to the workspace.
+					const cwdPrefix = options.cwd + "/";
+					const copyPrefix = copy + "/";
+					const paths = new Set<string>();
+					for (const line of diff.split("\n")) {
+						if (!line.startsWith("diff -ruN ")) continue;
+						for (const raw of line.slice("diff -ruN ".length).split(" ")) {
+							let p = raw;
+							if (p.startsWith(cwdPrefix)) p = p.slice(cwdPrefix.length);
+							else if (p.startsWith(copyPrefix)) p = p.slice(copyPrefix.length);
+							else if (p.startsWith("a/")) p = p.slice(2);
+							else if (p.startsWith("b/")) p = p.slice(2);
+							if (p) paths.add(p);
+						}
+					}
+					return { baseRevision: "copy", changedPaths: [...paths], diff, workspace: copy };
+				},
+				cleanup: async ({ retain }) => {
+					if (retain || options.retain) return;
+					try {
+						await rm(copy, { recursive: true, force: true });
+					} catch {
+						// A leftover copy dir is inert.
 					}
 				},
 			};

@@ -72,6 +72,20 @@ Resuming replays the earlier turns into the transcript pane, so the history is
 visible before you type. `/session list` shows every session for the directory
 with timestamps; `/branch <name>` forks the current one.
 
+Sessions are identified by an opaque file id (a hash of the directory, plus a
+`-N` suffix for later runs). The agent names each session based on the task it
+is given (via the `name_session` tool), so you can tell what a session is for
+when you come back to it:
+
+```
+/session list
+```
+
+Named sessions show their name in `/session list`, in the TUI sidebar, and in
+the "resume with" message printed when you quit. The name is stored next to
+the session transcript and survives across runs, so `nah --session <id>` still
+resumes exactly that session.
+
 ### Commands
 
 Type `/` at the prompt to open the command modal. The list filters as you type
@@ -169,7 +183,7 @@ nothing in it was unfinished.
 | `/permissions <mode>` | Choose `ask`, `yolo`, or `readonly` for edit, write, shell, and web-fetch actions |
 | `/diff` | Review current workspace changes |
 | `/undo` | Restore the last turn’s file changes |
-| `/session list` | List saved sessions for the current directory |
+| `/session list` | List saved sessions for the current directory (agent-assigned names shown) |
 | `/session new` | Start a separate session for this directory |
 | `/session off` | Stop saving the current session |
 | `/branches`, `/branch <name>` | List, create, or switch session branches |

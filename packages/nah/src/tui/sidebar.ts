@@ -18,6 +18,8 @@ import { formatUsd } from "../budget.js";
 export type SidebarData = {
   /** Session file stem, e.g. the 12-char hash of the cwd. */
   sessionId: string;
+  /** Human-readable name the user gave the session, or null when it is still just an id. */
+  sessionName: string | null;
   cwd: string;
   modelProvider: string;
   modelId: string;
@@ -107,6 +109,7 @@ export const formatSidebar = (data: SidebarData, width: number): string[] => {
   const row = (value: string) => lines.push(clip(value, width));
 
   section("Session");
+  if (data.sessionName) row(c.bold(`"${data.sessionName}"`));
   row(c.bold(data.sessionId));
   row(c.dim(shortPath(data.cwd)));
   // Only when it differs from `cwd`: in a monorepo the root is usually one level

@@ -144,7 +144,8 @@ const withHost = async (
   try {
     await body(terminal, state, prompts);
   } finally {
-    terminal.onInput?.("\x03");
+    terminal.onInput?.("\x03"); // first warns
+    terminal.onInput?.("\x03"); // second quits
     await host;
   }
 };

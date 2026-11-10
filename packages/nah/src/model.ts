@@ -241,3 +241,15 @@ export const resolveModel = async (
       );
   }
 };
+
+/**
+ * Re-exported from `not-another-harness`, where the tier detection lives so the
+ * orchestrator can import it without importing the CLI package.
+ */
+export {
+	isWeakModel,
+	modelCapabilities,
+	inferModelTier,
+	type ModelCapabilities,
+	type ModelTier,
+} from "not-another-harness";

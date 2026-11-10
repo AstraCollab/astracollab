@@ -389,7 +389,8 @@ describe("end-to-end resume through the host", () => {
     expect(frame).toContain("remember this detail");
     expect(frame).toContain("noted");
 
-    terminal.onInput?.("\x03");
+    terminal.onInput?.("\x03"); // first warns
+    terminal.onInput?.("\x03"); // second quits
     await host;
   });
 
@@ -476,7 +477,8 @@ describe("end-to-end resume through the host", () => {
     expect(frame).toContain("wrote src/session.ts");
     expect(frame).toContain("Found it.");
 
-    terminal.onInput?.("\x03");
+    terminal.onInput?.("\x03"); // first warns
+    terminal.onInput?.("\x03"); // second quits
     await host;
   });
 });

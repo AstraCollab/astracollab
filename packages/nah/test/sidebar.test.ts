@@ -89,6 +89,7 @@ const waitFor = async (predicate: () => boolean, timeoutMs = 10_000): Promise<bo
 
 const DATA: SidebarData = {
   sessionId: "a1b2c3d4e5f6",
+  sessionName: null,
   cwd: "/Users/elias/Documents/Code/astracollab/astracollab-packages",
   modelProvider: "openrouter",
   modelId: "stealth/space-bunny-alpha",
@@ -300,7 +301,8 @@ describe("the sidebar inside the real TUI", () => {
     expect(frame).toContain("a1b2c3d4e5f6");
     expect(frame).toContain("12.4k used");
     expect(frame).toContain("12 turns");
-    wide.onInput?.("\x03");
+    wide.onInput?.("\x03"); // first warns
+    wide.onInput?.("\x03"); // second quits
     await host;
 
     const narrow = new FakeTerminal(80, 30);
@@ -308,7 +310,8 @@ describe("the sidebar inside the real TUI", () => {
     await waitFor(() => lastFrame(narrow).length > 0);
     // 80 columns cannot carry a panel, so the transcript keeps the whole width.
     expect(strip(lastFrame(narrow))).not.toContain("12.4k used");
-    narrow.onInput?.("\x03");
+    narrow.onInput?.("\x03"); // first warns
+    narrow.onInput?.("\x03"); // second quits
     await host2;
   });
 });

@@ -1,8 +1,11 @@
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { simulateReadableStream, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as nodePath from "node:path";
 
 import {
 	type IsolationHandle,
@@ -16,6 +19,34 @@ import {
 } from "../src/orchestrator.js";
 import { StepSuspend, createStep, createWorkflow } from "../src/workflow.js";
 import { finishReason, v4Usage } from "./helpers/ai.js";
+
+vi.mock("../src/agent.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../src/agent.js")>();
+	return {
+		...actual,
+		runAgent: vi.fn(actual.runAgent),
+	};
+});
+
+import { runAgent } from "../src/agent.js";
+
+const mockedRunAgent = vi.mocked(runAgent);
+
+beforeEach(() => {
+	mockedRunAgent.mockClear();
+});
+
+const tempDirs: string[] = [];
+afterEach(async () => {
+	for (const dir of tempDirs) await rm(dir, { recursive: true, force: true }).catch(() => {});
+	tempDirs.length = 0;
+});
+
+const tempDir = async (): Promise<string> => {
+	const dir = await mkdtemp(nodePath.join(tmpdir(), "nah-refs-test-"));
+	tempDirs.push(dir);
+	return dir;
+};
 
 const tools = () => ({
 	read: tool({
@@ -295,7 +326,8 @@ describe("Orchestrator", () => {
 
 		expect(result.status).toBe("error");
 		expect(result.error).toContain("provider is down");
-		expect(log).toContain("cleanup:broken:false");
+		// A failed child's workspace is retained for inspection, not cleaned up.
+		expect(log).toContain("cleanup:broken:true");
 	});
 });
 
@@ -527,5 +559,255 @@ describe("Orchestrator workflows", () => {
 
 		expect(result.status).toBe("failed");
 		expect(result.status === "failed" && result.error.name).toBe("AbortError");
+	});
+});
+
+describe("Weak model routing", () => {
+	const weakModel = () =>
+		new MockLanguageModelV4({
+			doStream: async () => ({
+				stream: simulateReadableStream<LanguageModelV4StreamPart>({
+					chunkDelayInMs: 0,
+					chunks: [
+						{ type: "text-start", id: "t" },
+						{ type: "text-delta", id: "t", delta: "child done" },
+						{ type: "text-end", id: "t" },
+						{
+							type: "finish",
+							finishReason: finishReason("stop"),
+							usage: v4Usage({ input: 10, output: 2 }),
+						},
+					],
+				}),
+			}),
+		});
+
+	const captureIsolation = (): SubtaskIsolation => ({
+		description: "capture",
+		prepare: async () => ({
+			cwd: "/tmp/captured",
+			boundaryNotes: ["- captured"],
+			cleanup: async () => {},
+		}),
+	});
+
+	it("caps maxSteps at 8 for a weak model", async () => {
+		const orchestrator = new Orchestrator({
+			model: weakModel(),
+			modelSpec: "llama-3.1-8b",
+			system: "parent system",
+			createTools: () => tools(),
+			isolation: captureIsolation(),
+		});
+
+		await orchestrator.run({ title: "weak child", task: "Do something." });
+
+		expect(mockedRunAgent).toHaveBeenCalledTimes(1);
+		const call = mockedRunAgent.mock.calls[0][0];
+		expect(call.maxSteps).toBe(8);
+	});
+
+	it("restricts mutating tools for a weak model", async () => {
+		const orchestrator = new Orchestrator({
+			model: weakModel(),
+			modelSpec: "llama-3.1-8b",
+			system: "parent system",
+			createTools: () => ({ ...tools(), edit: tool({}), write: tool({}), bash: tool({}) }),
+			isolation: captureIsolation(),
+		});
+
+		await orchestrator.run({ title: "weak child", task: "Do something." });
+
+		expect(mockedRunAgent).toHaveBeenCalledTimes(1);
+		const call = mockedRunAgent.mock.calls[0][0];
+		expect(call.tools).not.toHaveProperty("edit");
+		expect(call.tools).not.toHaveProperty("write");
+		expect(call.tools).not.toHaveProperty("bash");
+	});
+
+	it("caps maxSpendUsd at $2 for a weak model", async () => {
+		const orchestrator = new Orchestrator({
+			model: weakModel(),
+			modelSpec: "llama-3.1-8b",
+			system: "parent system",
+			createTools: () => tools(),
+			isolation: captureIsolation(),
+			maxSpendUsd: 100,
+		});
+
+		await orchestrator.run({ title: "weak child", task: "Do something." });
+
+		expect(mockedRunAgent).toHaveBeenCalledTimes(1);
+		const call = mockedRunAgent.mock.calls[0][0];
+		expect(call.maxSpendUsd).toBe(2);
+	});
+
+	it("does not restrict a strong model", async () => {
+		const orchestrator = new Orchestrator({
+			model: weakModel(),
+			modelSpec: "claude-sonnet-4",
+			system: "parent system",
+			createTools: () => ({ ...tools(), edit: tool({}), write: tool({}), bash: tool({}) }),
+			isolation: captureIsolation(),
+		});
+
+		await orchestrator.run({ title: "strong child", task: "Do something." });
+
+		expect(mockedRunAgent).toHaveBeenCalledTimes(1);
+		const call = mockedRunAgent.mock.calls[0][0];
+		expect(call.maxSteps).toBeUndefined();
+		expect(call.tools).toHaveProperty("edit");
+		expect(call.tools).toHaveProperty("write");
+		expect(call.tools).toHaveProperty("bash");
+		expect(call.maxSpendUsd).toBeUndefined();
+	});
+
+	it("passes weak-model guidance in the system prompt", async () => {
+		const orchestrator = new Orchestrator({
+			model: weakModel(),
+			modelSpec: "llama-3.1-8b",
+			system: "parent system",
+			createTools: () => tools(),
+			isolation: captureIsolation(),
+		});
+
+		await orchestrator.run({ title: "weak child", task: "Do something." });
+
+		expect(mockedRunAgent).toHaveBeenCalledTimes(1);
+		const call = mockedRunAgent.mock.calls[0][0];
+		expect(call.system).toContain("weaker/open-weight model");
+		expect(call.system).toContain("tiny, verifiable steps");
+	});
+
+	describe("Cross-project references", () => {
+		const weakModel = () =>
+			new MockLanguageModelV4({
+				doStream: async () => ({
+					stream: simulateReadableStream<LanguageModelV4StreamPart>({
+						chunkDelayInMs: 0,
+						chunks: [
+							{ type: "text-start", id: "t" },
+							{ type: "text-delta", id: "t", delta: "child done" },
+							{ type: "text-end", id: "t" },
+							{
+								type: "finish",
+								finishReason: finishReason("stop"),
+								usage: v4Usage({ input: 10, output: 2 }),
+							},
+						],
+					}),
+				}),
+			});
+
+		const isolationWithCwd = (cwd: string): SubtaskIsolation => ({
+			description: "real dir",
+			prepare: async () => ({
+				cwd,
+				boundaryNotes: [],
+				cleanup: async () => {},
+			}),
+		});
+
+		it("copies reference projects into the child workspace as read-only context", async () => {
+			const refDir = await tempDir();
+			await writeFile(nodePath.join(refDir, "lib.ts"), "export const answer = 42;\n");
+			const childDir = await tempDir();
+
+			const orchestrator = new Orchestrator({
+				model: weakModel(),
+				modelSpec: "llama-3.1-8b",
+				system: "parent system",
+				createTools: () => tools(),
+				isolation: isolationWithCwd(childDir),
+				referenceProjects: [{ name: "ref-proj", path: refDir }],
+			});
+
+			await orchestrator.run({ title: "weak child", task: "Do something." });
+
+			const copied = await readFile(
+				nodePath.join(childDir, "references", "ref-proj", "lib.ts"),
+				"utf8",
+			);
+			expect(copied).toBe("export const answer = 42;\n");
+		});
+
+		it("passes reference projects into the child's system prompt", async () => {
+			const refDir = await tempDir();
+			await writeFile(nodePath.join(refDir, "lib.ts"), "export const answer = 42;\n");
+			const childDir = await tempDir();
+
+			const orchestrator = new Orchestrator({
+				model: weakModel(),
+				modelSpec: "llama-3.1-8b",
+				system: "parent system",
+				createTools: () => tools(),
+				isolation: isolationWithCwd(childDir),
+				referenceProjects: [{ name: "ref-proj", path: refDir }],
+			});
+
+			await orchestrator.run({ title: "weak child", task: "Do something." });
+
+			expect(mockedRunAgent).toHaveBeenCalledTimes(1);
+			const call = mockedRunAgent.mock.calls[0][0];
+			expect(call.system).toContain("Reference projects (read-only context)");
+			expect(call.system).toContain("references/ref-proj/");
+			expect(call.system).toContain("excluded from your diff");
+		});
+
+		it("excludes references from changed paths and the reported diff", async () => {
+			const refDir = await tempDir();
+			await writeFile(nodePath.join(refDir, "lib.ts"), "export const answer = 42;\n");
+			const childDir = await tempDir();
+
+			const isolation: SubtaskIsolation = {
+				description: "real dir",
+				prepare: async () => ({
+					cwd: childDir,
+					boundaryNotes: [],
+					cleanup: async () => {},
+					collect: async (): Promise<SubtaskArtifact> => ({
+						baseRevision: "abc",
+						changedPaths: ["references/ref-proj/lib.ts", "real-file.ts"],
+						diff:
+							"diff --git a/references/ref-proj/lib.ts b/references/ref-proj/lib.ts\nnew file mode 100644\n--- /dev/null\n+++ b/references/ref-proj/lib.ts\n@@ -0,0 +1 @@\n+export const answer = 42;\ndiff --git a/real-file.ts b/real-file.ts\nnew file mode 100644\n--- /dev/null\n+++ b/real-file.ts\n@@ -0,0 +1 @@\n+real change\n",
+						workspace: childDir,
+					}),
+				}),
+			};
+
+			const orchestrator = new Orchestrator({
+				model: weakModel(),
+				modelSpec: "llama-3.1-8b",
+				system: "parent system",
+				createTools: () => tools(),
+				isolation,
+				referenceProjects: [{ name: "ref-proj", path: refDir }],
+			});
+
+			const result = await orchestrator.run({ title: "weak child", task: "Do something." });
+
+			expect(result.artifact?.changedPaths).toEqual(["real-file.ts"]);
+			expect(result.artifact?.diff).not.toContain("references/");
+			expect(result.artifact?.diff).toContain("real-file.ts");
+			expect(result.overlap).toBeUndefined();
+		});
+
+		it("does not create a references directory when none are configured", async () => {
+			const childDir = await tempDir();
+
+			const orchestrator = new Orchestrator({
+				model: weakModel(),
+				modelSpec: "llama-3.1-8b",
+				system: "parent system",
+				createTools: () => tools(),
+				isolation: isolationWithCwd(childDir),
+			});
+
+			await orchestrator.run({ title: "child", task: "Do something." });
+
+			await expect(
+				access(nodePath.join(childDir, "references")),
+			).rejects.toMatchObject({ code: "ENOENT" });
+		});
 	});
 });

@@ -148,6 +148,7 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
       // The session file's stem is its id: `/resume` and the files on disk both
       // key off it, so printing it is what makes a bug report actionable.
       sessionId: nodePath.basename(base, ".jsonl"),
+      sessionName: state.name,
       cwd: state.sandboxCwd ?? state.cwd,
       workspaceRoot: state.workspaceRoot ?? null,
       modelProvider: state.model?.provider ?? "none",
@@ -263,6 +264,21 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
   } = { abort: null, turn: null, abortRequested: false };
   const deferredCommands: string[] = [];
   let finished: (() => void) | null = null;
+/** First Ctrl+C pressed, waiting for a second to quit nah entirely. */
+let quitPending = false;
+let quitTimeout: ReturnType<typeof setTimeout> | null = null;
+/** First Escape pressed, waiting for a second to confirm stopping a run. */
+let stopPending = false;
+let stopTimeout: ReturnType<typeof setTimeout> | null = null;
+
+const clearQuitPending = () => {
+  quitPending = false;
+  if (quitTimeout) { clearTimeout(quitTimeout); quitTimeout = null; }
+};
+const clearStopPending = () => {
+  stopPending = false;
+  if (stopTimeout) { clearTimeout(stopTimeout); stopTimeout = null; }
+};
   /** A pending tool-approval question, answered by the next editor submission. */
   let approval: { question: string; resolve: (answer: string) => void } | null = null;
 
@@ -630,9 +646,11 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
   // Without it there is no keyboard route to the clipboard, since copy-on-select
   // requires a mouse — and plain Ctrl+C must keep aborting.
   screen.addInputListener((data) => {
+    const hasText = editor.getText().trim().length > 0;
+
     if (data === "\x03") {
       // Copy, when the terminal can tell Cmd/Ctrl apart (Kitty keyboard
-      // protocol, which pi-tui negotiates). Falls through to abort otherwise.
+      // protocol, which pi-tui negotiates). Falls through to clear/quit otherwise.
       if (
         screen.hasActiveSelection() &&
         (matchesKey(data, Key.super("c")) || matchesKey(data, Key.ctrlShift("c")))
@@ -640,20 +658,54 @@ export const startTuiHost = async (options: TuiHostOptions): Promise<void> => {
         void screen.copyActiveSelectionToClipboard();
         return { consume: true };
       }
-      // Escalate: the first Ctrl-C stops the turn, a second one exits. Without
-      // this there is no keyboard way out while a turn is in flight, because
-      // `run.abort` stays set until the turn actually settles.
-      if (run.abort && !run.abortRequested) {
-        run.abortRequested = true;
-        run.abort.abort();
-        output.addLine(c.dim("  (turn aborted — press Ctrl+C again to exit)"));
-      } else {
+      // With text in the editor, Ctrl+C clears it.
+      if (hasText) {
+        editor.setText("");
+        screen.requestRender();
+        return { consume: true };
+      }
+      // No text: first Ctrl+C warns, second quits nah entirely.
+      if (quitPending) {
+        clearQuitPending();
         finished?.();
+      } else {
+        clearStopPending();
+        quitPending = true;
+        quitTimeout = setTimeout(clearQuitPending, 3000);
+        output.addLine(c.dim("  (press Ctrl+C again to quit nah)"));
       }
       screen.requestRender();
       return { consume: true };
     }
-    if (data === "\x04" && editor.getText().trim().length === 0) {
+
+    if (data === "\x1b") {
+      // With text in the editor, Escape clears it.
+      if (hasText) {
+        editor.setText("");
+        screen.requestRender();
+        return { consume: true };
+      }
+      // Escape stops a running turn: first press warns, second confirms.
+      if (run.abort && !run.abortRequested) {
+        if (stopPending) {
+          clearStopPending();
+          run.abortRequested = true;
+          run.abort.abort();
+          output.addLine(c.dim("  (turn stopped)"));
+        } else {
+          clearQuitPending();
+          stopPending = true;
+          stopTimeout = setTimeout(clearStopPending, 3000);
+          output.addLine(c.dim("  (press Esc again to confirm stop)"));
+        }
+        screen.requestRender();
+        return { consume: true };
+      }
+      // Escape with no text and no turn: consume, do nothing.
+      return { consume: true };
+    }
+
+    if (data === "\x04" && !hasText) {
       finished?.();
       return { consume: true };
     }

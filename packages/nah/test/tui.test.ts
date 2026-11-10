@@ -403,7 +403,9 @@ describe("alternate-screen host layout", () => {
     expect(stream).toContain("all done");
     expect(stream).toContain("find the bug");
 
-    terminal.onInput?.("\x03");
+    terminal.onInput?.("\x03"); // clears the editor text
+    terminal.onInput?.("\x03"); // no text now: first warns
+    terminal.onInput?.("\x03"); // second quits
     await host;
   });
 
@@ -449,7 +451,8 @@ describe("alternate-screen host layout", () => {
     // After a turn: same rows. The transcript grew upward, not into them.
     expect(dividersIntact(), "the dividers moved after sending a message").toBe(true);
 
-    terminal.onInput?.("\x03");
+    terminal.onInput?.("\x03"); // first warns
+    terminal.onInput?.("\x03"); // second quits
     await host;
   });
 
@@ -476,7 +479,8 @@ describe("alternate-screen host layout", () => {
     expect(rows[ROWS - 3]).toContain("─");
     expect(rows[ROWS - 1]).toContain("─");
 
-    terminal.onInput?.("\x03");
+    terminal.onInput?.("\x03"); // first warns
+    terminal.onInput?.("\x03"); // second quits
     await host;
   });
 
@@ -511,7 +515,9 @@ describe("alternate-screen host layout", () => {
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(stopped).toBe(false);
 
-    terminal.onInput?.("\x03");
+    terminal.onInput?.("\x03"); // clears the text
+    terminal.onInput?.("\x03"); // no text now: first warns
+    terminal.onInput?.("\x03"); // second quits
     await host;
     expect(stopped).toBe(true);
   });
@@ -538,7 +544,8 @@ describe("alternate-screen host layout", () => {
     // No TTY here, so the picker bails out cleanly instead of hanging.
     expect(frame).toContain("cancelled");
 
-    terminal.onInput?.("\x03");
+    terminal.onInput?.("\x03"); // first warns
+    terminal.onInput?.("\x03"); // second quits
     await host;
   }, 20000);
 
@@ -561,7 +568,8 @@ describe("alternate-screen host layout", () => {
     expect(frame).not.toContain("unknown command");
     expect(frame).toMatch(/API_KEY|Unknown provider/i);
 
-    terminal.onInput?.("\x03");
+    terminal.onInput?.("\x03"); // first warns
+    terminal.onInput?.("\x03"); // second quits
     await host;
   });
 
@@ -667,7 +675,8 @@ describe("alternate-screen host layout", () => {
 
     release();
     await new Promise((resolve) => setTimeout(resolve, 150));
-    terminal.onInput?.("\x03");
+    terminal.onInput?.("\x03"); // first warns
+    terminal.onInput?.("\x03"); // second quits
     await host;
   });
 
@@ -715,7 +724,8 @@ describe("alternate-screen host layout", () => {
     ).toHaveLength(1);
     expect(state.turns).toBe(1);
 
-    terminal.onInput?.("\x03"); // idle -> quit
+    terminal.onInput?.("\x03"); // first warns
+    terminal.onInput?.("\x03"); // second quits
     await host;
   });
 });

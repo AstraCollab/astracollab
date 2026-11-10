@@ -192,9 +192,9 @@ const HELP = [
   "  /studio url          Print the URL",
   "",
   "  The Studio is a separate package, installed the first time you ask for it.",
-  "  While it is running, this session's turns are traced into it. Set",
-  "  NAH_TELEMETRY=off or run /telemetry off to stop that.",
-  "  NAH_STUDIO_YES=1 skips the install prompt; NAH_STUDIO_PORT picks the port.",
+  "  Sessions report to it only when they opt in: run /telemetry on or set",
+  "  NAH_TELEMETRY=on. NAH_STUDIO_YES=1 skips the install prompt; NAH_STUDIO_PORT",
+  "  picks the port.",
 ].join("\n");
 
 /**
@@ -460,7 +460,7 @@ const startStudio = async (
     return "handled";
   }
 
-  out.write(`${c.green("  studio")} ${endpoint.url} ${c.dim("· agents in this session are traced there")}\n`);
+  out.write(`${c.green("  studio")} ${endpoint.url} ${c.dim("· a session reports there when it opts in (/telemetry on)")}\n`);
   const opened = await (options.open ?? openUrl)(endpoint.url);
   if (!opened.opened) out.write(`  ${c.dim(`could not open a browser (${opened.reason}) — the URL is above`)}\n`);
   return "handled";

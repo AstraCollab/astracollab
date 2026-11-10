@@ -17,7 +17,6 @@ import { basename, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
 import { liveEndpoint, type StudioEndpoint } from "./studio-endpoint.js";
-import { readConfig, updateConfig } from "./nah-config.js";
 
 /**
  * What the Studio is told about the process it is watching.
@@ -106,20 +105,16 @@ export type TelemetryState = "on" | "off";
  *
  * Three inputs, in the order a user would expect to override them: an explicit
  * environment variable beats a remembered preference. Absent both, reporting is
- * on — but only ever to a Studio that published its own address, so "on" costs
- * one file read and nothing else.
+ * off — a Studio that published its own address is an invitation, not a
+ * command: nothing is sent unless the user opts in.
  */
 export const telemetryState = async (env: NodeJS.ProcessEnv = process.env): Promise<TelemetryState> => {
   const explicit = env.NAH_TELEMETRY?.trim().toLowerCase();
   if (explicit === "off" || explicit === "0" || explicit === "false") return "off";
   if (explicit === "on" || explicit === "1" || explicit === "true") return "on";
-  return (await readConfig()).telemetry === "off" ? "off" : "on";
+  return "off";
 };
 
-/** Remember a preference for later sessions. */
-export const setTelemetryState = async (state: TelemetryState): Promise<void> => {
-  await updateConfig((current) => ({ ...current, telemetry: state }));
-};
 
 /**
  * What is knowable about a trace before the run that fills it in has finished.
@@ -572,9 +567,12 @@ export const connectStudio = async (options: {
   fetchImpl?: typeof fetch;
   /** The session this process is running. Its file decides the agent id. */
   sessionPath?: string | null;
+  /** Set when the user explicitly asked (e.g. `/studio`): connects even though
+   * the default is off, provided a Studio is actually listening. */
+  explicit?: boolean;
 }): Promise<StudioTelemetry | null> => {
   const env = options.env ?? process.env;
-  if ((await telemetryState(env)) === "off") return null;
+  if (!options.explicit && (await telemetryState(env)) === "off") return null;
   const endpoint = await liveEndpoint();
   if (!endpoint) return null;
   const agent = describeAgent({
@@ -666,6 +664,9 @@ export const attachStudio = async (
     // The same session the process started with, so a session that attaches a
     // Studio halfway through is the same agent it was before.
     sessionPath: state.sessionBasePath ?? null,
+    // The user asked for this explicitly (/studio or /telemetry on), so connect
+    // even though the default is off.
+    explicit: true,
     ...(options.env === undefined ? {} : { env: options.env }),
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
   });

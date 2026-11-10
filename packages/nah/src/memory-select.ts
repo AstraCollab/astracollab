@@ -68,8 +68,21 @@ export const selectMemory = async (options: {
   }
 
   const baseUrl = resolveCogmemBaseUrl(config);
+  // Generate stable projectId and agentId from the working directory for multi-project isolation
+  const projectId = `proj-${hashString(options.cwd).slice(0, 12)}`;
+  const agentId = `agent-${hashString(options.cwd).slice(0, 8)}`;
   return {
-    memory: hostedMemory({ apiKey: key, baseUrl }),
-    note: `memory → hosted · ${baseUrl} · key from ${source === "env" ? "COGNITIVE_MEMORY_KEY" : "the credential store"}`,
+    memory: hostedMemory({ apiKey: key, baseUrl, projectId, agentId }),
+    note: `memory → hosted · ${baseUrl} · key from ${source === "env" ? "COGNITIVE_MEMORY_KEY" : "the credential store"} · project: ${projectId} · agent: ${agentId}`,
   };
 };
+
+/** Simple stable hash for a string. */
+function hashString(input: string): string {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) - hash) + input.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}

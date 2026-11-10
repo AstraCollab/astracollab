@@ -64,6 +64,29 @@ const run = (
   if (options.input !== undefined) child.stdin?.end(options.input);
 });
 
+/**
+ * Run `secret-tool` on Linux, translating a missing binary into a clear,
+ * actionable message instead of a cryptic `spawn secret-tool ENOENT`.
+ */
+const linuxSecretTool = async (
+  args: string[],
+  options: { input?: string } = {},
+): Promise<{ code: number; stdout: string; stderr: string }> => {
+  try {
+    return await run("secret-tool", args, options);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && (error as { code?: string }).code === "ENOENT") {
+      throw new Error(
+        "secret-tool is not installed, so NAH cannot save secrets to the Linux Secret Service. " +
+          "Install libsecret (e.g. `sudo apt install libsecret-tools` or `sudo dnf install libsecret`), " +
+          "or set the provider key through its environment variable " +
+          "(ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY).",
+      );
+    }
+    throw error;
+  }
+};
+
 const powershell = (script: string): string[] => [
   "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script,
 ];
@@ -104,7 +127,7 @@ export const getStoredSecret = async (kind: SecretKind, account: string): Promis
       return result.code === 0 ? result.stdout.replace(/[\r\n]+$/, "") || undefined : undefined;
     }
     if (process.platform === "linux") {
-      const result = await run("secret-tool", ["lookup", ...linuxAttributes(kind), account]);
+      const result = await linuxSecretTool(["lookup", ...linuxAttributes(kind), account]);
       return result.code === 0 ? result.stdout.replace(/[\r\n]+$/, "") || undefined : undefined;
     }
     if (process.platform === "win32") {
@@ -176,7 +199,7 @@ export const storeSecretFromPrompt = async (
   }
   if (process.platform === "linux") {
     try {
-      const result = await run("secret-tool", ["store", `--label=NAH ${kind} secret`, ...linuxAttributes(kind), account], { input: secret });
+      const result = await linuxSecretTool(["store", `--label=NAH ${kind} secret`, ...linuxAttributes(kind), account], { input: secret });
       if (result.code !== 0) throw new Error(`exit ${result.code}`);
     } finally {
       process.stdout.write("\n");
@@ -211,7 +234,7 @@ export const storeSecretInteractively = async (
     if (!secret) throw new Error("No API key entered");
     let result: { code: number; stderr: string };
     try {
-      result = await run("secret-tool", ["store", `--label=NAH ${kind} secret`, ...linuxAttributes(kind), account], { input: secret });
+      result = await linuxSecretTool(["store", `--label=NAH ${kind} secret`, ...linuxAttributes(kind), account], { input: secret });
     } finally {
       process.stdout.write("\n");
     }
@@ -238,7 +261,7 @@ export const removeSecret = async (kind: SecretKind, account: string): Promise<v
     return;
   }
   if (process.platform === "linux") {
-    const result = await run("secret-tool", ["clear", ...linuxAttributes(kind), account]);
+    const result = await linuxSecretTool(["clear", ...linuxAttributes(kind), account]);
     if (result.code !== 0) throw new Error(`No stored key was found for that ${kind === "cogmem" ? "Cognitive Memory" : "provider"} key`);
     return;
   }

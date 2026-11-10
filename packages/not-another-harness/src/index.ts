@@ -65,6 +65,7 @@ export {
 	orchestratorPrompt,
 	sharedWorkspaceIsolation,
 	createGitWorktreeIsolation,
+	createCopyIsolation,
 	type OrchestratorOptions,
 	type OrchestratorEvent,
 	type OrchestratorWorkflowOptions,
@@ -72,9 +73,11 @@ export {
 	type SubtaskSpec,
 	type SubtaskResult,
 	type SubtaskArtifact,
+	type ReferenceProject,
 	type SubtaskIsolation,
 	type IsolationHandle,
 	type GitWorktreeIsolationOptions,
+	type CopyIsolationOptions,
 } from "./orchestrator.js";
 /*
  * Workflows: task sequences whose order lives in code rather than in a prompt.
@@ -256,3 +259,10 @@ export type {
 	WorkspaceSnapshotEntry,
 	WorkspaceRestoreResult,
 } from "./types.js";
+export {
+	isWeakModel,
+	modelCapabilities,
+	inferModelTier,
+	type ModelCapabilities,
+	type ModelTier,
+} from "./model-tier.js";

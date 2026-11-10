@@ -15,7 +15,10 @@ import type { SessionMemory } from "./memory-backend.js";
 export const createRecallTool = (getMemory: () => SessionMemory | undefined): Tool =>
   tool({
     description:
-      "Search your memory of this project for earlier facts, preferences and conventions. " +
+      "Search your memory for earlier facts, preferences and conventions. " +
+      "By default it searches this project; pass `projectId` (and `agentId` when the " +
+      "project scopes memories by agent) to cross-reference another project — the shared " +
+      "library, the deploy config, or another team's conventions. " +
       "Use it when the user refers to something established earlier (a URL, id, host, path, " +
       "naming rule, or constraint) and it is not in the current conversation, or when you are " +
       "about to contradict something you were told before. It searches what you were actually " +
@@ -26,15 +29,26 @@ export const createRecallTool = (getMemory: () => SessionMemory | undefined): To
         .min(2)
         .describe("What to look for, in your own words, e.g. \"staging build id\" or \"file naming\""),
       limit: z.number().int().min(1).max(20).optional().describe("Max results (default 6)"),
+      projectId: z
+        .string()
+        .optional()
+        .describe("Search another project's memory instead of this one's, e.g. the project that owns the shared library."),
+      agentId: z
+        .string()
+        .optional()
+        .describe("Which agent's memories within that project (default \"default\"). Only needed when the other project scopes memories by agent."),
     }),
-    execute: async ({ query, limit }) => {
+    execute: async ({ query, limit, projectId, agentId }) => {
       const memory = getMemory();
       if (!memory) return "No memory is available in this session.";
 
       // The adapters absorb their own failures, so this is [] rather than a
       // thrown error: a backend that is down must not look like a tool the model
       // misused. The empty answer below tells it what to say instead of guessing.
-      const results = await memory.search(query, limit ?? 6);
+      const results =
+        projectId !== undefined || agentId !== undefined
+          ? await memory.searchProject({ projectId, agentId, query, limit })
+          : await memory.search(query, limit ?? 6);
       if (results.length === 0) {
         return `No stored memory matches "${query}". If you were not told, say so rather than guessing.`;
       }

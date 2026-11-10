@@ -176,6 +176,7 @@ const studioWorkflowRunner = async (
   probe: Awaited<ReturnType<typeof makeState>>,
 ): Promise<StudioWorkflowRunner | null> => {
   if (!probe.model) return null;
+  const modelSpec = probe.model.spec;
   const registry = createNahWorkflows({ cwd: probe.cwd });
   // Loaded once, here, for the same reason the probe exists: a broken file is
   // reported by the caller that lists workflows, not swallowed to make a registry.
@@ -185,6 +186,7 @@ const studioWorkflowRunner = async (
     orchestrator: createSessionOrchestrator({
       cwd: probe.cwd,
       system: probe.system,
+      modelSpec,
       getModel: () => probe.model!.model,
       approve: async () => false,
       onChildUsage: () => undefined,

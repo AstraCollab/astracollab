@@ -289,7 +289,8 @@ describe("TUI approval does not wedge the run", () => {
     expect(await rm(workspace, { recursive: true, force: true }).then(() => true)).toBe(true);
 
 
-    terminal.onInput?.("\x03");
+    terminal.onInput?.("\x03"); // first warns
+    terminal.onInput?.("\x03"); // second quits
     await host;
   }, 20000);
 });

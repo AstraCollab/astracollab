@@ -545,6 +545,8 @@ type RunState = {
 	context: WorkflowContext;
 	restoredFromCheckpoint: boolean;
 	checkpointReady: boolean;
+	/** Persist the current run state to the durable store. */
+	checkpoint?: () => Promise<void>;
 	fencingToken?: number;
 	onCheckpoint?: (snapshot: WorkflowSnapshot) => void | Promise<void>;
 	onEvent?: (event: WorkflowEvent) => void;

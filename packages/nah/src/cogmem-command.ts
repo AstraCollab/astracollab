@@ -53,7 +53,7 @@ export type CogmemDeps = {
   /** Defaults to `process.stdout`, which is the terminal the TUI just released. */
   readlineOutput?: NodeJS.WriteStream;
   /** Overridable so a test never opens a socket. */
-  createHosted?: (options: { apiKey: string; baseUrl: string }) => HostedMemory;
+  createHosted?: (options: { apiKey: string; baseUrl: string; projectId?: string; agentId?: string }) => HostedMemory;
 };
 
 const askOn = async (deps: CogmemDeps, question: string): Promise<string> => {
@@ -80,8 +80,24 @@ const askOn = async (deps: CogmemDeps, question: string): Promise<string> => {
   }
 };
 
-const buildHosted = (deps: CogmemDeps, apiKey: string, baseUrl: string): HostedMemory =>
-  deps.createHosted ? deps.createHosted({ apiKey, baseUrl }) : hostedMemory({ apiKey, baseUrl });
+const buildHosted = (deps: CogmemDeps, apiKey: string, baseUrl: string): HostedMemory => {
+  // Generate stable projectId and agentId from the working directory for multi-project isolation
+  const projectId = `proj-${hashString(deps.state.cwd).slice(0, 12)}`;
+  const agentId = `agent-${hashString(deps.state.cwd).slice(0, 8)}`;
+  return deps.createHosted
+    ? deps.createHosted({ apiKey, baseUrl, projectId, agentId })
+    : hostedMemory({ apiKey, baseUrl, projectId, agentId });
+};
+
+/** Simple stable hash for a string. */
+function hashString(input: string): string {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) - hash) + input.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
 
 /** Build the local backend, reusing the same wiring the CLI starts with. */
 const buildLocal = async (deps: CogmemDeps): Promise<SessionMemory> => {
@@ -259,7 +275,7 @@ const importLocal = async (deps: CogmemDeps): Promise<void> => {
     return;
   }
 
-  const items = held.map((item) => ({ content: item.content, domains: item.metadata.domains, tier: item.tier }));
+  const items = held.map((item) => ({ content: item.content, domains: item.metadata.domains, tier: item.tier, projectId: "default", agentId: "default" }));
   let stored = 0;
   let merged = 0;
   const rejected: string[] = [];

@@ -412,6 +412,8 @@ export const prepareMemory = async (options: MemoryOptions): Promise<PreparedMem
     : undefined;
 
   const memory = new CognitiveMemory({
+    projectId: "default",
+    agentId: "default",
     ...(extract ? { extract } : {}),
     // Forwarded, not merely accepted. The engine only ever calls `reconcile`,
     // and a `reconciler` that is built and then dropped leaves deduplication

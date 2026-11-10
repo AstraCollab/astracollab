@@ -10,6 +10,7 @@ import {
 	type HarnessRunResult,
 	type OrchestratorEvent,
 	type SubtaskIsolation,
+	type ReferenceProject,
 } from "not-another-harness";
 import { createNodeEnvironment } from "not-another-harness/node";
 import type { ResolvedModel } from "./model.js";
@@ -20,38 +21,23 @@ const MAX_CONCURRENT_DELEGATES = 3;
 const MAX_BATCH_DELEGATES = 8;
 
 /**
- * The tools an exploring child gets: everything that reads, plus a shell, and
- * nothing that writes.
+ * The tools an exploring child gets: everything that reads, and nothing that
+ * writes.
  *
  * Named rather than derived from `createCodingTools`, so that adding a new
  * reading tool to the parent does not silently widen what a child that promised
  * to change nothing can do.
+ *
+ * `bash` is deliberately absent. A shell is an escape hatch around the read-only
+ * restriction: a read-only child with a shell can `sed -i`, `rm`, or `git
+ * checkout` files the parent is mid-edit on. With the shell gone, the child
+ * genuinely cannot touch the shared workspace, which is the precondition for
+ * safely running research children outside a worktree. If a question genuinely
+ * needs to execute a command, the parent should run it itself rather than
+ * delegating execution to an untrusted child.
  */
-const EXPLORE_TOOLS = ["read", "list", "grep", "outline", "glob", "bash"] as const;
+const EXPLORE_TOOLS = ["read", "list", "grep", "outline", "glob"] as const;
 
-/**
- * A child's tool set when it is only looking for an answer.
- *
- * `bash` is in and the editors are out, which is the split Claude Code draws for
- * its own Explore subagent: read-only means Write and Edit are denied, not that
- * the shell is withheld.
- *
- * Withholding the shell was the original design here, on the reasoning that a
- * shell is an escape hatch around the restriction — a read-only child with a
- * shell can `sed -i`. That reasoning is sound and it did not matter: measured
- * against a live model, dropping the shell cost nothing in parent tokens and
- * bought nothing in delegation. A model explaining a claim wants to reproduce
- * it, and a child with no shell cannot, so the parent ran the same commands
- * itself to check — spending exactly the context the delegation was meant to
- * save. The restriction that earned its keep was the one on the editors.
- *
- * So this is not a promise that nothing changes on disk. `bash` can still write,
- * and the explore child shares the parent's workspace rather than taking a
- * worktree, because there is nothing to isolate a question in. Two things narrow
- * it: the shell is created with the same `approveToolCall` gate the parent's own
- * goes through, so every command is shown to the user before it runs, and the
- * harness's inline-script guard still applies on top.
- */
 const createExploreTools =
 	(cwd: string, approve: (toolName: string, input: unknown) => Promise<boolean>): Record<string, unknown> => {
 		const all = createCodingTools(createNodeEnvironment(cwd), { approveToolCall: approve });
@@ -109,6 +95,12 @@ type OrchestratorOptions = {
 	approve: (toolName: string, input: unknown) => Promise<boolean>;
 	onChildUsage: (usage: HarnessRunResult["usage"]) => void;
 	/**
+	 * The model id (e.g. `llama-3.1-8b`, `claude-sonnet-4`). Used to route
+	 * weak/open-weight models into smaller, structured subtasks instead of
+	 * open-ended planning. Omitted, every model is routed conservatively as weak.
+	 */
+	modelSpec?: string;
+	/**
 	 * Where a child's changes land. Defaults to a git worktree per child, which is
 	 * what a session editing a repository wants and what a read-only host has no
 	 * use for.
@@ -140,6 +132,7 @@ export type ChildEventHandler = (event: OrchestratorEvent) => void;
 export const createSessionOrchestrator = (options: OrchestratorOptions): Orchestrator =>
 	new Orchestrator({
 		model: options.getModel,
+		modelSpec: options.modelSpec,
 		system: options.system,
 		isolation: options.isolation ?? createGitWorktreeIsolation({ cwd: options.cwd }),
 		createTools: (cwd) => createCodingTools(createNodeEnvironment(cwd), { approveToolCall: options.approve }),
@@ -184,6 +177,17 @@ const subtaskSchema = z.object({
 			"Short label for this independent subtask. Optional — one is derived from the task when you leave it out.",
 		),
 	task: z.string().trim().min(30).max(4000).describe("Specific implementation request, boundaries, and acceptance criteria."),
+	referenceProjects: z
+		.array(
+			z.object({
+				name: z.string().describe("Display name used as the references subdirectory and in boundary notes."),
+				path: z.string().describe("Absolute path to the project directory to reference."),
+			}),
+		)
+		.optional()
+		.describe(
+			"Other projects this child may read for context. Copied into the child's workspace under references/<name> as read-only material; excluded from its diff. Weak/open-weight models benefit most, since they cannot reason from scratch as reliably as a flagship and need concrete reference code.",
+		),
 });
 
 const exploreSchema = z.object({
@@ -203,6 +207,23 @@ const exploreSchema = z.object({
 		.enum(["quick", "thorough"])
 		.default("thorough")
 		.describe("`quick` when one search would answer it; `thorough` when the answer is spread out and you want it checked."),
+	workspace: z
+		.string()
+		.optional()
+		.describe(
+			"Path to another project or workspace to search instead of this one's, e.g. \"../shared-lib\" or \"../deploy-config\". Leave out to search this project. The child reads only; it cannot write into the other workspace.",
+		),
+	referenceProjects: z
+		.array(
+			z.object({
+				name: z.string().describe("Display name used as the references subdirectory and in boundary notes."),
+				path: z.string().describe("Absolute path to the project directory to reference."),
+			}),
+		)
+		.optional()
+		.describe(
+			"Other projects this child may read for context. Copied into the child's workspace under references/<name> as read-only material; excluded from its diff. Weak/open-weight models benefit most, since they cannot reason from scratch as reliably as a flagship and need concrete reference code.",
+		),
 });
 
 const WORKTREE_NOTE = "temporary Git worktree";
@@ -253,14 +274,15 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 			"The child starts from a snapshot of your current working state — including uncommitted and untracked files — so it can build on the work you have already done. It cannot see anything you change after it starts, so delegate only work that does not depend on a later edit. Its changes are never merged automatically.",
 			"The result includes the child status, token/step metrics, changed paths, and diff for the parent to review and integrate.",
 			"Use only for separable subtasks; do not delegate the whole user request or depend on another child’s unfinished changes.",
+			"To reference another project's code as context, pass `referenceProjects` with `{ name, path }` entries; they are copied read-only into the child's workspace under references/<name> and excluded from its diff.",
 		].join(" "),
 		inputSchema: subtaskSchema,
-		execute: async ({ title: rawTitle, task }) => {
+		execute: async ({ title: rawTitle, task, referenceProjects }) => {
 			const title = titleFor(rawTitle, task);
-			const approved = await options.approve("delegate_task", { title, task, isolation: WORKTREE_NOTE });
+			const approved = await options.approve("delegate_task", { title, task, isolation: WORKTREE_NOTE, referenceProjects });
 			if (!approved) return "Delegation was not started because approval was denied.";
 			try {
-				return report([await orchestrator.run({ title, task })]);
+				return report([await orchestrator.run({ title, task, referenceProjects })]);
 			} catch (error) {
 				if (error instanceof OrchestratorBusyError) return `Error: ${error.message}.`;
 				return `Delegation failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -278,7 +300,7 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 			tasks: z.array(subtaskSchema).min(2).max(MAX_BATCH_DELEGATES).describe("The independent subtasks of your plan, each self-contained."),
 		}),
 		execute: async ({ tasks: rawTasks }) => {
-			const tasks = rawTasks.map(({ title, task }) => ({ title: titleFor(title, task), task }));
+			const tasks = rawTasks.map(({ title, task, referenceProjects }) => ({ title: titleFor(title, task), task, referenceProjects }));
 			const approved = await options.approve("delegate_tasks", {
 				isolation: WORKTREE_NOTE,
 				count: tasks.length,
@@ -326,12 +348,13 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 			"If the answer is that the thing you were asked about does not exist, say that plainly — that is a useful answer, and a confident wrong one is worse than either.",
 		].join("\n");
 
-	const exploreSpec = ({ title, question, depth }: z.infer<typeof exploreSchema>) => ({
+	const exploreSpec = ({ title, question, depth, workspace, referenceProjects }: z.infer<typeof exploreSchema>) => ({
 		title: titleFor(title, question),
 		task: exploreTask(question, depth),
-		isolation: sharedWorkspaceIsolation(),
+		isolation: sharedWorkspaceIsolation({ cwd: workspace }),
 		createTools: (cwd: string) => createExploreTools(cwd, options.approve),
 		maxSteps: EXPLORE_STEPS[depth],
+	referenceProjects,
 	});
 
 	const delegateExplore = tool({
@@ -342,16 +365,18 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 			"Take the answer as the result. If you find yourself re-reading the files it names to confirm what it said, the search was cheaper to do yourself — the whole point is that its findings land in your context and its reads do not.",
 			"It has no edit or write tool, so it has no way to change a file on purpose. It does have a shell — it can run tests, scripts, and git to check its own answer — and that shell goes through the same approval prompt as yours, so you see every command before it runs.",
 			"Pass depth `quick` when one search would answer it and `thorough` when the answer is spread across files and you want it verified. That is the one knob worth thinking about: a quick child that answers immediately is much cheaper than a thorough one that keeps going.",
+			"To search another project instead of this one, pass `workspace` with a path to its directory (e.g. \"../shared-lib\"). The child reads that workspace only and cannot write into it.",
+			"To reference another project's code as context without searching it, pass `referenceProjects` with `{ name, path }` entries; they are copied read-only into the child's workspace under references/<name>.",
 			"Do not delegate a question you can answer from what is already in your context, or one a single read settles — the child costs several times what the read costs. Scale the effort to the question: one quick child for a lookup, several only when the answer is genuinely spread out. Declining to delegate is a correct outcome, not a failure to use the tool.",
 			"Prefer this over `delegate_task` whenever the work is finding something out. Reach for `delegate_task` only when the child must actually change files.",
 		].join(" "),
 		inputSchema: exploreSchema,
-		execute: async ({ title: rawTitle, question, depth }) => {
+		execute: async ({ title: rawTitle, question, depth, referenceProjects }) => {
 			const title = titleFor(rawTitle, question);
-			const approved = await options.approve("delegate_explore", { title, question, depth });
+			const approved = await options.approve("delegate_explore", { title, question, depth, referenceProjects });
 			if (!approved) return "Exploration was not started because approval was denied.";
 			try {
-				return report([await orchestrator.run(exploreSpec({ title, question, depth }))], [EXPLORE_REPORT_CHARS[depth]]);
+				return report([await orchestrator.run(exploreSpec({ title, question, depth, referenceProjects }))], [EXPLORE_REPORT_CHARS[depth]]);
 			} catch (error) {
 				if (error instanceof OrchestratorBusyError) return `Error: ${error.message}.`;
 				return `Exploration failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -382,10 +407,12 @@ export const createDelegationTools = (options: DelegateToolOptions): Record<stri
 			questions: z.array(exploreSchema).min(2).max(MAX_BATCH_EXPLORES).describe("The independent questions to answer, each self-contained."),
 		}),
 		execute: async ({ questions: rawQuestions }) => {
-			const questions = rawQuestions.map(({ title, question, depth }) => ({
+			const questions = rawQuestions.map(({ title, question, depth, workspace, referenceProjects }) => ({
 				title: titleFor(title, question),
 				question,
 				depth,
+				workspace,
+				referenceProjects,
 			}));
 			const approved = await options.approve("delegate_explores", {
 				count: questions.length,

@@ -54,14 +54,32 @@ const EMPTY_INJECTION: MemoryInjectionReport = { text: "", entries: [], totalTok
  * Converting here means those two callers keep working unchanged against either
  * backend.
  */
-const toItem = (memory: ServiceMemory): MemoryItem => ({
+/**
+ * The service's memory, in the engine's shape.
+ *
+ * Both describe the same row, but one nests metadata and the other flattens
+ * `domains`, and the recall tool and the trigger detector read the engine shape.
+ * Converting here means those two callers keep working unchanged against either
+ * backend.
+ */
+const toItem = (
+  memory: ServiceMemory,
+  /** The scope this hit was found under — the local backend's own scope, or the
+   * project/agent a cross-project search asked for. Never derived from the
+   * service for a hit that came back under a different scope. */
+  scope: { projectId: string; agentId: string },
+): MemoryItem => ({
   id: memory.id,
   content: memory.content,
   ...(memory.gist === undefined ? {} : { gist: memory.gist }),
   bookmark: (memory.gist ?? memory.content).slice(0, 80),
   tier: memory.tier,
+  projectId: scope.projectId,
+  agentId: scope.agentId,
   metadata: {
     domains: memory.domains,
+    projectId: scope.projectId,
+    agentId: scope.agentId,
     createdAt: memory.createdAt,
     lastAccessedAt: memory.lastAccessedAt,
     accessCount: memory.accessCount,
@@ -74,13 +92,15 @@ const toItem = (memory: ServiceMemory): MemoryItem => ({
  * engine uses, so this is a field-by-field copy rather than a cast: a cast would
  * let a reason the service invents pass as a valid local one.
  */
-const toEntry = (entry: ContextEntry): MemoryInjectionReport["entries"][number] => ({
+const toEntry = (entry: ContextEntry, opts: HostedMemoryOptions): MemoryInjectionReport["entries"][number] => ({
   id: entry.id,
   tier: entry.tier,
   reason: entry.reason,
   gist: entry.gist,
   ...(entry.body === undefined ? {} : { body: entry.body }),
   tokens: entry.tokens,
+  projectId: opts.projectId ?? "default",
+  agentId: opts.agentId ?? "default",
 });
 
 const toTension = (tension: {
@@ -146,6 +166,10 @@ export type HostedMemoryOptions = {
   /** Overridable for tests. Applies to the pre-turn call. */
   contextTimeoutMs?: number;
   debug?: boolean;
+  /** Which project this agent's memories belong to. Derived from the cwd by default. */
+  projectId?: string;
+  /** Which agent created these memories. Derived from the cwd by default. */
+  agentId?: string;
   /** Groups what this session writes, the way `postTurnAsync` does. */
   sessionId?: string;
 };
@@ -184,6 +208,34 @@ export const hostedMemory = (options: HostedMemoryOptions): HostedMemory => {
     if (process.env.NAH_MEMORY_DEBUG === "1") console.log(`  [cogmem] ${label} failed: ${failure}`);
   };
 
+  /** Ranked lookup scoped to a project/agent; used by both `search` and `searchProject`. */
+  const searchHits = async ({
+    query,
+    limit,
+    projectId,
+    agentId,
+  }: {
+    query: string;
+    limit?: number;
+    projectId?: string;
+    agentId?: string;
+  }): Promise<Array<{ item: MemoryItem; score: number }>> => {
+    try {
+      const scope = { projectId: projectId ?? "default", agentId: agentId ?? "default" };
+      const response = await warm.recall.search({
+        query,
+        ...(limit === undefined ? {} : { limit }),
+        ...(projectId !== undefined ? { projectId } : {}),
+        ...(agentId !== undefined ? { agentId } : {}),
+      });
+      failure = null;
+      return response.results.map((hit) => ({ item: toItem(hit.memory, scope), score: hit.score }));
+    } catch (error) {
+      note("recall.search", error);
+      return [];
+    }
+  };
+
   return {
     client: warm,
     backend: "hosted",
@@ -199,11 +251,13 @@ export const hostedMemory = (options: HostedMemoryOptions): HostedMemory => {
         const report = await hot.context.build({
           ...(injection.userMessage === undefined ? {} : { userMessage: injection.userMessage }),
           ...(injection.forceFull === undefined ? {} : { forceFull: [...injection.forceFull] }),
+          ...(options.projectId !== undefined ? { projectId: options.projectId } : {}),
+          ...(options.agentId !== undefined ? { agentId: options.agentId } : {}),
         });
         failure = null;
         return {
           text: report.text,
-          entries: report.entries.map(toEntry),
+          entries: report.entries.map((entry) => toEntry(entry, options)),
           totalTokens: report.totalTokens,
           truncated: report.truncated,
         };
@@ -216,14 +270,17 @@ export const hostedMemory = (options: HostedMemoryOptions): HostedMemory => {
     },
 
     async search(query, limit) {
-      try {
-        const response = await warm.recall.search({ query, ...(limit === undefined ? {} : { limit }) });
-        failure = null;
-        return response.results.map((hit) => ({ item: toItem(hit.memory), score: hit.score }));
-      } catch (error) {
-        note("recall.search", error);
-        return [];
-      }
+      return searchHits({ query, limit });
+    },
+
+    /**
+     * Ranked lookup in another project/agent's memory: the service scopes the
+     * query to the requested project/agent, so this is the hosted path for
+     * cross-referencing a sibling project. A key that lacks read access to that
+     * scope degrades to [] rather than failing the turn.
+     */
+    async searchProject({ projectId, agentId, query, limit }) {
+      return searchHits({ query, limit, projectId: projectId ?? options.projectId, agentId: agentId ?? options.agentId });
     },
 
     async postTurnAsync(turn) {
@@ -232,6 +289,8 @@ export const hostedMemory = (options: HostedMemoryOptions): HostedMemory => {
           userMessage: clipTurnField(turn.userMessage),
           assistantResponse: clipTurnField(turn.assistantResponse),
           ...(turn.sessionId === undefined ? {} : { sessionId: turn.sessionId }),
+          ...(turn.projectId === undefined ? {} : { projectId: turn.projectId }),
+          ...(turn.agentId === undefined ? {} : { agentId: turn.agentId }),
         });
         failure = null;
       } catch (error) {
@@ -325,9 +384,13 @@ export const hostedMemory = (options: HostedMemoryOptions): HostedMemory => {
               content,
               ...(entry.domains === undefined ? {} : { domains: entry.domains }),
               ...(entry.tier === undefined ? {} : { tier: entry.tier }),
+              projectId: options.projectId ?? "default",
+              agentId: options.agentId ?? "default",
             },
           ],
-          ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+          ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+          ...(options.projectId !== undefined ? { projectId: options.projectId } : {}),
+          ...(options.agentId !== undefined ? { agentId: options.agentId } : {}),
         });
         failure = null;
         return {

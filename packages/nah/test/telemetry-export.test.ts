@@ -417,6 +417,8 @@ describe("announcing an agent", () => {
         env: process.env,
         model: "openai:gpt-5",
         fetchImpl,
+        // These tests explicitly choose to connect to the Studio they set up.
+        explicit: true,
         ...(options.sessionPath === undefined ? {} : { sessionPath: options.sessionPath }),
       });
     } finally {
@@ -526,6 +528,8 @@ describe("changing which session a process is on", () => {
         env: process.env,
         model: "openai:gpt-5",
         fetchImpl,
+        // This test explicitly chooses to connect to the Studio it set up.
+        explicit: true,
         sessionPath: "/sessions/a.jsonl",
       });
       const before = telemetry!.agent.id;
@@ -556,11 +560,11 @@ describe("changing which session a process is on", () => {
 });
 
 describe("opting out", () => {
-  it("is on unless something says otherwise", async () => {
+  it("is off unless something says otherwise", async () => {
     const previous = process.env.HOME;
     process.env.HOME = tempHome();
     try {
-      expect(await telemetryState({})).toBe("on");
+      expect(await telemetryState({})).toBe("off");
     } finally {
       if (previous === undefined) delete process.env.HOME;
       else process.env.HOME = previous;

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { promises as fs } from "node:fs";
 import * as nodePath from "node:path";
 import type { ModelMessage } from "ai";
 import { detectMemoryTriggers } from "./memory-injection.js";
@@ -70,6 +71,13 @@ export type SessionState = {
   activeShellCommands: string[] | null;
   undoHistory: Array<TurnRecovery>;
   sessionBasePath: string | null;
+  /**
+   * A human-readable name for the session, set with `/session name <name>`.
+   * Shown in `/session list` and the TUI sidebar instead of the opaque file id,
+   * so a user resuming work can tell at a glance what each session is for.
+   * Persisted in a `<file>.name.json` sidecar next to the transcript.
+   */
+  name: string | null;
   taskLedger: SessionTaskLedger | null;
   discoveredChecks: string[];
   store: JsonlSessionStore | null;
@@ -344,6 +352,37 @@ const sessionIdFor = (state: Pick<SessionState, "store" | "sessionBasePath">): s
   return stem ? `nah-${stem}` : `nah-${process.pid}`;
 };
 
+/** Sidecar file for a session's display name, next to its transcript. */
+export const sessionNameFile = (path: string): string => `${path}.name.json`;
+
+/** The name a user gave this session, or null when it is still just an id. */
+export const loadSessionName = async (store: JsonlSessionStore): Promise<string | null> => {
+  try {
+    const parsed = JSON.parse(await fs.readFile(sessionNameFile(store.path), "utf8"));
+    return typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Persist a display name for this session, replacing any previous one. */
+export const saveSessionName = async (store: JsonlSessionStore, name: string): Promise<void> => {
+  await fs.mkdir(nodePath.dirname(sessionNameFile(store.path)), { recursive: true });
+  await fs.writeFile(sessionNameFile(store.path), `${JSON.stringify({ name }, null, 2)}\n`, "utf8");
+};
+
+/** Derive a session name from the first user prompt, or null when there is nothing usable. */
+export const nameFromPrompt = (prompt: string): string | null => {
+  const name = prompt
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[^a-zA-Z0-9 _.-]/g, "")
+    .replace(/\.+$/, "")
+    .slice(0, 64)
+    .trim();
+  return name.length > 0 ? name : null;
+};
+
 /**
  * Run one agent turn on top of the session's current messages, then fold the
  * transcript back into state and persist the delta (Pi-style branch append).
@@ -369,6 +408,8 @@ export const runTurn = (
     throw new Error("No model is configured. Set a provider API key, then choose a model with /model <provider:model-id>.");
   }
   const before = state.messages.length;
+  /** The agent may name the session itself via name_session; if it does not, name it from the first prompt. */
+  const firstTurn = state.turns === 0;
   const previousMessages = [...state.messages];
   const ledgerBefore = state.taskLedger ? structuredClone(state.taskLedger) : null;
   const fileChanges: Array<{ path: string; existed: boolean; content?: string; after: string }> = [];
@@ -561,6 +602,15 @@ export const runTurn = (
     // Written after the transcript so a crash between the two leaves counters
     // that are behind the messages, never ahead of them.
     await saveUsage(state);
+    // If the agent did not name the session itself, derive a name from the first
+    // prompt so every persisted session has a label a user can recognize.
+    if (firstTurn && state.store && !state.name) {
+      const name = nameFromPrompt(prompt);
+      if (name) {
+        state.name = name;
+        await saveSessionName(state.store, name).catch(() => undefined);
+      }
+    }
     // Fire CognitiveMemory post-turn async evaluation without blocking
     if (state.cognitiveMemory) {
       const assistantText = result.messages
@@ -842,6 +892,7 @@ export const resumeSession = async (state: SessionState): Promise<boolean> => {
   }
   state.messages = await state.store.load();
   state.taskLedger = await state.store.loadTaskLedger();
+  state.name = await loadSessionName(state.store);
   const usage = await state.store.loadUsage();
   state.turns = usage.turns;
   state.totalUsage = {

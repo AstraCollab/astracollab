@@ -26,7 +26,9 @@ const snapshot = (): CognitiveMemoryStateSnapshot => ({
         claimB: { source: "conversation", statement: "We never deploy on Fridays", timestamp: 2000 },
         impact: "critical",
         taskRelevance: 1,
-        actionableQuestion: "Which is it?"
+        actionableQuestion: "Which is it?",
+        projectId: "default",
+        agentId: "default"
       }
     ],
     selfModel: {
@@ -50,12 +52,16 @@ const snapshot = (): CognitiveMemoryStateSnapshot => ({
       bookmark: "staging build",
       gist: "staging build id",
       tier: "L1",
+      projectId: "default",
+      agentId: "default",
       metadata: {
         domains: ["deployment"],
         createdAt: 1000,
         lastAccessedAt: 2000,
         accessCount: 3,
-        sourceSessionId: "session-1"
+        sourceSessionId: "session-1",
+        projectId: "default",
+        agentId: "default"
       }
     }
   ],
@@ -65,7 +71,9 @@ const snapshot = (): CognitiveMemoryStateSnapshot => ({
       content: "File naming is kebab-case",
       bookmark: "naming",
       tier: "L2",
-      metadata: { domains: ["naming"], createdAt: 1100, lastAccessedAt: 2100, accessCount: 0 }
+      projectId: "default",
+      agentId: "default",
+      metadata: { domains: ["naming"], createdAt: 1100, lastAccessedAt: 2100, accessCount: 0, projectId: "default", agentId: "default" }
     }
   ],
   l3: [
@@ -74,7 +82,9 @@ const snapshot = (): CognitiveMemoryStateSnapshot => ({
       content: "The old billing endpoint was decommissioned",
       bookmark: "billing",
       tier: "L3",
-      metadata: { domains: [], createdAt: 1200, lastAccessedAt: 2200, accessCount: 0 }
+      projectId: "default",
+      agentId: "default",
+      metadata: { domains: [], createdAt: 1200, lastAccessedAt: 2200, accessCount: 0, projectId: "default", agentId: "default" }
     }
   ],
   stats: { totalTurnsProcessed: 7, predictionsHit: 3, predictionsTotal: 5, tensionsDetected: 1 }

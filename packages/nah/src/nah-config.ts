@@ -28,9 +28,9 @@ export type NahConfig = {
   lastModel?: string;
   cogmem?: Partial<CogmemConfig>;
   /**
-   * Whether to report this machine's turns to a Studio. Absent means on, but only
-   * ever to a Studio that published its own address — so this records a decision
-   * to opt out, never one to opt in.
+   * Whether to report this machine's turns to a Studio. Absent means off: a
+   * Studio that published its own address is an invitation, not a command, so
+   * this records a decision to opt in, never one to opt out.
    */
   telemetry?: "on" | "off";
 };

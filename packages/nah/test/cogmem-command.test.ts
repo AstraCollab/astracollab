@@ -179,7 +179,7 @@ describe("/cogmem setup", () => {
     expect(credentials.storeSecretInteractively).toHaveBeenCalledWith("cogmem", "default", expect.anything());
     // Nothing is enabled until the probe has passed.
     expect(state.cognitiveMemory?.backend).toBe("hosted");
-    expect(hosted.built[0]).toEqual({ apiKey: "stored-key", baseUrl: "https://memory.example" });
+    expect(hosted.built[0]).toMatchObject({ apiKey: "stored-key", baseUrl: "https://memory.example", projectId: expect.any(String), agentId: expect.any(String) });
     expect(text()).toContain("memory → hosted · https://memory.example");
     expect(text()).toContain("untouched");
     expect((await loadCogmemConfig()).baseUrl).toBe("https://memory.example");

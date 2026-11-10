@@ -185,7 +185,7 @@ export const runServe = async (
 
 	out.write(`nah studio → ${handle.url}\n`);
 	out.write(
-		"  watching agents; every nah session on this machine can report to it\n",
+		"  a session reports here when it opts in: /telemetry on or NAH_TELEMETRY=on\n",
 	);
 	out.write(
 		`  agents:  ${agent.model ?? "no model configured — the chat tab and evals are unavailable"}\n`,

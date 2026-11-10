@@ -15,14 +15,14 @@ import { parsePermissionMode } from "./permissions.js";
 import { c, formatFileChange, formatWorkspaceDiff, renderWelcome, toolLabel, usageLine, type RenderableFileChange } from "./render.js";
 import { renderCommandHelp } from "./commands.js";
 import { listSessionIds, resolveSessionFile } from "./context.js";
+import { listSessions } from "./session-picker.js";
 import { handleCogmemCommand } from "./cogmem-command.js";
-import { adoptUsage, flushStopNotice, providerTokenTotals, resetUsage, resolveInjection, runTurn, type SessionState, type StepRecovery } from "./session.js";
+import { adoptUsage, flushStopNotice, loadSessionName, providerTokenTotals, resetUsage, resolveInjection, runTurn, type SessionState, type StepRecovery } from "./session.js";
 import { runStudioCommand, confirmOnStdout } from "./studio-command.js";
 import {
   adoptSessionIdentity,
   attachStudio,
   detachStudio,
-  setTelemetryState,
   telemetryState,
 } from "./telemetry-export.js";
 import { formatTaskLedger } from "./task-ledger.js";
@@ -876,6 +876,7 @@ export const handleSlashCommand = async (
           state.taskLedger = await store.loadTaskLedger();
           state.undoHistory = [];
           await adoptUsage(state);
+          state.name = await loadSessionName(store);
           out.write(`${c.green("switched")} → main ${c.dim(`${state.messages.length} messages`)}\n`);
           state.onSessionSwitch?.(state.messages);
           return "handled";
@@ -893,6 +894,7 @@ export const handleSlashCommand = async (
           state.taskLedger = await store.loadTaskLedger();
           state.undoHistory = [];
           await adoptUsage(state);
+          state.name = await loadSessionName(store);
           out.write(`${c.green("switched")} → ${arg} ${c.dim(`${messages.length} messages`)}\n`);
           state.onSessionSwitch?.(state.messages);
         } catch (e) {
@@ -905,6 +907,7 @@ export const handleSlashCommand = async (
           state.undoHistory = [];
           // The fork inherits the parent's transcript, so it inherits its spend.
           await adoptUsage(state);
+          state.name = await loadSessionName(forked);
           out.write(`${c.yellow("created")} branch ${arg} ${c.dim(`from ${restored.length} carried message(s)`)}\n`);
           out.write(c.dim(`  /branch main returns you · /branches lists them\n`));
           state.onSessionSwitch?.(state.messages);
@@ -944,14 +947,11 @@ export const handleSlashCommand = async (
       out.write(c.dim(`mode → ${mode}\n`));
       return "handled";
     }
-    case "session": {
-      if (!arg || arg === "list") {
-        const directory = nodePath.dirname(defaultSessionFile(cwd));
+    case "session":
+    case "sessions": {
+      if (!arg || arg === "list" || arg === "sessions") {
         try {
-          const sessions = (await listSessionIds(cwd)).map((session) => ({
-            ...session,
-            active: state.store?.path === nodePath.join(directory, `${session.id}.jsonl`),
-          }));
+          const sessions = await listSessions(cwd, state.store?.path);
           const available = sessions;
           if (!available.length) {
             out.write(c.dim("(no saved sessions for this directory)\n"));
@@ -959,9 +959,11 @@ export const handleSlashCommand = async (
             out.write(`${c.bold("Sessions for this directory")}\n`);
             for (const session of available) {
               const active = session.active ? c.green(" · active") : "";
-              out.write(`${session.id}${active}  ${c.dim(new Date(session.modified).toLocaleString())}\n`);
+              // A named session shows its name instead of the opaque file id.
+              const label = session.name ?? session.id;
+              out.write(`${label}${active}  ${c.dim(new Date(session.modified).toLocaleString())}\n`);
             }
-            out.write(c.dim("Switch with: /session <id>\n"));
+            out.write(c.dim("Switch with: /session <id>   ·   name with: /session name <name>\n"));
           }
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") out.write(c.dim("(no saved sessions for this directory)\n"));
@@ -971,6 +973,7 @@ export const handleSlashCommand = async (
       }
       if (arg === "off") {
         state.store = null;
+        state.name = null;
         out.write(c.dim("(session persistence off for this process)\n"));
         return "handled";
       }
@@ -985,6 +988,7 @@ export const handleSlashCommand = async (
         state.messages = [];
         state.taskLedger = null;
         state.undoHistory = [];
+        state.name = null;
         await resetUsage(state);
         // A new session is a new agent: the Studio's list is a list of sessions.
         await adoptSessionIdentity(state);
@@ -1026,6 +1030,7 @@ export const handleSlashCommand = async (
         state.sessionBasePath = target;
         state.messages = messages;
         state.taskLedger = await state.store.loadTaskLedger();
+        state.name = await loadSessionName(state.store);
         state.undoHistory = [];
         // Counters belong to the transcript that produced them. Carrying the
         // previous session's totals over made /stats describe a session that
@@ -1037,11 +1042,12 @@ export const handleSlashCommand = async (
         const loaded = messages.length === 0
           ? c.dim("(that session is empty)")
           : c.dim(`${messages.length} message${messages.length === 1 ? "" : "s"} restored`);
-        out.write(`${c.green("switched")} → ${nodePath.basename(target)} ${loaded}\n`);
+        const named = state.name ? ` (“${state.name}”)` : "";
+        out.write(`${c.green("switched")} → ${nodePath.basename(target)}${named} ${loaded}\n`);
         state.onSessionSwitch?.(state.messages);
         return "handled";
       }
-      out.write(c.dim("usage: /session [list | <id> | new | off]") + "\n");
+      out.write(c.dim("usage: /session [list | name <name> | <id> | new | off]") + "\n");
       return "handled";
     }
     case "compact": {
@@ -1220,7 +1226,6 @@ export const handleSlashCommand = async (
         out.write(c.red(`  /telemetry ${wanted} — expected on or off\n`));
         return "handled";
       }
-      await setTelemetryState(wanted);
       if (wanted === "off") {
         detachStudio(state);
         out.write(c.dim("  off — this session stops reporting\n"));
@@ -1533,7 +1538,8 @@ export const startRepl = async (state: SessionState): Promise<void> => {
       (activeId === sessionPrefix || activeId.startsWith(`${sessionPrefix}-`) || activeId.startsWith(`${sessionPrefix}.`))
       ? activeId
       : shellQuote(activePath);
-    out.write(`You left NAH. Resume your session with: nah --session ${reference}\n`);
+    const named = state.name ? ` (“${state.name}”)` : "";
+    out.write(`You left NAH. Resume your session${named} with: nah --session ${reference}\n`);
   }
 };
 

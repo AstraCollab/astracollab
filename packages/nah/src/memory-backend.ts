@@ -115,13 +115,30 @@ export interface SessionMemory {
    * path that can wait before the request is composed — see `resolveInjection`
    * in `./session.ts`.
    */
-  planInjection(options?: { userMessage?: string; forceFull?: Iterable<string> }): Promise<MemoryInjectionReport>;
+  planInjection(options?: { userMessage?: string; forceFull?: Iterable<string>; projectId?: string; agentId?: string }): Promise<MemoryInjectionReport>;
 
   /** Deterministic ranked lookup across every memory tier. */
   search(query: string, limit?: number): Promise<Array<{ item: MemoryItem; score: number }>>;
 
+  /**
+   * Ranked lookup in another project/agent's memory instead of this one's.
+   *
+   * The local backend holds one project/agent per instance, so without a peer
+   * registered for the requested scope it returns [] and the turn continues — a
+   * miss, not a failure. The hosted backend asks the service for the named
+   * scope. This is how an agent cross-references a sibling project (the shared
+   * library, the deploy config, the other team's conventions) without leaving
+   * its own turn.
+   */
+  searchProject(options: {
+    projectId?: string;
+    agentId?: string;
+    query: string;
+    limit?: number;
+  }): Promise<Array<{ item: MemoryItem; score: number }>>;
+
   /** Extraction, arbitration, budgeting and persistence for a finished turn. */
-  postTurnAsync(turn: { userMessage: string; assistantResponse: string; sessionId?: string }): Promise<void>;
+  postTurnAsync(turn: { userMessage: string; assistantResponse: string; sessionId?: string; projectId?: string; agentId?: string }): Promise<void>;
 
   describe(): Promise<MemoryDescription>;
 
@@ -192,6 +209,15 @@ export const localMemory = (options: {
    * would otherwise hold a write that the next `postTurnAsync` never saw.
    */
   flush?: () => Promise<void>;
+  /**
+   * Other projects this instance may cross-reference.
+   *
+   * Keyed by `projectId\0agentId`, so `searchProject` can hand a query to the
+   * peer that actually holds that scope. A local backend holds one
+   * project/agent per instance, so without a peer registered here,
+   * `searchProject` is a miss rather than a failure.
+   */
+  peers?: Map<string, SessionMemory>;
 }): SessionMemory => {
   let failure: string | null = null;
   const note = (error: unknown): void => {
@@ -220,6 +246,20 @@ export const localMemory = (options: {
     async search(query, limit) {
       try {
         return limit === undefined ? options.memory.search(query) : options.memory.search(query, limit);
+      } catch (error) {
+        note(error);
+        return [];
+      }
+    },
+
+    async searchProject({ projectId, agentId, query, limit }) {
+      // One project per instance: without a peer for the requested scope there
+      // is nothing to search here, so a miss is the honest answer — not a
+      // failure the turn has to survive.
+      const peer = options.peers?.get(`${projectId ?? "default"}\0${agentId ?? "default"}`);
+      if (!peer) return [];
+      try {
+        return limit === undefined ? await peer.search(query) : await peer.search(query, limit);
       } catch (error) {
         note(error);
         return [];
@@ -284,8 +324,12 @@ export const localMemory = (options: {
             content,
             bookmark: content.slice(0, 80),
             tier,
+            projectId: "default",
+            agentId: "default",
             metadata: {
               domains: entry.domains ?? [],
+              projectId: "default",
+              agentId: "default",
               createdAt: now,
               lastAccessedAt: now,
               accessCount: 0,

@@ -53,7 +53,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   { name: "branch", description: "Fork or switch to a named branch", argumentHint: "<name>" },
   {
     name: "session",
-    description: "Search and switch to a session for this directory",
+    description: "Search and switch to a session for this directory; sessions are named by the agent based on the task",
     argumentHint: "[list|<id>|new|off]",
     // Exclusive because a bare `/session` opens the same full-screen picker as
     // `/model`. `/session <id>`, `new` and `off` stay in the transcript.
