@@ -157,6 +157,10 @@ export interface StoreService {
       readonly domains: ReadonlyArray<string>
       readonly now: number
       readonly source: MemorySource
+      /** Project this memory belongs to. Defaults to "default". */
+      readonly projectId?: string | undefined
+      /** Agent that created this memory. Defaults to "default". */
+      readonly agentId?: string | undefined
       readonly sessionId?: string | undefined
       readonly libraryId?: string | null | undefined
     }
@@ -475,6 +479,8 @@ export class MemoryStore extends Context.Service<MemoryStore, StoreService>()("c
             .values({
               id: input.id,
               organizationId,
+              projectId: input.projectId ?? "default",
+              agentId: input.agentId ?? "default",
               libraryId: input.libraryId ?? null,
               content: input.content,
               bookmark: input.bookmark,

@@ -22,7 +22,11 @@ export const RememberBody = Schema.Struct({
       content: LongText,
       domains: Schema.optional(Schema.Array(ShortText)),
       /** Which cache tier to file it under. Defaults to L1. */
-      tier: Schema.optional(MemoryTier)
+      tier: Schema.optional(MemoryTier),
+      /** Project this memory belongs to. Defaults to "default". */
+      projectId: Schema.optional(Schema.String),
+      /** Agent that created this memory. Defaults to "default". */
+      agentId: Schema.optional(Schema.String)
     })
   ).pipe(Schema.check(Schema.isMinLength(1))),
   /** Groups memories that came from one conversation. */

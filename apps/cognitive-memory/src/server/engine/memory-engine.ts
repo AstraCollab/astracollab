@@ -117,7 +117,15 @@ export interface MemoryEngineService {
   readonly remember: (input: {
     readonly organizationId: string
     readonly libraryId?: string | null | undefined
-    readonly items: ReadonlyArray<{ readonly content: string; readonly domains?: ReadonlyArray<string>; readonly tier?: MemoryTier }>
+    readonly items: ReadonlyArray<{
+      readonly content: string
+      readonly domains?: ReadonlyArray<string>
+      readonly tier?: MemoryTier
+      /** Project this memory belongs to. Defaults to "default". */
+      readonly projectId?: string | undefined
+      /** Agent that created this memory. Defaults to "default". */
+      readonly agentId?: string | undefined
+    }>
     readonly sessionId?: string | undefined
     readonly source?: MemorySource | undefined
     readonly reconcile?: boolean | undefined
@@ -378,6 +386,10 @@ const makeMemoryEngine = Effect.gen(function*() {
       readonly source: MemorySource
       readonly sessionId?: string | undefined
       readonly tier?: MemoryTier | undefined
+      /** Project this memory belongs to. Defaults to "default". */
+      readonly projectId?: string | undefined
+      /** Agent that created this memory. Defaults to "default". */
+      readonly agentId?: string | undefined
     }
   ): Effect.Effect<
     | { readonly stored: MemoryItem; readonly merged: false; readonly mergedInto?: undefined }
@@ -420,6 +432,8 @@ const makeMemoryEngine = Effect.gen(function*() {
         domains: statement.domains,
         now: at,
         source: statement.source,
+        projectId: statement.projectId ?? "default",
+        agentId: statement.agentId ?? "default",
         ...(statement.sessionId === undefined ? {} : { sessionId: statement.sessionId }),
         ...(libraryId !== null ? { libraryId } : {})
       })
@@ -483,6 +497,8 @@ const makeMemoryEngine = Effect.gen(function*() {
           content: statement.content,
           domains: statement.domains ?? [],
           source: input.source ?? "api",
+          ...(statement.projectId === undefined ? {} : { projectId: statement.projectId }),
+          ...(statement.agentId === undefined ? {} : { agentId: statement.agentId }),
           ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
           ...(statement.tier === undefined ? {} : { tier: statement.tier })
         }).pipe(Effect.result)
