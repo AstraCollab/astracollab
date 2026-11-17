@@ -143,6 +143,10 @@ export const toolLabel = (toolName: string, input: unknown): string => {
       const raw = typeof args.url === "string" ? args.url : "";
       return `web fetch ${clip(raw.replace(/^https?:\/\//, ""), 44)}`.trimEnd();
     }
+    case "web_search": {
+      const raw = typeof args.query === "string" ? args.query : "";
+      return `web search ${clip(raw, 44)}`.trimEnd();
+    }
     case "delegate_task":
       return `delegate in isolated worktree: ${typeof args.title === "string" ? clip(args.title) : "task"}`;
     case "delegate_explore":
@@ -214,6 +218,7 @@ const QUIET_ON_SUCCESS = new Set([
   "grep",
   "task_ledger",
   "web_fetch",
+  "web_search",
 ]);
 
 export type ToolResultSummary = { show: boolean; text: string };
@@ -275,8 +280,16 @@ export type RenderableFileChange = {
 type DiffLine = { kind: "context" | "added" | "removed"; text: string };
 
 const buildDiffLines = (before: string, after: string): DiffLine[] => {
-  const oldLines = before.split("\n");
-  const newLines = after.split("\n");
+  // A trailing newline means "the last line is complete", not "there is an extra
+  // empty line" — counting it would render a phantom trailing context row.
+  const split = (text: string): string[] => {
+    if (text === "") return [];
+    const lines = text.split("\n");
+    if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+    return lines;
+  };
+  const oldLines = split(before);
+  const newLines = split(after);
   const columns = newLines.length + 1;
   if (oldLines.length * newLines.length > 120_000) {
     let prefix = 0;
@@ -326,13 +339,132 @@ const buildDiffLines = (before: string, after: string): DiffLine[] => {
   return lines;
 };
 
-export const formatFileChange = (change: RenderableFileChange): string[] => {
+/**
+ * Render one side of a side-by-side diff row.
+ *
+ * `old`/`new` are the 0-based line numbers for that pane, or null on the side that
+ * does not exist (an added line has no old number, a removed line no new one).
+ * Numbers are right-aligned in a fixed gutter so the two panes stay aligned even as
+ * the file grows past nine lines.
+ */
+const paneCell = (
+  text: string,
+  kind: "context" | "added" | "removed" | "empty",
+  lineNumber: number | null,
+  width: number,
+): string => {
+  const marker = kind === "added" ? "+" : kind === "removed" ? "−" : " ";
+  const gutter = lineNumber === null ? " ".repeat(4) : String(lineNumber).padStart(4);
+  const body = kind === "empty" ? "" : `${marker} ${text}`;
+  const clipped = body.length > width ? body.slice(0, width) : body;
+  const pad = " ".repeat(Math.max(0, width - clipped.length));
+  const content = kind === "added" ? c.added : kind === "removed" ? c.removed : c.dim;
+  return `${c.dim(gutter)} ${content(clipped + pad)}`;
+};
+
+/**
+ * Format a file change as a side-by-side diff, old on the left and new on the right.
+ *
+ * Paired by the diff itself: a removed run and the added run that follows it are one
+ * block, walked in step so a changed line sits on one row. A deletion with no
+ * matching addition leaves the right pane blank, and the reverse. When the terminal
+ * is too narrow for two panes to be legible — under 96 columns, the same threshold
+ * the TUI sidebar uses — it falls back to the linear layout rather than squeezing
+ * two truncated columns into the width.
+ */
+export const formatFileChange = (change: RenderableFileChange, width: number = 80): string[] => {
   const before = change.existed ? change.content ?? "" : "";
   const diff = buildDiffLines(before, change.after);
   const added = diff.filter((line) => line.kind === "added").length;
   const removed = diff.filter((line) => line.kind === "removed").length;
-  const visibleIndexes = new Set<number>();
   const changedIndexes = diff.flatMap((line, index) => line.kind === "context" ? [] : [index]);
+
+  // Fall back to the linear layout when there is no room for two panes.
+  if (width < 96) return formatFileChangeLinear(change, diff, added, removed, changedIndexes);
+
+  // Group the diff into blocks: a context run, then the changed block that breaks
+  // it. Each block is a list of rows, and each row carries the text and line
+  // number for each pane.
+  const blocks: DiffLine[][] = [];
+  let run: DiffLine[] = [];
+  for (const line of diff) {
+    if (line.kind === "context") {
+      if (run.length) { blocks.push(run); run = []; }
+      blocks.push([line]);
+    } else {
+      run.push(line);
+    }
+  }
+  if (run.length) blocks.push(run);
+
+  const header = `${c.purple("▸")} ${c.bold(change.path)}  ${c.added(`+${added}`)} ${c.removed(`−${removed}`)}`;
+  const lines = [header];
+
+  const paneWidth = Math.max(20, Math.floor((width - 16) / 2));
+  const renderRow = (left: { text: string; kind: DiffLine["kind"] | "empty"; n: number | null }, right: { text: string; kind: DiffLine["kind"] | "empty"; n: number | null }): string => {
+    const leftCell = paneCell(left.text, left.kind, left.n, paneWidth);
+    const rightCell = paneCell(right.text, right.kind, right.n, paneWidth);
+    const divider = c.dim(" │ ");
+    // `paneCell` pads to the pane width, so the divider lands in the same column
+    // on every row.
+    return `  ${leftCell}${divider}${rightCell}`;
+  };
+
+  let oldNumber = 0;
+  let newNumber = 0;
+  let renderedRows = 0;
+  const MAX_ROWS = 120;
+
+  for (const block of blocks) {
+    if (block[0]!.kind === "context") {
+      // Collapse a long context run to a few lines around the changes, with a gap
+      // marker in the middle rather than the whole run.
+      const keep = 3;
+      const visible = block.length > keep * 2 + 1
+        ? [...block.slice(0, keep), null, ...block.slice(block.length - keep)]
+        : block;
+      for (const entry of visible) {
+        if (entry === null) {
+          lines.push(c.dim(`  ${"…".padEnd(paneWidth)} │ ${"…".padEnd(paneWidth)}`));
+          continue;
+        }
+        oldNumber += 1;
+        newNumber += 1;
+        lines.push(renderRow({ text: entry.text, kind: "context", n: oldNumber }, { text: entry.text, kind: "context", n: newNumber }));
+      }
+      continue;
+    }
+
+    // A changed block: walk the removed and added runs in step.
+    const removedLines = block.filter((line) => line.kind === "removed");
+    const addedLines = block.filter((line) => line.kind === "added");
+    const rows = Math.max(removedLines.length, addedLines.length);
+    for (let r = 0; r < rows; r += 1) {
+      const left = removedLines[r];
+      const right = addedLines[r];
+      const leftCell = left ? { text: left.text, kind: "removed" as const, n: ++oldNumber } : { text: "", kind: "empty" as const, n: null };
+      const rightCell = right ? { text: right.text, kind: "added" as const, n: ++newNumber } : { text: "", kind: "empty" as const, n: null };
+      lines.push(renderRow(leftCell, rightCell));
+      renderedRows += 1;
+    }
+  }
+
+  if (changedIndexes.length === 0) lines.push(c.dim("  no textual changes"));
+  if (lines.length > MAX_ROWS) {
+    return [...lines.slice(0, MAX_ROWS - 1), c.dim(`  … ${lines.length - (MAX_ROWS - 1)} more diff lines`)];
+  }
+  return lines;
+};
+
+/** The old top-to-bottom layout, kept for terminals too narrow for two panes. */
+const formatFileChangeLinear = (
+  change: RenderableFileChange,
+  diff: DiffLine[],
+  added: number,
+  removed: number,
+  changedIndexes: number[],
+): string[] => {
+  const visibleIndexes = new Set<number>();
   for (const index of changedIndexes) {
     for (let i = Math.max(0, index - 3); i <= Math.min(diff.length - 1, index + 3); i += 1) visibleIndexes.add(i);
   }

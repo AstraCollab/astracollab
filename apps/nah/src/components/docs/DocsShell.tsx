@@ -28,7 +28,7 @@ export function DocsShell({ current, children }: { current: string; children: Re
   return (
     <div className="docs-shell"><div className="docs-backdrop"/><SiteNav/><div className="docs-layout">
       <aside className="docs-sidebar"><Link href="/docs" className="docs-sidebar-title"><BookOpen/> NAH DOCUMENTATION <span>v1</span></Link><nav aria-label="Documentation" className="docs-nav">
-        {groups.map((group) => <div key={group.label} className="docs-nav-group"><p>{group.label}</p><ul>{group.links.map((link) => <li key={link.href}><Link href={link.href} aria-current={current === link.href ? "page" : undefined}>{link.title}</Link></li>)}</ul></div>)}
+        {groups.map((group) => <div key={group.label} className="docs-nav-group"><p>{group.label}</p><ul>{group.links.map((link) => <li key={link.href}><Link href={link.href} aria-current={current === link.href ? "page" : undefined}><b>{link.title}</b><code>{link.href.split("/").pop()}</code></Link></li>)}</ul></div>)}
       </nav></aside>
       <main className="docs-content">{children}</main>
       <aside className="docs-aside"><div className="docs-aside-sticky">

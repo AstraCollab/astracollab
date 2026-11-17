@@ -588,6 +588,35 @@ describe("opting out", () => {
       else process.env.HOME = previous;
     }
   });
+
+  it("does not attach a fresh session just because a studio is running", async () => {
+    // The bug: a studio started in one session published its endpoint, and a new
+    // session in another terminal tab inherited the attachment — "studio
+    // connected" showed up unasked. A running studio is an invitation, not an
+    // opt-in; only `explicit` (a `/studio` or `/telemetry on` in this session)
+    // or `NAH_TELEMETRY=on` in the environment should connect.
+    const home = tempHome();
+    mkdirSync(join(home, ".nah"), { recursive: true });
+    writeFileSync(
+      join(home, ".nah", "studio.json"),
+      JSON.stringify({ url: "http://127.0.0.1:4111", pid: process.pid, startedAt: 1, version: "1.0.0" }),
+    );
+    const previous = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      // A fresh session, no explicit opt-in, no env var: must not attach.
+      expect(await connectStudio({ cwd: "/repo", env: {} })).toBeNull();
+      // Explicitly opting in this session does connect.
+      const attached = await connectStudio({ cwd: "/repo", env: {}, explicit: true, fetchImpl: (async () => new Response("{}", { status: 200 })) as typeof fetch });
+      expect(attached).not.toBeNull();
+      // And the environment opt-in connects too.
+      const envAttached = await connectStudio({ cwd: "/repo", env: { NAH_TELEMETRY: "on" }, fetchImpl: (async () => new Response("{}", { status: 200 })) as typeof fetch });
+      expect(envAttached).not.toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env.HOME;
+      else process.env.HOME = previous;
+    }
+  });
 });
 
 describe("identity", () => {

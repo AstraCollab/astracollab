@@ -45,6 +45,8 @@ export const DEFAULT_CAPS = {
 	webFetch: { maxLines: 400, maxChars: 30_000 },
 	/** A fetch that did not return 2xx. */
 	webFetchFailure: { maxLines: 80, maxChars: 4_000 },
+	/** A list of search results (title, URL, snippet). */
+	webSearch: { maxLines: 200, maxChars: 15_000 },
 } as const;
 
 export type OutputCaps = typeof DEFAULT_CAPS;

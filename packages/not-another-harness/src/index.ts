@@ -148,6 +148,12 @@ export {
 	type WebFetchOptions,
 } from "./web-fetch.js";
 export {
+	createWebSearchTool,
+	type WebSearchFn,
+	type WebSearchOptions,
+	type WebSearchResult,
+} from "./web-search.js";
+export {
 	DEFAULT_CAPS,
 	capHead,
 	capTail,

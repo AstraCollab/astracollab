@@ -188,6 +188,65 @@ describe("web_fetch approval", () => {
   });
 });
 
+describe("web_search approval", () => {
+  it("is gated in ask mode, because a search query is user input", async () => {
+    const ask = createApprover(() => "ask");
+    const asked: string[] = [];
+    ask.setPrompt(async (question) => {
+      asked.push(question);
+      return "y";
+    });
+    expect(await ask("web_search", { query: "polymarket strategies" })).toBe(true);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain("polymarket strategies");
+  });
+
+  it("'A' trusts one query and not the next, which is the scope that means anything", async () => {
+    const ask = createApprover(() => "ask");
+    let prompted = 0;
+    let reply = "A";
+    ask.setPrompt(async () => {
+      prompted += 1;
+      return reply;
+    });
+
+    expect(await ask("web_search", { query: "polymarket strategies" })).toBe(true);
+    expect(prompted).toBe(1);
+    // Different query: still asks. Approving a search must not turn into
+    // approving whatever the model asks about next.
+    reply = "n";
+    expect(await ask("web_search", { query: "polymarket arbitrage" })).toBe(false);
+    expect(prompted).toBe(2);
+    // The query that was approved stays approved.
+    reply = "n";
+    expect(await ask("web_search", { query: "polymarket strategies" })).toBe(true);
+    expect(prompted).toBe(2);
+  });
+
+  it("'a' trusts every search for the session", async () => {
+    const ask = createApprover(() => "ask");
+    let prompted = 0;
+    ask.setPrompt(async () => {
+      prompted += 1;
+      return "a";
+    });
+    expect(await ask("web_search", { query: "a.example" })).toBe(true);
+    expect(await ask("web_search", { query: "b.example" })).toBe(true);
+    expect(prompted).toBe(1);
+  });
+
+  it("is allowed in readonly mode, which promises nothing changes on disk", async () => {
+    const readonly = createApprover(() => "readonly");
+    let prompted = false;
+    readonly.setPrompt(async () => {
+      prompted = true;
+      return "n";
+    });
+    expect(await readonly("web_search", { query: "https://example.com" })).toBe(true);
+    expect(prompted).toBe(false);
+  });
+});
+
 describe("TUI approval does not wedge the run", () => {
   it("answers a pending approval instead of hanging on the first mutating tool", async () => {
     const { startTuiHost } = await import("../src/tui/host.js");

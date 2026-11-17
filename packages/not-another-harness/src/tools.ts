@@ -15,6 +15,7 @@ import { createOutlineTool } from "./outline.js";
 import { createSearchLedger } from "./search-ledger.js";
 import type { ToolEnvironment } from "./types.js";
 import { createWebFetchTool } from "./web-fetch.js";
+import { createWebSearchTool } from "./web-search.js";
 
 export type ApprovalDecision = "allow" | "deny";
 
@@ -36,6 +37,14 @@ export type CodingToolsOptions = {
 	 * spend a step discovering the refusal.
 	 */
 	withWebFetch?: boolean;
+	/**
+	 * Include the web search tool (default true).
+	 *
+	 * Off for a host that cannot let its agent search the web at all. A
+	 * `web_search` in the schema of an agent that is not permitted to use it
+	 * invites the model to spend a step discovering the refusal.
+	 */
+	withWebSearch?: boolean;
 	/**
 	 * The `fetch` behind `web_fetch`.
 	 *
@@ -101,6 +110,7 @@ export const APPROVAL_GATED_TOOLS = new Set([
 	"write",
 	"bash",
 	"web_fetch",
+	"web_search",
 ]);
 
 /**
@@ -730,6 +740,13 @@ export const createCodingTools = (
 		// `createWebFetchTool`: a cap tightened in one place and read from the
 		// default in another is how two tools disagree about the same limit.
 		tools.web_fetch = createWebFetchTool({
+			caps,
+			...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+		});
+	}
+	if (options.withWebSearch !== false) {
+		// Takes the already-resolved caps for the same reason as web_fetch.
+		tools.web_search = createWebSearchTool({
 			caps,
 			...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
 		});

@@ -113,8 +113,9 @@ export const createReadonlyAgent = async (options: StudioAgentOptions): Promise<
     // Everything that can change something is refused, with one exception:
     // `isReadonlyAllowed` covers the gated tools that do not touch the
     // workspace, which `readonly` permits in the terminal too. Without it this
-    // agent would carry a `web_fetch` that denies every call — a tool in the
-    // schema that cannot work, which the model spends a step rediscovering.
+    // agent would carry a `web_fetch` or `web_search` that denies every call — a
+    // tool in the schema that cannot work, which the model spends a step
+    // rediscovering.
     state.tools = {
       ...state.tools,
       ...createCodingTools(state.workspace, {

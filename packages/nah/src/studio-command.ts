@@ -118,6 +118,8 @@ export type StudioCommandOptions = {
   spawnProcess?: typeof spawn;
   open?: typeof openUrl;
   probe?: typeof probeStudio;
+  /** Injected in tests. */
+  latestVersion?: typeof latestStudioVersion;
   /** How long to wait for a fresh Studio to publish itself. */
   readyTimeoutMs?: number;
 };
@@ -258,7 +260,12 @@ export const runStudioCommand = async (
     return "handled";
   }
 
-  // action === "start"
+    // action === "start"
+  // An upgrade can be triggered two ways: a Studio is already running and a newer
+  // version is on npm, or one is installed but not running. Both have to end in
+  // the same place — the install command below — or answering "y" changes nothing.
+  let upgrading = false;
+
   if (existing) {
     // Already up. Reuse it rather than starting a second one on a different
     // port, which would split the dashboard in two and leave the user with two
@@ -266,52 +273,57 @@ export const runStudioCommand = async (
     const answering = await (options.probe ?? probeStudio)(existing);
     if (answering) {
       // Check if a newer version is available on npm and ask to upgrade.
-      const latest = await latestStudioVersion();
+      const latest = await (options.latestVersion ?? latestStudioVersion)();
       const newer = latest && compareVersions(latest, existing.version) > 0;
       if (newer) {
         const question = `${c.bold(STUDIO_PACKAGE)} ${latest} is available (you have ${existing.version}). Upgrade?`;
         const confirm = options.confirm;
         if (confirm && await confirm(question)) {
-          // Stop the old one and fall through to install the new version.
+          // Stop the old one, then fall through to the install below: answering
+          // "y" has to actually fetch the new version, not restart the old one.
           await stopStudio(out, existing, { home, probe: options.probe });
-          // Fall through to the install flow below.
+          upgrading = true;
         } else {
           out.write(`${c.green("  studio")} ${c.dim(`already running at ${existing.url} · ${existing.version}`)}\n`);
           const opened = await (options.open ?? openUrl)(existing.url);
           if (!opened.opened) out.write(`  ${c.dim(`${existing.url}  (${opened.reason})`)}\n`);
           return "handled";
         }
+      } else {
+        out.write(`${c.green("  studio")} ${c.dim(`already running at ${existing.url} · ${existing.version}`)}\n`);
+        const opened = await (options.open ?? openUrl)(existing.url);
+        if (!opened.opened) out.write(`  ${c.dim(`${existing.url}  (${opened.reason})`)}\n`);
+        return "handled";
       }
-      out.write(`${c.green("  studio")} ${c.dim(`already running at ${existing.url} · ${existing.version}`)}\n`);
-      const opened = await (options.open ?? openUrl)(existing.url);
-      if (!opened.opened) out.write(`  ${c.dim(`${existing.url}  (${opened.reason})`)}\n`);
-      return "handled";
+    } else {
+      out.write(`${c.yellow("  studio")} ${c.dim(`was not answering on ${existing.url} — starting a new one`)}\n`);
+      await clearEndpoint(existing.pid, endpointFile(home));
     }
-    out.write(`${c.yellow("  studio")} ${c.dim(`was not answering on ${existing.url} — starting a new one`)}\n`);
-    await clearEndpoint(existing.pid, endpointFile(home));
   }
 
   const spawnProcess = options.spawnProcess ?? spawn;
 
   // A local build comes before PATH: a checkout should show the dashboard its own
-  // changes, not the last release.
-  const fromCheckout = siblingStudio(nahBin);
-  if (fromCheckout) {
-    out.write(`${c.dim(`  using the studio built in this checkout: ${fromCheckout}`)}\n`);
-    return startStudio(out, {
-      command: process.execPath,
-      args: [fromCheckout, ...studioArgs(options.cwd, env, nahBin)],
-      options,
-      binaryLabel: "this checkout",
-    });
+  // changes, not the last release. An upgrade, though, is a request for the
+  // published version — installing that over a working tree would be surprising.
+  if (!upgrading) {
+    const fromCheckout = siblingStudio(nahBin);
+    if (fromCheckout) {
+      out.write(`${c.dim(`  using the studio built in this checkout: ${fromCheckout}`)}\n`);
+      return startStudio(out, {
+        command: process.execPath,
+        args: [fromCheckout, ...studioArgs(options.cwd, env, nahBin)],
+        options,
+        binaryLabel: "this checkout",
+      });
+    }
   }
 
   const binary = findStudioBinary({ cwd: options.cwd, platform: process.platform, ...(env.PATH === undefined ? {} : { pathEnv: env.PATH }) });
 
-  if (binary) {
+  if (binary && !upgrading) {
     // Check if a newer version is available on npm and ask to upgrade.
     // We read the version from the endpoint file if a previous session left one.
-    const home = options.home ?? os.homedir();
     let binaryVersion = existing?.version;
     if (!binaryVersion) {
       const ep = await liveEndpoint(endpointFile(home));
@@ -326,14 +338,15 @@ export const runStudioCommand = async (
         binaryLabel: binary,
       });
     }
-    const latest = await latestStudioVersion();
+    const latest = await (options.latestVersion ?? latestStudioVersion)();
     const newer = latest && compareVersions(latest, binaryVersion) > 0;
     if (newer) {
       const question = `${c.bold(STUDIO_PACKAGE)} ${latest} is available (you have ${binaryVersion}). Upgrade?`;
       const confirm = options.confirm;
       if (confirm && await confirm(question)) {
         if (existing) await clearEndpoint(existing.pid, endpointFile(home));
-        // Fall through to the install flow below.
+        // Fall through to the install flow below, not back to the old binary.
+        upgrading = true;
       } else {
         return startStudio(out, {
           command: binary,
@@ -342,24 +355,26 @@ export const runStudioCommand = async (
           binaryLabel: binary,
         });
       }
+    } else {
+      return startStudio(out, {
+        command: binary,
+        args: studioArgs(options.cwd, env, nahBin),
+        options,
+        binaryLabel: binary,
+      });
     }
-    return startStudio(out, {
-      command: binary,
-      args: studioArgs(options.cwd, env, nahBin),
-      options,
-      binaryLabel: binary,
-    });
   }
 
-  // Nothing installed: ask, then install.
+  // Nothing installed (or an upgrade was accepted): ask, then install.
   const manager = detectPackageManager({ env, cwd: options.cwd, platform: process.platform });
-  // `beta`, not `latest`: the Studio is a prerelease, and `latest` is whatever was
-  // last published without the tag — which on a project like this is the first
-  // one, and possibly a broken one.
+  // `latest` is where the Studio is published, so that is what a fresh install and
+  // an upgrade both resolve — anything else would pin the user to an old tag.
   const install = runOnceCommand(manager, `${STUDIO_PACKAGE}@${STUDIO_DIST_TAG}`);
   const question = `Install ${c.bold(STUDIO_PACKAGE)} with ${c.bold(install.command)}? It becomes the dashboard for every agent on this machine.`;
 
-  if (env.NAH_STUDIO_YES === "1") {
+  if (env.NAH_STUDIO_YES === "1" || upgrading) {
+    // An upgrade already had its "y" — asking again would be the same question
+    // twice, and this one is the command that actually does it.
     out.write(`${c.dim(`  installing ${STUDIO_PACKAGE} with ${manager}`)}\n`);
   } else {
     const confirm = options.confirm;

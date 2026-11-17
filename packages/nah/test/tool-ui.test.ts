@@ -43,6 +43,14 @@ describe("tool labels", () => {
     expect(toolLabel("web_fetch", {})).toBe("web fetch");
     expect(toolLabel("web_fetch", { url: "https://example.com/" })).not.toContain("_");
   });
+
+  it("labels a search by query", () => {
+    expect(toolLabel("web_search", { query: "polymarket strategies" })).toBe(
+      "web search polymarket strategies",
+    );
+    expect(toolLabel("web_search", {})).toBe("web search");
+    expect(toolLabel("web_search", { query: "a".repeat(60) })).not.toContain("_");
+  });
 });
 
 describe("tool result summarising", () => {

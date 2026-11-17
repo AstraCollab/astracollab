@@ -12,12 +12,13 @@ import { describe, expect, it, vi } from "vitest";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawn } from "node:child_process";
 import { Writable } from "node:stream";
 
 import { parseCliArgs } from "../src/args.js";
 import { detectPackageManager, findStudioBinary, runOnceCommand } from "../src/package-manager.js";
 import { currentNahBin, parseStudioArg, runStudioCommand, siblingStudio, studioArgs } from "../src/studio-command.js";
-import { STUDIO_DIST_TAG, STUDIO_PACKAGE } from "../src/studio-endpoint.js";
+import { STUDIO_DIST_TAG, STUDIO_PACKAGE, compareVersions, latestStudioVersion } from "../src/studio-endpoint.js";
 import { isProcessAlive, readEndpoint } from "../src/studio-endpoint.js";
 
 /**
@@ -54,6 +55,18 @@ const sink = () => {
 };
 
 const neverProbe = async () => true;
+
+/**
+ * A process that stays alive just long enough to stand in for a running Studio.
+ *
+ * The endpoint file only counts as live when its pid exists, so a dead pid can't
+ * be used to exercise the "already running" paths. This is a real sleeper, and the
+ * caller kills it when the test is done.
+ */
+const sleeper = (): { pid: number; stop: () => void } => {
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+  return { pid: child.pid as number, stop: () => child.kill("SIGKILL") };
+};
 
 describe("studio endpoint", () => {
   it("reads what the Studio publishes", async () => {
@@ -93,6 +106,20 @@ describe("studio endpoint", () => {
     expect(isProcessAlive(0)).toBe(false);
     expect(isProcessAlive(-1)).toBe(false);
   });
+
+  it("compares versions, respecting prerelease suffixes", () => {
+    // Plain releases.
+    expect(compareVersions("0.0.1", "0.0.2")).toBeLessThan(0);
+    expect(compareVersions("0.0.2", "0.0.1")).toBeGreaterThan(0);
+    expect(compareVersions("0.0.1", "0.0.1")).toBe(0);
+    // A beta is older than the release it precedes.
+    expect(compareVersions("0.0.1-beta.2", "0.0.1")).toBeLessThan(0);
+    expect(compareVersions("0.0.1", "0.0.1-beta.2")).toBeGreaterThan(0);
+    // And one beta is ordered against another — this is the case the old
+    // numeric-only compare got wrong, treating them as equal.
+    expect(compareVersions("0.0.1-beta.2", "0.0.1-beta.12")).toBeLessThan(0);
+    expect(compareVersions("0.0.1-beta.12", "0.0.1-beta.2")).toBeGreaterThan(0);
+  });
 });
 
 describe("choosing a package manager", () => {
@@ -115,17 +142,17 @@ describe("choosing a package manager", () => {
       expect(command.command.length).toBeGreaterThan(0);
       expect(command.args.join(" ")).toContain(`${STUDIO_PACKAGE}@${STUDIO_DIST_TAG}`);
     }
-    // Not `latest`: the Studio is a prerelease, and `latest` is whatever was
-    // published without a tag — for a package that has only ever been published
-    // with one, that is the first build, and it stays there.
-    expect(STUDIO_DIST_TAG).not.toBe("latest");
+    // `latest`: that is what the Studio is published under, so a fresh install and
+    // an upgrade both resolve to it. Installing from `beta` would pin users to a
+    // dead tag.
+    expect(STUDIO_DIST_TAG).toBe("latest");
   });
 
   it("does not silence the installer, because its failure is the useful part", () => {
     // `--silent` here left a log file with nothing in it, and turned a
     // "no such version" into a bare "did not come up".
     for (const manager of ["pnpm", "yarn", "bun", "npm"] as const) {
-      expect(runOnceCommand(manager, "nah-studio@beta").args).not.toContain("--silent");
+      expect(runOnceCommand(manager, `${STUDIO_PACKAGE}@${STUDIO_DIST_TAG}`).args).not.toContain("--silent");
     }
   });
 
@@ -321,7 +348,7 @@ describe("/studio", () => {
       spawnProcess: vi.fn(() => {
         appendFileSync(
           logPath,
-          "Progress: resolved 0, reused 0\n\u001b[2mERR_PNPM_FETCH_404\u001b[0m  No matching version found for nah-studio@beta.\n",
+          "Progress: resolved 0, reused 0\n\u001b[2mERR_PNPM_FETCH_404\u001b[0m  No matching version found for nah-studio@latest.\n",
         );
         return child;
       }) as never,
@@ -366,6 +393,110 @@ describe("/studio", () => {
     await runStudioCommand("/studio url", { cwd: dir, out, env: {}, home: dir, spawnProcess, probe: neverProbe });
     expect(spawnProcess).not.toHaveBeenCalled();
     expect(out.lines.join("")).toContain("no studio is running");
+  });
+
+  it("upgrades a running studio when the user says yes", async () => {
+    // The bug this pins down: a running Studio, a newer release on npm, "y" to the
+    // prompt — and nothing installed, the same old dashboard started again.
+    const dir = home();
+    // A real live process, so the endpoint file counts as a running Studio. A
+    // sleeper rather than the test worker: stopStudio signals this pid, and a
+    // signal to the worker would take the suite down with it.
+    const studio = sleeper();
+    try {
+      publishEndpoint(dir, { url: "http://127.0.0.1:4111", pid: studio.pid, startedAt: 1, version: "0.0.1-beta.1" });
+      const out = sink();
+      const child = { pid: process.pid, unref: vi.fn(), on: vi.fn() };
+      const spawnProcess = vi.fn(() => child);
+
+      await runStudioCommand("/studio", {
+        cwd: dir,
+        out,
+        env: { PATH: "" },
+        home: dir,
+        nahBin: "/usr/local/bin/nah",
+        spawnProcess: spawnProcess as never,
+        // The old Studio answers, so the upgrade prompt is reached.
+        probe: neverProbe,
+        // A newer release on npm.
+        latestVersion: async () => "0.0.1-beta.12",
+        // The upgrade question is the first and only one asked.
+        confirm: async () => true,
+        open: async () => ({ opened: false, reason: "no" }),
+        // The new Studio never comes up, so the command reports the failure rather
+        // than looping on a probe that would answer.
+        readyTimeoutMs: 300,
+      });
+
+      const printed = out.lines.join("");
+      // The upgrade command actually ran — not the stale binary.
+      expect(printed).toContain(`installing ${STUDIO_PACKAGE}`);
+      expect(printed).toContain(`${STUDIO_PACKAGE}@${STUDIO_DIST_TAG}`);
+      // The old dashboard was stopped and the new one failed to come up.
+      expect(printed).toContain("did not come up");
+      expect(spawnProcess).toHaveBeenCalledTimes(1);
+      const [command, args] = spawnProcess.mock.calls[0];
+      expect(String(command)).toBe("npx");
+      expect((args as string[]).join(" ")).toContain(`${STUDIO_PACKAGE}@${STUDIO_DIST_TAG}`);
+    } finally {
+      studio.stop();
+    }
+  });
+
+  it("does not upgrade when the user says no", async () => {
+    const dir = home();
+    const studio = sleeper();
+    try {
+      publishEndpoint(dir, { url: "http://127.0.0.1:4111", pid: studio.pid, startedAt: 1, version: "0.0.1-beta.1" });
+      const out = sink();
+      const spawnProcess = vi.fn();
+
+      await runStudioCommand("/studio", {
+        cwd: dir,
+        out,
+        env: { PATH: "" },
+        home: dir,
+        spawnProcess,
+        probe: neverProbe,
+        latestVersion: async () => "0.0.1-beta.12",
+        confirm: async () => false,
+        open: async () => ({ opened: true }),
+      });
+
+      // Still the dashboard that was already there.
+      expect(out.lines.join("")).toContain("already running at http://127.0.0.1:4111");
+      expect(spawnProcess).not.toHaveBeenCalled();
+    } finally {
+      studio.stop();
+    }
+  });
+
+  it("does not upgrade when the running studio is already current", async () => {
+    const dir = home();
+    const studio = sleeper();
+    try {
+      publishEndpoint(dir, { url: "http://127.0.0.1:4111", pid: studio.pid, startedAt: 1, version: "0.0.1-beta.12" });
+      const out = sink();
+      const spawnProcess = vi.fn();
+
+      await runStudioCommand("/studio", {
+        cwd: dir,
+        out,
+        env: { PATH: "" },
+        home: dir,
+        spawnProcess,
+        probe: neverProbe,
+        // Same version on npm — no prompt, no reinstall.
+        latestVersion: async () => "0.0.1-beta.12",
+        confirm: async () => true,
+        open: async () => ({ opened: true }),
+      });
+
+      expect(out.lines.join("")).toContain("already running at http://127.0.0.1:4111");
+      expect(spawnProcess).not.toHaveBeenCalled();
+    } finally {
+      studio.stop();
+    }
   });
 });
 

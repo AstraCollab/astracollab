@@ -53,7 +53,14 @@ When a page is cut the notice tells the agent to ask for a more specific URL rat
 fetch it again, because a web page cannot be paged the way a file can. Binary responses
 (an image, a PDF) are named rather than decoded — the tool returns text.
 
-There is no web *search*. If the agent does not have a URL, this tool cannot help it.
+NAH can also search the web when the agent does not have a URL. `web_search`
+takes a query and returns a list of results (title, URL, snippet) from DuckDuckGo
+(or another search backend the host configures). The agent can then `web_fetch`
+the promising pages.
+
+It asks first in `ask` mode, keyed per-query the way `web_fetch` is keyed per-URL.
+`readonly` still permits it. The result list is capped at 8 entries by default —
+narrow the query if there are more relevant pages.
 
 ### Sessions
 

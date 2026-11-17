@@ -163,9 +163,24 @@ Three bounds, all deliberate: a 5MB download ceiling counted *while streaming* (
 
 A repeat of the same URL and format is served from memory rather than requested again, with a note saying so: step-scoped de-duplication only collapses identical calls in the *same* step, so the repeat that costs money is the same page fetched four steps later, on a transcript that re-sends itself from there on. Keyed by format as well as URL, because `format: "text"` over an already-fetched page is a different question.
 
-`withWebFetch: false` removes the tool. Pass `fetchImpl` to route or audit egress. Binary responses are named rather than decoded, since the tool returns text and base64 of a PDF costs a step to diagnose. There is no web *search* — a model without a URL cannot use this.
+`withWebFetch: false` removes the tool. Pass `fetchImpl` to route or audit egress. Binary responses are named rather than decoded, since the tool returns text and base64 of a PDF costs a step to diagnose. For search, see `web_search` below — it finds pages when you do not already have a URL.
 
 Borrowed from opencode's `webfetch`: the per-format `Accept`, and a browser `User-Agent` with an honest retry. Docs hosts sit behind bot protection that challenges anything without one, and the retry matters more than it looks — the first request claims to be a browser while presenting a Node TLS fingerprint, which is the mismatch the challenge detects, so a 403 carrying `cf-mitigated: challenge` is answered by asking again as `nah`.
+
+## Searching the web
+
+`web_search` takes a query and returns a list of results — title, URL, and snippet — so the agent can find pages it does not already know about, then `web_fetch` the promising ones:
+
+```
+web_search { query: "polymarket strategies" }
+web_search { query: "polymarket arbitrage bot", maxResults: 3 }
+```
+
+Read-only: it changes nothing on disk. The search backend defaults to a DuckDuckGo HTML scrape (no API key) and is injectable — pass a different `search` function to use Brave, Serper, Tavily, or any other provider. Results are capped at 8 per call by default; narrow the query if there are more relevant pages.
+
+A repeat of the same query and limit is served from memory rather than requested again, with a note saying so.
+
+`withWebSearch: false` removes the tool. Pass `fetchImpl` to route or audit egress.
 
 ### Dependencies
 

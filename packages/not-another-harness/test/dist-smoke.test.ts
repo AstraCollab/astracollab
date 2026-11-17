@@ -134,7 +134,7 @@ describe.skipIf(!existsSync(entry))("built artifact", () => {
 					);
 				`),
 			).toBe(
-				"bash,edit,grep,list,outline,read,web_fetch,write\nbash,edit,grep,list,outline,read,write",
+				"bash,edit,grep,list,outline,read,web_fetch,web_search,write\nbash,edit,grep,list,outline,read,web_search,write",
 			);
 		},
 		SPAWN_TIMEOUT,

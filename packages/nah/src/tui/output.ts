@@ -203,6 +203,8 @@ export class TurnOutput implements Component {
    * so the run's token total has to add the cache back to match it.
    */
   private cachedTotal = 0;
+  /** The pane width from the most recent render, so diffs lay out against it. */
+  private lastWidth = 80;
 
   constructor(
     private readonly getFileChanges: () => RenderableFileChange[] = () => [],
@@ -496,7 +498,7 @@ export class TurnOutput implements Component {
     while (this.renderedChanges < changes.length) {
       const change = changes[this.renderedChanges++];
       if (!change) continue;
-      for (const line of formatFileChange(change)) this.addLine(line, "diff");
+      for (const line of formatFileChange(change, this.lastWidth)) this.addLine(line, "diff");
     }
   }
 
@@ -616,6 +618,9 @@ export class TurnOutput implements Component {
   }
 
   render(width: number): string[] {
+    // Remember the width so `flushFileChanges`, which runs between renders, can
+    // lay the side-by-side diff out against the real pane rather than a default.
+    this.lastWidth = Math.max(1, width);
     return this.blocks.flatMap((block) => block.render(Math.max(1, width)));
   }
 

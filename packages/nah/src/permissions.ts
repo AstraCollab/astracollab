@@ -25,7 +25,7 @@ export type ApprovalPromptFn = (question: string) => Promise<string>;
  * The tool stays gated either way, so `ask` mode still prompts for every fetch.
  * What `readonly` gives up is the prompt, not the decision.
  */
-const READONLY_ALLOWED = new Set(["web_fetch"]);
+const READONLY_ALLOWED = new Set(["web_fetch", "web_search"]);
 
 /**
  * Whether `readonly` permits this gated tool.
@@ -81,6 +81,17 @@ export const createApprover = (
      */
     if (toolName === "web_fetch" && typeof args.url === "string") {
       return `${toolName}:${args.url}`;
+    }
+    /**
+     * Per-query rather than per-tool.
+     *
+     * `web_search` gets a fresh query on essentially every call, so an approval
+     * scoped to one query is the only scope that means anything for it — and it
+     * is the scope that keeps approving a single topic from silently approving
+     * every topic the model asks about next.
+     */
+    if (toolName === "web_search" && typeof args.query === "string") {
+      return `${toolName}:${args.query}`;
     }
     return toolName;
   };

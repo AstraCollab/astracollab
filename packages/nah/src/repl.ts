@@ -193,7 +193,7 @@ export const renderTurn = async (
       const change = changes[renderedChanges++]!;
       nl();
       spinnerLabel = "";
-      for (const line of formatFileChange(change)) writeIndented(`${line}\n`);
+      for (const line of formatFileChange(change, out.columns ?? 80)) writeIndented(`${line}\n`);
       write("\n");
     }
   };

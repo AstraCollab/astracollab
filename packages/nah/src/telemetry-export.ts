@@ -103,10 +103,11 @@ export type TelemetryState = "on" | "off";
 /**
  * Whether this session should report.
  *
- * Three inputs, in the order a user would expect to override them: an explicit
- * environment variable beats a remembered preference. Absent both, reporting is
- * off — a Studio that published its own address is an invitation, not a
- * command: nothing is sent unless the user opts in.
+ * An explicit environment variable is the whole decision. Absent it, reporting is
+ * off — a Studio that published its own address is an invitation, not a command:
+ * nothing is sent unless the user opts in. Opting in for one session is `/studio`
+ * or `/telemetry on`, which connect that session directly rather than flipping a
+ * global default.
  */
 export const telemetryState = async (env: NodeJS.ProcessEnv = process.env): Promise<TelemetryState> => {
   const explicit = env.NAH_TELEMETRY?.trim().toLowerCase();
@@ -559,6 +560,13 @@ export const traceTurn = (
  * Called once per session rather than per turn: the check is a file read and a
  * process-existence test, and doing it per turn would mean a session that
  * outlives its Studio keeps trying.
+ *
+ * Auto-connects only when telemetry is explicitly on in the environment — that is
+ * a user who has decided, for this shell and everything it launches, to report.
+ * A running Studio alone is not that decision: a new terminal tab that merely
+ * finds `~/.nah/studio.json` must not inherit the previous tab's attachment.
+ * Opting in for one session is `/studio` or `/telemetry on`, which route through
+ * `attachStudio` with `explicit`.
  */
 export const connectStudio = async (options: {
   cwd: string;
@@ -572,7 +580,10 @@ export const connectStudio = async (options: {
   explicit?: boolean;
 }): Promise<StudioTelemetry | null> => {
   const env = options.env ?? process.env;
-  if (!options.explicit && (await telemetryState(env)) === "off") return null;
+  // Auto-attach only when the environment says so. Without this guard every new
+  // session that found a live endpoint file inherited the previous session's
+  // attachment, and a second terminal tab showed "studio connected" on its own.
+  if (!options.explicit && (await telemetryState(env)) !== "on") return null;
   const endpoint = await liveEndpoint();
   if (!endpoint) return null;
   const agent = describeAgent({

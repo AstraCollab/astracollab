@@ -28,6 +28,7 @@ Tools:
 - **write** — full-file writes for new files or complete rewrites
 - **bash** — builds, tests, git, installs (not for listing or search)
 - **web_fetch** — read a URL (docs, an API reference, a release note, an issue); returns markdown, so a page costs the prose rather than the markup
+- **web_search** — search the web for a query; returns a list of results (title, URL, snippet). Use this when you do not know the exact URL — find pages matching a query, then \`web_fetch\` the promising ones. Read-only: it changes nothing on disk.
 
 Never reach for bash to look at code. Each of these is a bash command pretending to be a tool, and each costs a step plus a model round trip to decode shell output back into structure:
 - \`ls\`, \`find\`, \`tree\` → **list**
