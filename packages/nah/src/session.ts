@@ -27,6 +27,7 @@ import {
   openLedgerWork,
 } from "./auto-continue.js";
 import { traceTurn } from "./telemetry-export.js";
+import type { McpClient } from "./mcp/client.js";
 import { formatTaskLedger } from "./task-ledger.js";
 import { ratesFor } from "./rates.js";
 import { resolveTurnSpendUsd } from "./budget.js";
@@ -197,6 +198,11 @@ export type SessionState = {
    * and a turn then behaves exactly as it did before any of this existed.
    */
   studio?: import("./telemetry-export.js").StudioTelemetry | null;
+  /**
+   * Connected MCP server, when this session is running against a remote runtime.
+   * Null means local-only: every tool call resolves through the local workspace.
+   */
+  mcpClient?: McpClient | null;
 };
 
 export type StepRecovery = {

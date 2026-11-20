@@ -9,7 +9,7 @@ export function SiteNav() {
         <Link href="/framework"><Braces/><span><b>Framework</b><small>Build agents with a loop you own</small></span></Link>
         <Link href="/agent"><Terminal/><span><b>NAH Agent</b><small>A practical coding agent</small></span></Link>
         <Link href="/studio"><Eye/><span><b>Studio</b><small>See what your agents did</small></span></Link>
-        <Link href="/cloud"><Cloud/><span><b>NAH Cloud <em>soon</em></b><small>Bring your agents together</small></span></Link>
+        <Link href="/cloud"><Cloud/><span><b>NAH Cloud</b><small>Hosted agents, shared runs, MCP</small></span></Link>
       </div></div>
       <div className="nav-group"><button className="nav-trigger">Resources <ChevronDown size={13}/></button><div className="nav-menu">
         <Link href="/docs"><Code2/><span><b>Documentation</b><small>Guides, API, and examples</small></span></Link>

@@ -24,9 +24,23 @@ export type CogmemConfig = {
   keySource: CogmemKeySource;
 };
 
+export type McpServerConfig = {
+  /** Base URL of the MCP server, e.g. https://cloud.nah-ai.com/api/mcp. */
+  url: string;
+  /** The organization this server belongs to, used to look up its bearer token. */
+  organizationId?: string;
+};
+
 export type NahConfig = {
   lastModel?: string;
   cogmem?: Partial<CogmemConfig>;
+  /**
+   * Registered MCP servers the CLI can connect to. Keyed by a user-chosen name.
+   * Values carry the server URL; the bearer token for each server lives in the
+   * device credential store under kind "cloud" with the organization id as the
+   * account.
+   */
+  mcp?: Partial<Record<string, McpServerConfig>>;
   /**
    * Whether to report this machine's turns to a Studio. Absent means off: a
    * Studio that published its own address is an invitation, not a command, so
@@ -68,3 +82,36 @@ export const updateConfig = async (mutate: (current: NahConfig) => NahConfig): P
   await writeConfig(next);
   return next;
 };
+
+/** All registered MCP servers, name → config. */
+export const getMcpServers = (): Promise<Record<string, McpServerConfig>> =>
+  updateConfig((current) => {
+    current.mcp = current.mcp ?? {};
+    return current;
+  }).then((config) => config.mcp as Record<string, McpServerConfig>);
+
+/** Register or update an MCP server under a user-chosen name. */
+export const setMcpServer = (name: string, config: McpServerConfig): Promise<void> =>
+  updateConfig((current) => {
+    current.mcp = current.mcp ?? {};
+    current.mcp[name] = config;
+    return current;
+  }).then(() => undefined);
+
+/** Remove a registered MCP server. */
+export const removeMcpServer = (name: string): Promise<void> =>
+  updateConfig((current) => {
+    if (current.mcp) delete current.mcp[name];
+    return current;
+  }).then(() => undefined);
+
+/** Look up a single server by name, or null when not registered. */
+export const getMcpServer = (name: string): Promise<McpServerConfig | null> =>
+  getMcpServers().then((servers) => servers[name] ?? null);
+
+/** Look up a server by URL, returning its name and config, or null. */
+export const findMcpServerByUrl = (url: string): Promise<{ name: string; config: McpServerConfig } | null> =>
+  getMcpServers().then((servers) => {
+    const entry = Object.entries(servers).find(([, config]) => config.url === url);
+    return entry ? { name: entry[0], config: entry[1] } : null;
+  });

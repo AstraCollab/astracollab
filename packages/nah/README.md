@@ -201,6 +201,7 @@ nothing in it was unfinished.
 | `/tensions` | View unresolved contradictions; `/tensions resolve <id>` marks resolved |
 | `/studio` | Open the dashboard of every agent on this machine; `status`, `stop`, `url` |
 | `/telemetry on\|off` | Report this session's turns to a running studio, or stop |
+| `/mcp` | Connect to an MCP server, list its tools, or invoke one; `connect <url>`, `list`, `tools <name>`, `tool <name> <json>` |
 | `/clear` | Clear the active transcript |
 | `/help`, `/quit` | Show commands or exit |
 
@@ -227,6 +228,7 @@ nah --cwd /path/to/project "Explain this code"
 nah serve                            # the dashboard, from a shell (same as /studio)
 nah serve --port 5000
 nah serve status | stop | url
+nah --mcp https://cloud.nah-ai.com/api/mcp   # run a session on a hosted runtime
 ```
 
 Print and JSON modes allow mutating tools by default because they cannot prompt interactively. Pass `--permissions readonly` when a non-interactive run must not make changes.
@@ -461,6 +463,72 @@ Forks and self-hosts can rename themselves without touching code:
 export NAH_APP_NAME=nah-fork
 export NAH_APP_URL=https://your-host.example
 ```
+
+## Cloud runtime & MCP
+
+A session can drive an agent on a hosted runtime instead of the local machine —
+MCP (Model Context Protocol) over Streamable HTTP is the transport, and nah-cloud
+(`https://cloud.nah-ai.com/api/mcp`) is the server. Connecting is opt-in: a bare
+`nah` with no `--mcp` behaves exactly as it did before, and no traffic leaves the
+machine unless you ask it to.
+
+Connect a session to a cloud server:
+
+```sh
+nah --mcp https://cloud.nah-ai.com/api/mcp
+```
+
+The bearer token for that organization lives in the platform credential store
+(kind `cloud`, account set to the organization id or the server name) — macOS
+Keychain, Linux Secret Service, or Windows DPAPI, never on the command line.
+Register a server so you can refer to it by name:
+
+```sh
+nah mcp connect mycloud https://cloud.nah-ai.com/api/mcp
+```
+
+The first time you connect you are prompted for the bearer token; save it to the
+credential store when asked. After that every tool call authenticates as that
+organization.
+
+Once connected, the server's tools appear alongside the local ones:
+
+- `sandbox.create`, `sandbox.exec`, `sandbox.files.read|write|ls|rm`,
+  `sandbox.status` — provision and operate a hosted sandbox
+- `agent.run`, `agent.trace`, `agent.cancel` — start, inspect, and interrupt a
+  nah agent run
+
+Manage servers from the shell:
+
+```sh
+nah mcp list                        # registered servers
+nah mcp tools mycloud               # tools a server exposes
+nah mcp tool sandbox.exec '{"sandboxId":"...","command":"ls"}'
+```
+
+Or from inside a session:
+
+```
+/mcp connect <url>                  # register and connect to a server
+/mcp list                           # registered servers
+/mcp tools <name>                   # tools a server exposes
+/mcp tool <name> <json>             # invoke one tool directly
+```
+
+`/mcp connect` prompts for a bearer token the first time and takes over the
+terminal while it does, so it is an exclusive command like `/provider` and
+`/studio` — it cannot run while a turn is streaming.
+
+A hosted run is metered: each tool call has a cost in cents (a sandbox costs
+more than a command), and an organization can set a monthly spend ceiling at
+`https://cloud.nah-ai.com/api/mcp/ceiling`. Calls that would exceed it are
+refused before they run, and every billed call is written to the usage ledger
+so the dashboard can show what was spent and when.
+
+Runs on a hosted runtime are still traces — spans, tool calls, token counts,
+and cost attributes land in the same `traces`/`spans` tables a local Studio
+reads, so the dashboard shows a cloud agent next to a local one without either
+pretending to be the other.
 
 ## Run from the monorepo
 

@@ -23,17 +23,19 @@ import * as nodePath from "node:path";
 export type BuiltinProvider = "anthropic" | "openai" | "openrouter";
 
 /** Which store an account belongs to. Never share a service name across kinds. */
-export type SecretKind = "provider" | "cogmem";
+export type SecretKind = "provider" | "cogmem" | "cloud";
 
 const KEYCHAIN_SERVICE: Record<SecretKind, string> = {
   provider: "com.astracollab.nah.provider",
   cogmem: "com.astracollab.nah.cogmem",
+  cloud: "com.astracollab.nah.cloud",
 };
 
 /** libsecret attributes, which have no notion of a service *name* prefix. */
 const LINUX_SERVICE: Record<SecretKind, string> = {
   provider: "astracollab-nah",
   cogmem: "astracollab-nah-cogmem",
+  cloud: "astracollab-nah-cloud",
 };
 
 /**
@@ -288,3 +290,15 @@ export const storeProviderKey = async (provider: BuiltinProvider): Promise<void>
 
 export const removeProviderKey = async (provider: BuiltinProvider): Promise<void> =>
   removeSecret("provider", provider);
+
+/** Cloud bearer-key access, scoped to one organization. */
+export const getStoredCloudToken = (organizationId: string): Promise<string | undefined> =>
+  getStoredSecret("cloud", organizationId);
+
+export const storeCloudToken = (organizationId: string): Promise<void> =>
+  storeSecretInteractively("cloud", organizationId, {
+    platformMessage: "Paste the nah-cloud bearer token into the macOS Keychain prompt.\n",
+  });
+
+export const removeCloudToken = (organizationId: string): Promise<void> =>
+  removeSecret("cloud", organizationId);

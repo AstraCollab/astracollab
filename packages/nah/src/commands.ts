@@ -78,6 +78,14 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     exclusive: true,
   },
   {
+    name: "mcp",
+    description: "Connect to an MCP server, list its tools, or invoke one",
+    argumentHint: "[connect <url>|list|tools <name>|tool <name> <json>]",
+    // Exclusive because connecting prompts for a bearer token, which needs the
+    // terminal the way /provider needs it.
+    exclusive: true,
+  },
+  {
     name: "telemetry",
     description: "Report this session's turns to a running studio",
     argumentHint: "[on|off|status]",

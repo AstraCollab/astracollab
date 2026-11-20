@@ -25,6 +25,7 @@ import { loadWorkspaceWorkflows } from "./workspace-workflows.js";
 import { createNahWorkflows } from "./workflows.js";
 import { connectStudio } from "./telemetry-export.js";
 import { describeWorkspaceBoundary, resolveWorkspaceRoot } from "./workspace.js";
+import type { McpClient } from "./mcp/client.js";
 
 export const makeState = async (opts: {
   cwd: string;
@@ -36,6 +37,8 @@ export const makeState = async (opts: {
   sandbox?: string | true;
   extraSystemAppend?: string;
   allowUnconfiguredModel?: boolean;
+  /** Connected MCP server, when this session runs against a remote runtime. */
+  mcpClient?: McpClient | null;
   /**
    * Report this session's turns to a running Studio. Default true.
    *
@@ -162,6 +165,7 @@ Session naming: At the start of a session, call the name_session tool once with 
             // resumed lands on the row the session it resumes already has.
             sessionPath: opts.sessionPath ?? null,
           }),
+    mcpClient: opts.mcpClient ?? null,
   };
   model?.setStatusHandler((status) => { state.providerStatus = status; });
   const approve = createApprover(() => state.permissions);

@@ -19,16 +19,22 @@ export type CliArgs = {
   yolo: boolean;
   /** Run in a Blaxel cloud sandbox instead of the local FS (optional sandbox name). */
   sandbox?: string | true;
+  /** Connect an interactive session to this MCP server URL. */
+  mcp?: string;
   showHelp: boolean;
   showVersion: boolean;
   /** Force the line-oriented renderer instead of the alternate-screen TUI. */
   noTui: boolean;
-  /** `nah serve`: start the dashboard. An alias for `/studio`. */
+  /** `nah serve`: start the dashboard. An alias for /studio. */
   serve: boolean;
   /** What `nah serve` should do: start (default), status, stop, url, open. */
   serveAction?: string;
   /** Port for the dashboard. */
   servePort?: number;
+  /** `nah mcp <action>`: connect | list | tools <name>. */
+  mcpCommand?: string;
+  /** Set when the bare `mcp` subcommand was used; positional tail becomes mcpCommand. */
+  mcpSeen: boolean;
 };
 
 const HELP = `nah — not another harness, the CLI. A fast, minimal coding-agent terminal.
@@ -41,6 +47,10 @@ Usage:
   nah --mode json "msg"     Print JSONL events to stdout, then exit
   nah @src/a.ts "explain"   Include file contents in the first prompt
   git diff | nah -p "review this"
+  nah --mcp <url>           Interactive session against an MCP server
+  nah mcp connect <name> <url>   Register an MCP server
+  nah mcp list              List registered MCP servers
+  nah mcp tools <name>      List an MCP server's tools
 
 Options:
   -p, --print           Print mode (non-interactive)
@@ -52,6 +62,7 @@ Options:
   --no-tui              Use the line renderer instead of the alternate-screen TUI
   -y, --yolo            Allow all tool calls without prompting
   --permissions <mode>  ask | yolo | readonly (default: ask interactive, yolo in print/json)
+  --mcp <url>           Connect this session to an MCP server
   --sandbox [name]      Run in a Blaxel cloud sandbox (needs BL_API_KEY + BL_WORKSPACE)
   --cwd <dir>           Working directory (default: cwd)
   --port <n>            Port for the dashboard (nah serve)
@@ -59,7 +70,7 @@ Options:
   -v, --version         Show version
 
 Slash commands (interactive):
-  /help /model /stats /task /compact /clear /session /studio /telemetry /quit
+  /help /model /stats /task /compact /clear /session /studio /telemetry /mcp /quit
 `;
 
 export const parseCliArgs = (
@@ -77,6 +88,8 @@ export const parseCliArgs = (
     showHelp: false,
     showVersion: false,
     serve: false,
+    mcpCommand: undefined,
+    mcpSeen: false,
   };
   const positional: string[] = [];
 
@@ -139,6 +152,9 @@ export const parseCliArgs = (
       case "--permissions":
         args.permissions = argv[++i];
         break;
+      case "--mcp":
+        args.mcp = argv[++i];
+        break;
       case "--sandbox": {
         const next = argv[i + 1];
         if (next && !next.startsWith("-")) {
@@ -157,6 +173,10 @@ export const parseCliArgs = (
         // `nah --studio`, and it is not something to combine with a prompt.
         args.serve = true;
         break;
+      case "mcp":
+        // `nah mcp connect <name> <url>` — the action is the positional tail.
+        args.mcpSeen = true;
+        break;
       case "--port":
         args.servePort = Number.parseInt(argv[++i] ?? "", 10);
         break;
@@ -170,6 +190,8 @@ export const parseCliArgs = (
     // a script, and a shell is the only place that is true.
     if (args.serve) {
       args.serveAction = positional.join(" ");
+    } else if (args.mcpSeen) {
+      args.mcpCommand = positional.join(" ");
     } else {
       args.prompt = positional.join(" ");
     }

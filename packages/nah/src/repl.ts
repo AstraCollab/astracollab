@@ -25,6 +25,14 @@ import {
   detachStudio,
   telemetryState,
 } from "./telemetry-export.js";
+import { McpClient } from "./mcp/client.js";
+import {
+  findMcpServerByUrl,
+  getMcpServer,
+  getMcpServers,
+  setMcpServer,
+} from "./nah-config.js";
+import { getStoredCloudToken, storeCloudToken } from "./credentials.js";
 import { formatTaskLedger } from "./task-ledger.js";
 import { saveLastModel } from "./model-preferences.js";
 import { lookupRates } from "./rates.js";
@@ -1209,6 +1217,129 @@ export const handleSlashCommand = async (
       const attached = await attachStudio(state);
       if (attached) out.write(c.dim("  this session is reporting there\n"));
       return "handled";
+    case "mcp": {
+      const [verb, ...mcpArgs] = rest;
+      if (!verb) {
+        out.write(c.dim("  usage: /mcp connect <url> | list | tools <name> | tool <name> <json>\n"));
+        return "handled";
+      }
+      if (verb === "list") {
+        const servers = await getMcpServers();
+        const names = Object.keys(servers);
+        if (names.length === 0) {
+          out.write(c.dim("  no MCP servers registered — /mcp connect <url>\n"));
+        } else {
+          for (const name of names) {
+            const config = servers[name];
+            if (!config) continue;
+            out.write(`  ${name} -> ${config.url}${config.organizationId ? ` (org ${config.organizationId})` : ""}\n`);
+          }
+        }
+        return "handled";
+      }
+      if (verb === "connect") {
+        const [url] = mcpArgs;
+        if (!url) {
+          out.write(c.red("  /mcp connect <url>\n"));
+          return "handled";
+        }
+        const found = await findMcpServerByUrl(url);
+        const name = found?.name ?? url;
+        if (!found) {
+          await setMcpServer(name, { url });
+          out.write(c.dim(`  registered ${name} -> ${url}\n`));
+        }
+        const account = found?.config.organizationId ?? name;
+        let token = await getStoredCloudToken(account);
+        if (!token) {
+          const prompt = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY) });
+          try {
+            token = (await prompt.question(`Bearer token for ${name}: `)).trim() || undefined;
+          } finally {
+            prompt.close();
+          }
+          if (token) {
+            await storeCloudToken(account);
+            out.write(c.dim("  bearer token saved to the device credential store\n"));
+          }
+        }
+        if (!token) {
+          out.write(c.yellow("  no bearer token — tool calls will be unauthenticated\n"));
+        }
+        state.mcpClient = new McpClient({ baseUrl: url, token: () => token });
+        try {
+          await state.mcpClient.initialize();
+          out.write(c.green(`  connected to ${name} (${url})\n`));
+        } catch (error) {
+          state.mcpClient = null;
+          out.write(c.red(`  could not connect: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        return "handled";
+      }
+      if (verb === "tools") {
+        const [name] = mcpArgs;
+        if (!name) {
+          out.write(c.red("  /mcp tools <name>\n"));
+          return "handled";
+        }
+        const config = await getMcpServer(name);
+        if (!config) {
+          out.write(c.red(`  no MCP server registered as ${name}\n`));
+          return "handled";
+        }
+        const token = await getStoredCloudToken(config.organizationId ?? name);
+        const client = new McpClient({ baseUrl: config.url, token: () => token });
+        try {
+          await client.initialize();
+          const tools = await client.listTools();
+          if (tools.length === 0) {
+            out.write(c.dim(`  no tools exposed by ${name}\n`));
+          } else {
+            for (const tool of tools) {
+              out.write(`  ${tool.name}: ${tool.description ?? "(no description)"}\n`);
+            }
+          }
+        } catch (error) {
+          out.write(c.red(`  ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        return "handled";
+      }
+      if (verb === "tool") {
+        const [toolName, ...jsonRest] = mcpArgs;
+        const client = state.mcpClient;
+        if (!client || !client.isInitialized) {
+          out.write(c.red("  no MCP server connected — /mcp connect <url> first\n"));
+          return "handled";
+        }
+        if (!toolName) {
+          out.write(c.red("  /mcp tool <name> <json args>\n"));
+          return "handled";
+        }
+        let args: Record<string, unknown> = {};
+        if (jsonRest.length > 0) {
+          try {
+            args = JSON.parse(jsonRest.join(" "));
+            if (typeof args !== "object" || args === null || Array.isArray(args)) throw new Error("not an object");
+          } catch {
+            out.write(c.red("  tool args must be a JSON object\n"));
+            return "handled";
+          }
+        }
+        try {
+          const result = await client.callTool(toolName, args);
+          out.write(c.dim(`  → ${toolName}\n`));
+          if (result.text) out.write(`  ${result.text}\n`);
+          if (result.structuredContent !== undefined) {
+            out.write(`  ${JSON.stringify(result.structuredContent, null, 2)}\n`);
+          }
+        } catch (error) {
+          out.write(c.red(`  ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        return "handled";
+      }
+      out.write(c.red(`unknown /mcp verb "${verb}" — connect | list | tools <name> | tool <name> <json>\n`));
+      return "handled";
+    }
     case "telemetry": {
       const [wanted] = rest;
       const state0 = await telemetryState();

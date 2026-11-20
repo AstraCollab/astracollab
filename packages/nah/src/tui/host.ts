@@ -510,12 +510,23 @@ const clearStopPending = () => {
           confirm: confirmOnStdout,
         });
       });
-      // Report from the next turn rather than the one after a restart: someone who
-      // typed /studio is watching the dashboard for their own session in it.
       const attached = await attachStudio(state);
       if (attached) {
         output.addLine(c.dim(`  this session is reporting to ${attached.endpoint.url} as ${attached.agent.name}`));
       }
+      screen.requestRender(true);
+      return;
+    }
+
+    if (name === "mcp") {
+      // `/mcp connect` prompts for a bearer token, so it needs the terminal.
+      // `list` and `tools` do not, but running the whole command exclusively is
+      // simpler and keeps a mid-turn `/mcp` from racing the stream.
+      output.addLine(c.dim("  MCP…"));
+      screen.requestRender(true);
+      await exclusive(async () => {
+        await handleSlashCommand(input, state, state.cwd, sink);
+      });
       screen.requestRender(true);
       return;
     }
